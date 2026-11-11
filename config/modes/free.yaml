@@ -1,0 +1,10 @@
+# Mode A — free broker data, paper execution only.
+mode: free
+
+data:
+  primary: upstox       # chosen 11 Nov 2026: free V3 feed (5-level depth, OI); see docs/DECISIONS.md
+  fallbacks: [fyers, shoonya, angel]
+
+execution:
+  broker: paper
+  live_enabled: false   # Mode A never trades live via API

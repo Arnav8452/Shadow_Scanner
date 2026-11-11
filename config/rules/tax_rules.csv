@@ -1,0 +1,5 @@
+item,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+buyback_tax_head,deemed_dividend,code,2024-10-01,2026-04-01,,,UNVERIFIED,"Proceeds taxed as dividend at slab; cost of acquisition becomes a capital loss."
+buyback_tax_head,capital_gains,code,2026-04-01,,https://www.business-standard.com/budget/news/budget-2026-buyback-proceeds-to-be-treated-as-capital-gains-126020101050_1.html,2026-11-09,UNVERIFIED,"Finance Bill 2026 proposal (all shareholders; extra tax for promoters). Enactment as passed NOT confirmed — check the Finance Act 2026."
+stcg_listed_equity,20,pct,2024-07-23,,,,UNVERIFIED,"Sec 111A after Budget July 2024. Verify."
+ltcg_listed_equity,12.5,pct,2024-07-23,,,,UNVERIFIED,"Sec 112A; ₹1.25L annual exemption. Verify."

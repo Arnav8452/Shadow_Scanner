@@ -1,0 +1,30 @@
+version: 1
+disable_existing_loggers: false
+
+filters:
+  redact:
+    (): engine.core.logging_setup.RedactingFilter
+
+formatters:
+  standard:
+    format: "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: standard
+    filters: [redact]
+    level: INFO
+  file:
+    class: logging.handlers.TimedRotatingFileHandler
+    filename: logs/engine.log
+    when: midnight
+    backupCount: 30
+    encoding: utf-8
+    formatter: standard
+    filters: [redact]
+    level: DEBUG
+
+root:
+  level: DEBUG
+  handlers: [console, file]

@@ -1,0 +1,8 @@
+exchange,underlying,kind,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+NSE,NIFTY,weekly,TUE,weekday,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,"First Tuesday weekly expiry 02-Sep-2025. Holiday → previous trading day."
+NSE,NIFTY,monthly,LAST_TUE,weekday_rule,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,
+NSE,BANKNIFTY,monthly,LAST_TUE,weekday_rule,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,"No BANKNIFTY weeklies."
+NSE,FINNIFTY,monthly,LAST_TUE,weekday_rule,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,
+NSE,MIDCPNIFTY,monthly,LAST_TUE,weekday_rule,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,
+BSE,SENSEX,weekly,THU,weekday,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,"First Thursday weekly expiry 04-Sep-2025."
+BSE,SENSEX,monthly,LAST_THU,weekday_rule,2025-09-01,,https://www.angelone.in/news/market-updates/nifty-weekly-expiry-today-see-what-changed-on-sept-1-2025,2026-11-09,secondary,

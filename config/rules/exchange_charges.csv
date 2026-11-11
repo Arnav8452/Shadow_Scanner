@@ -1,0 +1,9 @@
+exchange,segment,component,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+NSE,options,transaction,0.03503,pct_of_premium,2024-10-01,,https://zerodha.com/marketintel/bulletin/391488/revision-in-transactions-charges-from-1st-october-2024,2026-11-09,secondary,"Zerodha charges page (2026-11-09) shows 0.03553% = this + IPFT row (inferred). Golden contract-note test must confirm."
+NSE,futures,transaction,0.00173,pct_of_price,2024-10-01,,https://zerodha.com/marketintel/bulletin/391488/revision-in-transactions-charges-from-1st-october-2024,2026-11-09,secondary,"Zerodha charges page shows 0.00183% = this + IPFT row (inferred)."
+NSE,options,ipft,0.0005,pct_of_premium,2024-10-01,,,,UNVERIFIED,"Investor Protection Fund Trust ₹50/crore — inferred from the 0.03553 vs 0.03503 gap; verify."
+NSE,futures,ipft,0.0001,pct_of_price,2024-10-01,,,,UNVERIFIED,"IPFT ₹10/crore — inferred; verify."
+BSE,options,transaction,0.0325,pct_of_premium,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Sensex options. Effective-from date not verified (listed as current on 2026-11-09)."
+BSE,futures,transaction,0,pct_of_price,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Effective-from date not verified."
+NSE,equity_delivery,transaction_total,0.00307,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Broker-displayed total (likely 0.00297 exchange + 0.0001 IPFT, same pattern as F&O). Start date not researched."
+BSE,equity_delivery,transaction_total,0.00375,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Broker-displayed total. Start date not researched."

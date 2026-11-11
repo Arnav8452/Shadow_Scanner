@@ -1,0 +1,41 @@
+# Curated corporate events for the event-arbitrage scan (docs/ADDENDUM_EVENT_ARB.md).
+# Public facts only. Write UNKNOWN for anything not yet published — never estimate here.
+# List every field copied from a secondary page (not the exchange filing) in unverified_fields.
+# Types: tender_buyback | open_market_buyback | open_offer | rights | ofs | demerger
+
+events:
+  - id: MEDIASSIST-BB-2026-11
+    type: tender_buyback
+    symbol: MEDIASSIST
+    company: Medi Assist Healthcare Services Ltd
+    announced_on: 2026-10-30
+    compiled_on: 2026-11-09
+    filings:
+      - url: https://www.arthneeti.com/announcements/medi-assist-healthcare-services-ltd-board-meeting-outcome-for-outcome-of-board-meeting-30-oct-2026
+        title: Board meeting outcome (secondary mirror — replace with the NSE/BSE filing link)
+        published_on: 2026-10-30
+      - url: https://www.chittorgarh.com/buyback/medi-assist-healthcare-buyback-2026/260/
+        title: Buyback summary (secondary)
+    unverified_fields: [price, shares, published_size_pct, record_date, market price]
+    terms:
+      price: 425
+      shares: 1159199
+      shares_outstanding: UNKNOWN      # ≈7.48 crore implied by 1.55% — take the exact figure from the filing
+      published_size_pct: 1.55
+      record_date: 2026-11-20
+      promoter_participation: UNKNOWN
+      small_holder_shares_shp: UNKNOWN # SHP: "resident individuals holding nominal share capital up to ₹2 lakh"
+      shp_as_of: UNKNOWN
+      published_small_entitlement: UNKNOWN
+      past_small_acceptance: []
+      tender_open: UNKNOWN
+      tender_close: UNKNOWN
+      unaccepted_return_date: UNKNOWN
+    price:
+      price: 288.50
+      as_of: 2026-11-09
+      source: NSE last price shown on chittorgarh.com
+      price_at_announcement: 296.75
+    notes: >-
+      Addendum A.3 golden example. Price at approval ₹296.75 (43% premium). Registrar MUFG
+      Intime; manager IIFL Capital. Letter of offer not yet published (9 Nov 2026).

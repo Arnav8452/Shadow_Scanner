@@ -1,0 +1,7 @@
+segment,side,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+options,buy,0.003,pct_of_premium,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Uniform stamp duty regime from 1 Jul 2020; buy side only."
+futures,buy,0.002,pct_of_price,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Buy side only."
+equity_delivery,buy,0.015,pct_of_value,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Buy side only."
+options,sell,0,pct_of_premium,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."
+futures,sell,0,pct_of_price,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."
+equity_delivery,sell,0,pct_of_value,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."

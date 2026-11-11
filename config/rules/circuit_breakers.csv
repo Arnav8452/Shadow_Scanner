@@ -1,0 +1,4 @@
+scope,level,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+market_wide,1,10,pct_index_move,2001-07-02,,,,UNVERIFIED,"Halt duration depends on time of day — encode in M3 after verifying vs SEBI circular."
+market_wide,2,15,pct_index_move,2001-07-02,,,,UNVERIFIED,
+market_wide,3,20,pct_index_move,2001-07-02,,,,UNVERIFIED,"Trading halted for the rest of the day."

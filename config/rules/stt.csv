@@ -1,0 +1,9 @@
+segment,leg,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+options,sell_premium,0.1,pct_of_premium,2024-10-01,2026-04-01,https://zerodha.com/marketintel/bulletin/391488/revision-in-transactions-charges-from-1st-october-2024,2026-11-09,secondary,"Seller pays. Rows before 2024-10-01 not yet added."
+options,sell_premium,0.15,pct_of_premium,2026-04-01,,https://zerodha.com/charges,2026-11-09,secondary,"Budget 2026; trades on/after 1 Apr 2026. Confirm vs Finance Act text + contract note."
+options,exercise_intrinsic,0.125,pct_of_intrinsic,2024-10-01,2026-04-01,,,UNVERIFIED,"Rate in force before Apr 2026 per SPEC; start date not researched."
+options,exercise_intrinsic,0.15,pct_of_intrinsic,2026-04-01,,https://zerodha.com/charges,2026-11-09,secondary,"Paid by buyer on exercised ITM options. One news source said 0.125% — check Finance Act."
+futures,sell,0.02,pct_of_price,2024-10-01,2026-04-01,https://zerodha.com/marketintel/bulletin/391488/revision-in-transactions-charges-from-1st-october-2024,2026-11-09,secondary,
+futures,sell,0.05,pct_of_price,2026-04-01,,https://zerodha.com/charges,2026-11-09,secondary,"Budget 2026."
+equity_delivery,buy,0.1,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Start date not researched. Buyback tenders via the exchange window are sales and attract sell-side STT."
+equity_delivery,sell,0.1,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Start date not researched."

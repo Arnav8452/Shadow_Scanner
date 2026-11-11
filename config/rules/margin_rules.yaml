@@ -1,0 +1,49 @@
+# Effective-dated margin rules that are not simple scalar tables.
+# Same fields as the CSV tables; `params` holds the rule body.
+# Every rule here is UNVERIFIED until checked against the SEBI/NSE circular (M5).
+rules:
+  - name: expiry_day_elm_short_options
+    params:
+      additional_elm_pct: 2.0
+      applies_to: "short index options expiring that day"
+    effective_from: 2024-11-20
+    effective_to:
+    source_url: ""
+    verified_on:
+    status: UNVERIFIED
+    notes: "SEBI index-derivatives measures (Oct 2024). Verify rate and date."
+
+  - name: calendar_spread_benefit_removed_on_expiry_day
+    params:
+      applies_to: "positions with a leg expiring that day"
+    effective_from: 2025-02-01
+    effective_to:
+    source_url: ""
+    verified_on:
+    status: UNVERIFIED
+    notes: "SEBI Oct 2024 measures. Verify date."
+
+  - name: physical_delivery_margin_escalation
+    params:
+      # fraction of delivery (VaR+ELM) margin charged on ITM stock F&O, by days before expiry
+      E-4: 10
+      E-3: 25
+      E-2: 45
+      E-1: 70
+      unit: pct
+    effective_from: 2019-07-01
+    effective_to:
+    source_url: ""
+    verified_on:
+    status: UNVERIFIED
+    notes: "Stock F&O only (physically settled). Verify schedule vs NSE Clearing circular."
+
+  - name: cash_collateral_split
+    params:
+      min_cash_share_pct: 50
+    effective_from: 2019-01-01
+    effective_to:
+    source_url: ""
+    verified_on:
+    status: UNVERIFIED
+    notes: "50:50 cash vs non-cash collateral. Verify which instruments count as cash-equivalent."

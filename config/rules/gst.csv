@@ -1,0 +1,2 @@
+base,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+brokerage_exchange_sebi,18,pct,2017-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"18% on (brokerage + exchange transaction charges + SEBI fee)."

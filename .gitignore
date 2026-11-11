@@ -1,0 +1,36 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.token
+*_token.json
+secrets/
+
+# --- Data: market data, recordings, private reference logs ---
+data/*
+!data/README.md
+
+# Starter archive (contents already unpacked into the repo)
+*.zip
+
+# --- Python / tooling ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# --- Logs and local outputs ---
+logs/
+*.log
+reports/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

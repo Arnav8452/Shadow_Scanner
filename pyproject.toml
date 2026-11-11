@@ -1,0 +1,71 @@
+[project]
+name = "quant-engine"
+version = "0.0.1"
+description = "Personal Indian F&O research, paper and (gated) live trading engine. White-box, personal use only."
+readme = "README.md"
+requires-python = ">=3.12"
+# Keep dependencies few; add each one in the milestone that first needs it
+# (duckdb/pyarrow/polars in M2, scipy in M4).
+dependencies = [
+    "duckdb>=1.1",
+    "pyarrow>=17",
+    "pytz>=2024.1",  # duckdb needs it to return TIMESTAMPTZ values to Python
+    "pyyaml>=6.0",
+    "tzdata>=2024.1",  # Windows has no system tz database for zoneinfo
+    "websocket-client>=1.6.1",
+]
+
+[project.optional-dependencies]
+# Official Fyers SDK pins old libraries (requests 2.31, aiohttp 3.9.3, setuptools 68), so it is
+# opt-in: `uv sync --extra fyers` only on the machine that records live data.
+fyers = [
+    "fyers-apiv3==3.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["engine", "ops"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["docs/seed", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "DTZ"]
+# En dashes and ₹ are intentional in messages/docstrings.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]  # fixtures quote real feed lines verbatim
+"engine/sidecars/event_arb/report.py" = ["E501"]  # inline CSS/HTML template
+
+[tool.mypy]
+python_version = "3.12"
+files = ["engine", "ops"]
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*", "fyers_apiv3", "fyers_apiv3.*", "websocket", "websocket.*"]
+ignore_missing_imports = true  # no type stubs published
+
+[tool.uv]
+# This network intercepts TLS; use the Windows certificate store (harmless elsewhere).
+system-certs = true
+link-mode = "copy"  # uv cache (C:) and repo (D:) are on different drives

@@ -1,0 +1,2 @@
+broker,depository,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+zerodha,CDSL,15.34,inr_per_scrip_per_debit_day_incl_gst,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"₹3.5 CDSL + ₹9.5 Zerodha + ₹2.34 GST; already includes GST. Charged per scrip per day shares leave demat (sale or tender debit). Start date not researched."

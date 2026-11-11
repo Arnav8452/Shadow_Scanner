@@ -1,0 +1,11 @@
+exchange,underlying,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+NSE,NIFTY,3510,units_freeze_limit,2026-10-05,2026-11-02,https://nsearchives.nseindia.com/content/circulars/FAOP76693.pdf,2026-11-09,primary,"NSE/FAOP/76693. Raw limit from the circular; max order qty is computed by engine.execution.slicer."
+NSE,BANKNIFTY,1440,units_freeze_limit,2026-10-05,2026-11-02,https://nsearchives.nseindia.com/content/circulars/FAOP76693.pdf,2026-11-09,primary,
+NSE,FINNIFTY,3240,units_freeze_limit,2026-10-05,2026-11-02,https://nsearchives.nseindia.com/content/circulars/FAOP76693.pdf,2026-11-09,primary,
+NSE,MIDCPNIFTY,5760,units_freeze_limit,2026-10-05,2026-11-02,https://nsearchives.nseindia.com/content/circulars/FAOP76693.pdf,2026-11-09,primary,
+NSE,NIFTYNXT50,1125,units_freeze_limit,2026-10-05,2026-11-02,https://nsearchives.nseindia.com/content/circulars/FAOP76693.pdf,2026-11-09,primary,
+NSE,NIFTY,1800,units_freeze_limit,2026-11-02,,https://nsearchives.nseindia.com/content/circulars/FAOP77189.pdf,2026-11-09,primary,"NSE/FAOP/77189. Revised often — refresh each series."
+NSE,BANKNIFTY,900,units_freeze_limit,2026-11-02,,https://nsearchives.nseindia.com/content/circulars/FAOP77189.pdf,2026-11-09,primary,
+NSE,FINNIFTY,1800,units_freeze_limit,2026-11-02,,https://nsearchives.nseindia.com/content/circulars/FAOP77189.pdf,2026-11-09,primary,
+NSE,MIDCPNIFTY,2800,units_freeze_limit,2026-11-02,,https://nsearchives.nseindia.com/content/circulars/FAOP77189.pdf,2026-11-09,primary,
+NSE,NIFTYNXT50,600,units_freeze_limit,2026-11-02,,https://nsearchives.nseindia.com/content/circulars/FAOP77189.pdf,2026-11-09,primary,

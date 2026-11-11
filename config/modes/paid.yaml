@@ -1,0 +1,13 @@
+# Mode B — paid data API at the execution broker (Dhan Data API or Zerodha Kite Connect).
+# Live orders additionally need: execution.live_enabled true, whitelisted static IP,
+# fresh daily 2FA session, and explicit owner confirmation in the session.
+mode: paid
+
+data:
+  primary: dhan          # or: kite — choose after verifying current feature/price differences
+  fallbacks: [fyers]
+
+execution:
+  broker: paper          # becomes the live broker only when the live gate passes
+  live_enabled: false
+  static_ip: ""          # whitelisted IP registered with the broker

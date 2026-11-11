@@ -1,0 +1,2 @@
+rule,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+retail_algo_ops_threshold,10,orders_per_second_per_exchange,2026-04-01,,https://www.taxscan.in/top-stories/sebi-extends-timeline-for-retail-algo-trading-framework-full-implementation-from-apr-1-2026-1433982,2026-11-09,UNVERIFIED,"Framework fully applicable from 1 Apr 2026 per SEBI circular SEBI/HO/MIRSD/MIRSD-PoD/P/CIR/2025/132 (30 Sep 2025, news report). The 10 OPS figure is the exchange threshold above which an algo must be registered — read the NSE implementation circular before M12."

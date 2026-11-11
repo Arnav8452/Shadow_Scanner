@@ -1,0 +1,174 @@
+# Global settings. Mode files (config/modes/<mode>.yaml) are deep-merged on top.
+# Regulatory/fee constants do NOT live here — see config/rules/ (effective-dated).
+#
+# Base risk numbers, sleeve rules, and disconnect semantics below were APPROVED by the
+# owner on 11 Nov 2026; changing them later requires the owner's explicit OK (CLAUDE.md).
+
+timezone: Asia/Kolkata
+
+# Engine Version Architecture:
+# - v1_shadow: "Shadow Order Book" Scanner (Human-in-the-Loop radar + auto SL/T1/T2 + Shadow Ledger, zero live order placement)
+# - v2_bot:    Automated Execution Bot Engine (routes Confluence & Strategy signals to PaperBroker or gated LiveBroker)
+engine_version: v1_shadow
+
+capital:
+  # APPROVED (owner, 11 Nov 2026): Shared ₹2L account pool governed by 50% margin headroom
+  # (≤ ₹1L margin used) and 10% max open risk (≤ ₹20k), with up to ₹1L allocatable to Event-Arb
+  # when no F&O spread is consuming that margin. Individual stock F&O and pre-earnings straddles
+  # (§5.5) are deferred at ₹2L capital.
+  inr: 200000            # APPROVED: ₹2L (SPEC range ₹1–2L)
+
+shadow_scanner:          # Version 1 ("Shadow Order Book") & Order-Flow Confluence parameters
+  # STATUS: HYPOTHESIS (owner decision 11 Nov 2026). The score, RER, OBI, air-pocket, CVD and
+  # stop-pool thresholds below are unvalidated priors. They stay unproven until 20-30 recorded
+  # sessions give out-of-sample results with t ~ 3 and a deflated Sharpe; every variant tried
+  # counts as a trial. Do not trade on them.
+  # The Kelly sizing lines (kelly_*) are APPROVED risk guards (owner, 11 Nov 2026).
+  max_watchlist_symbols: 50       # Upstox V3 full_d30 30-level depth limit per connection
+  depth_levels: 30                # L1-L30 market depth levels
+  min_confidence_score: 75.0      # Minimum 0-100 composite score to emit a Shadow Signal
+  a_plus_confidence_score: 80.0   # High-conviction A+ alert threshold
+  watchlist_score: 65.0           # Pre-alert radar threshold
+  rer_confirm_min: 0.75           # Real Execution Ratio > 0.75 confirms genuine absorption/breakout
+  rer_spoof_max: 0.20             # Real Execution Ratio < 0.20 blocks trade as spoof/pull
+  obi_confirm_min: 0.50           # Exp-weighted L1-L5 OBI threshold for directional pressure
+  air_pocket_ratio_max: 0.55      # L6-L25 vs L1-L5 ratio < 0.55 indicates thin-book liquidity vacuum
+  cvd_z_confirm_min: 2.0          # Rolling Cumulative Volume Delta Z-score threshold
+  order_persistence_ms: 500       # Minimum Resting Wall Age (ms) before trusting as structural wall
+  stop_pool_band_min_pct: 0.15    # Stop-hunt sweep zone lower bound (%)
+  stop_pool_band_max_pct: 0.40    # Stop-hunt sweep zone upper bound (%)
+  sl_tick_buffer: 2               # Ticks behind structural wall / sweep extreme for SL
+  min_rr_t1: 1.5                  # Minimum Risk:Reward for Target 1
+  min_rr_t2: 2.5                  # Minimum Risk:Reward for Target 2
+  kelly_fraction: 0.25            # Quarter-Kelly multiplier
+  kelly_max_risk_pct: 1.5         # Clamped max risk per trade (%) for dynamic Kelly
+  kelly_rolling_window: 100       # Rolling Shadow/Bot trade window for empirical Kelly
+  report_dir: reports/shadow_scanner
+  ledger_file: data/state/shadow_ledger.jsonl
+
+risk:                    # APPROVED (owner, 11 Nov 2026)
+  per_trade_max_loss_pct:
+    directional: 2.5     # SPEC §6: ≤ 2–3% of capital
+    defined_risk_spread: 5.0  # SPEC §6: ≤ 5%
+  daily_loss_limit_pct: 2.0
+  weekly_loss_limit_pct: 5.0
+  max_open_risk_pct: 10.0
+  max_lots_per_strategy: 1  # until 20–30 live trades are logged
+  max_trades_per_day: 5
+  cooloff_after_loss_min: 15
+  block_first_minutes: 15          # except ORB strategy
+  directional_no_entry_after: "14:00"
+  stock_fno_expiry_exit_days_before: 2   # SPEC §6 default E-2
+
+execution:
+  live_enabled: false    # never flip without owner confirmation in-session
+  broker: paper
+  allowed_order_types: [LIMIT, MARKET_PROTECTED]   # plain MARKET is forbidden
+  max_orders_per_second: 5         # hard cap; must stay < 10 (SEBI retail-algo threshold)
+  reconcile_interval_s: 45         # 30–60 s
+  disconnect_kill_after_s: 10      # APPROVED (11 Nov 2026): freezes new entries + alerts when quotes are missing (never panic-flattens without quotes)
+  order_timeout_s: 10              # APPROVED (11 Nov 2026)
+
+event_arb:              # Addendum A — APPROVED sleeve rules (11 Nov 2026); information only, never trades
+  capital_inr: 100000           # sleeve for event arb (counts against account capital)
+  max_holding_value_inr: 150000 # buffer under the ₹2L small-shareholder test
+  risk_budget_pct_of_account: 3.0   # max loss at pessimistic acceptance + worst drop
+  worst_case_drop_pct: 15
+  participations: [0.4, 0.6, 1.0]
+  optimistic_holdings_factor: 0.5
+  drops_pct: [5, 10, 15]
+  assumed_acceptances: []       # e.g. [0.05, 0.10] when no data — shown as assumptions
+  broker: zerodha
+  events_file: config/event_arb/events.yaml
+  candidates_file: data/event_arb/candidates.jsonl
+  state_file: data/event_arb/alert_state.json
+  report_dir: reports/event_arb
+  flags:
+    small_buyback_pct: 3
+    runup_amber_pct: 8
+    near_52w_high_pct: 5
+    min_avg_daily_value_inr: 5000000
+    cushion_amber_pct: 3
+    cushion_red_pct: 1
+    stale_price_trading_days: 3
+    ofs_discount_alert_pct: 5
+    re_gap_alert_pct: 5
+    rights_cushion_amber_pct: 10
+
+recorder:                # M2 — what to record and how (SPEC §3 L1); not risk settings
+  # Broker caps on concurrently subscribed symbols, per user (checked 10–11 Nov 2026):
+  # Upstox V3 `full` mode (5-level depth, OI) 2,000 keys when it is the only mode used, and
+  # `full_d30` (Upstox Plus) 50; Fyers Standard (free) 100, Prime 5,000.
+  # Owner chose Upstox (free) on 11 Nov 2026; no paid API is in use.
+  symbol_caps: {upstox: 2000, upstox_d30: 50, fyers: 100, dhan: 5000, zerodha: 3000, sim: 5000}
+  depth_counts_separately: {fyers: true, upstox: false, upstox_d30: false, dhan: false}
+  budget_margin: 2
+  master:                     # broker defaults to data.primary (symbols are broker keys)
+    segments:
+      upstox: [NSE, BSE]
+      fyers: [NSE_FO, NSE_CM, BSE_FO, BSE_CM]
+  sessions: [[NSE, fo], [BSE, fo], [NSE, cm]]   # first one drives gap/watchdog/QC bounds
+  pre_buffer_min: 10
+  post_buffer_min: 5
+  snapshot_interval_s: 60
+  tick_windows: [["09:00", "09:35"]]   # every message for every contract (opening study)
+  record_all_ticks: false
+  gap_threshold_s: 5          # M2 acceptance: no feed gap > 5 s in session
+  watchdog_silence_s: 20      # restart the feed after this much silence in session
+  flush_interval_s: 30
+  recenter_interval_s: 60
+  stale_quote_s: 120
+  lag_warn_s: 5
+  clock_ahead_tolerance_s: 1
+  depth: true
+  vix_symbol: {upstox: "NSE_INDEX|India VIX", fyers: "NSE:INDIAVIX-INDEX"}
+  extra_symbols: []           # e.g. Nifty constituents for L9 (M9)
+  band:
+    min_strikes_each_side: 25 # QC requirement (SPEC: max(±25 strikes, ±3σ))
+    buffer_strikes: 2         # selected beyond the minimum so drift between re-centres keeps ±25
+    sigma_mult: 3.0
+    fallback_iv: 0.15         # band width only, before India VIX arrives
+    tick_strikes_each_side: 10
+    tick_expiry_roles: [current_weekly]
+  underlyings:                # spot keys per broker
+    - name: NIFTY
+      spot: {upstox: "NSE_INDEX|Nifty 50", fyers: "NSE:NIFTY50-INDEX"}
+      expiries: [current_weekly, next_weekly, current_monthly]
+      weights: {current_weekly: 1.0, next_weekly: 1.5, current_monthly: 2.0}
+      futures_months: 1
+    - name: SENSEX
+      spot: {upstox: "BSE_INDEX|SENSEX", fyers: "BSE:SENSEX-INDEX"}
+      expiries: [current_weekly]
+      weights: {current_weekly: 2.0}
+      futures_months: 1
+  sticky_file: data/state/recorder_sticky.json
+  qc_dir: reports/qc
+
+shadow_live:             # V1 live shadow scanner (watch-only) on Upstox Plus full_d30
+  # 30-level depth, at most 50 keys per connection (Upstox Plus; free to switch to, ₹30/order
+  # only if you trade on Upstox). Runs alongside the recorder on a second connection
+  # (Upstox allows 2 normally, 5 on Plus). Every depth message is recorded to `depth30`.
+  max_symbols: 50
+  include_vix: true
+  recenter_interval_s: 300   # re-pick strikes around ATM every 5 minutes
+  dashboard_interval_s: 60
+  oi_wall_refresh_s: 60      # OI walls from the recorder's chain snapshots
+  opening_range_min: 15
+  alert_grades: [A_PLUS]     # Telegram alerts (SEND=1) are labelled HYPOTHESIS
+  max_alerts_per_day: 10
+  alert_cooldown_min: 15     # one alert per signal episode (symbol, direction, setup)
+  watch:                     # 2 spots + VIX + 2 futures + 30 Nifty + 10 Sensex options = 45
+    - {name: NIFTY, futures_months: 1, option_strikes_each_side: 7, expiry: current_weekly}
+    - {name: SENSEX, futures_months: 1, option_strikes_each_side: 2, expiry: current_weekly}
+
+paths:
+  data: data
+  raw: data/raw
+  parquet: data/parquet
+  duckdb: data/duckdb
+  private: data/private            # reference trade logs; gitignored
+  logs: logs
+  rules: config/rules
+
+logging:
+  config: ops/logging.yaml

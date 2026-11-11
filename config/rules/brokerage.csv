@@ -1,0 +1,20 @@
+broker,segment,component,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+zerodha,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Start date not researched."
+zerodha,futures,pct_of_turnover,0.03,pct,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Lower of this and cap_per_order."
+zerodha,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,
+fyers,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,"Verify on fyers.in pricing page before use."
+dhan,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,"Verify on dhan.co pricing page before use."
+upstox,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Upstox F&O options flat ₹20 per executed order."
+upstox,futures,pct_of_turnover,0.03,pct,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Lower of 0.03% and ₹20 cap."
+upstox,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,
+upstox,equity_delivery,flat_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Upstox equity delivery ₹20 or 2.5% whichever is lower."
+fyers,futures,pct_of_turnover,0.03,pct,2024-10-01,,,,UNVERIFIED,"Verify on fyers.in pricing page before use."
+fyers,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,
+dhan,futures,pct_of_turnover,0.03,pct,2024-10-01,,,,UNVERIFIED,"Verify on dhan.co pricing page before use."
+dhan,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,
+angel,options,api_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,"SPEC §11.1 says Angel API ₹20/order; verify."
+paper,options,flat_per_order,20,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default = typical discount-broker flat fee; set to the real broker's verified row."
+paper,futures,pct_of_turnover,0.03,pct,2000-01-01,,,,UNVERIFIED,"Paper default futures pct."
+paper,futures,cap_per_order,20,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default futures cap."
+paper,equity_delivery,flat_per_order,0,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default delivery."
+zerodha,equity_delivery,flat_per_order,0,inr_per_executed_order,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Zero brokerage on delivery."

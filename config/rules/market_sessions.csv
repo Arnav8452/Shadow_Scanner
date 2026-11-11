@@ -1,0 +1,18 @@
+exchange,segment,session,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+NSE,fo,pre_open_start,09:00,time_ist,2025-12-08,2026-08-03,https://www.business-standard.com/markets/news/nse-f-o-pre-open-session-kicks-in-today-here-s-all-you-need-to-know-125120800080_1.html,2026-11-10,secondary,"F&O pre-open (current-month futures only) from 8 Dec 2025 per news; NSE/FAOP/71092 not read."
+NSE,fo,pre_open_start,09:00,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,"NSE/FAOP/74467 (29 May 2026) timing table: 'No change'."
+NSE,fo,pre_open_end,09:08,time_ist,2025-12-08,2026-08-03,https://www.business-standard.com/markets/news/nse-f-o-pre-open-session-kicks-in-today-here-s-all-you-need-to-know-125120800080_1.html,2026-11-10,secondary,"System-driven random closure in the last minute."
+NSE,fo,pre_open_end,09:08,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,"NSE/FAOP/74467: 09:08 with system-driven random closure in the last 1 minute."
+NSE,fo,normal_open,09:15,time_ist,2020-01-01,2026-08-03,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,secondary,"Earlier period implied by NSE/FAOP/74467 ('No change')."
+NSE,fo,normal_open,09:15,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,NSE/FAOP/74467.
+NSE,fo,normal_close,15:30,time_ist,2020-01-01,2026-08-03,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,secondary,"Pre-change close; NSE/FAOP/74467 marks 15:40 as a change in time. Use for historical IV/T before 3 Aug 2026."
+NSE,fo,normal_close,15:40,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,"NSE/FAOP/74467 (CAS in cash market). Confirmed live from 3 Aug 2026 by NSE/FAOP/75472. Fyers master shows expiry timestamps at 15:40 IST."
+NSE,fo,trade_mod_end,16:15,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,NSE/FAOP/74467.
+NSE,fo,close_vwap_start,15:00,time_ist,2020-01-01,2026-08-03,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,secondary,"Close price = VWAP of the last half hour before the normal close."
+NSE,fo,close_vwap_start,15:10,time_ist,2026-08-03,,https://nsearchives.nseindia.com/content/circulars/FAOP74467.zip,2026-11-10,primary,"NSE/FAOP/74467 §D: VWAP window 15:10–15:40."
+NSE,cm,pre_open_start,09:00,time_ist,2020-01-01,,,,UNVERIFIED,"Cash-market pre-open; recorder window only. Read NSE/CMTR/73362 (CAS SOP)."
+NSE,cm,pre_open_end,09:08,time_ist,2020-01-01,,,,UNVERIFIED,"Random closure in the last minute."
+NSE,cm,normal_open,09:15,time_ist,2020-01-01,,,,UNVERIFIED,
+NSE,cm,normal_close,15:30,time_ist,2020-01-01,,,,UNVERIFIED,"Closing Auction Session from 3 Aug 2026 (NSE/CMTR/73362, not read) changes how the close works for CAS stocks; Fyers NSE_CM master shows 0915-1530."
+BSE,fo,normal_open,09:15,time_ist,2020-01-01,,https://public.fyers.in/sym_details/BSE_FO.csv,2026-11-10,UNVERIFIED,"Broker master only (trading-session column '0915-1540'). Read the BSE circular before relying on it."
+BSE,fo,normal_close,15:40,time_ist,2026-08-03,,https://public.fyers.in/sym_details/BSE_FO.csv,2026-11-10,UNVERIFIED,"Fyers BSE_FO master trading-session column shows 0915-1540 and SENSEX expiry timestamps at 15:40 IST. BSE circular not read."
