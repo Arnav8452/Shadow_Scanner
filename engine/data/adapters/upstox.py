@@ -546,15 +546,25 @@ class UpstoxFeed:
         ws = self._ws
         if ws is None or not self._connected or not symbols:
             return
-        keys = sorted(symbols)
-        for i in range(0, len(keys), self.CHUNK):
-            frame = build_upstox_sub_frame(
-                keys[i : i + self.CHUNK],
-                mode=self.mode,
-                method=method,
-                guid=f"qe-{method}-{self.connects}-{i}",
-            )
-            ws.send(frame, opcode=_binary_opcode())
+        by_mode: dict[str, list[str]] = {}
+        for key in sorted(symbols):
+            by_mode.setdefault(self.mode_for(key), []).append(key)
+        for mode, keys in by_mode.items():
+            for i in range(0, len(keys), self.CHUNK):
+                frame = build_upstox_sub_frame(
+                    keys[i : i + self.CHUNK],
+                    mode=mode,
+                    method=method,
+                    guid=f"qe-{method}-{mode}-{self.connects}-{i}",
+                )
+                ws.send(frame, opcode=_binary_opcode())
+
+    def mode_for(self, key: str) -> str:
+        """Indices have no order book: in ``full_d30`` Upstox answers them with an empty
+        ``fullFeed`` (seen live, 11 Nov 2026), so they are subscribed in ``full`` instead."""
+        if self.mode == MODE_FULL_D30 and "_INDEX|" in key:
+            return MODE_FULL
+        return self.mode
 
     # ------------------------------------------------------------------ connection
 

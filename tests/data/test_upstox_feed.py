@@ -416,3 +416,23 @@ def test_recorder_settings_resolve_broker_keys(repo_root: Path) -> None:
     ]
     assert rs.universe.vix_symbol == "NSE_INDEX|India VIX"
     assert rs.symbol_caps["upstox"] == 2000 and rs.symbol_caps["fyers"] == 100
+
+
+def test_d30_mode_subscribes_indices_in_full_mode() -> None:
+    from engine.data.adapters.upstox import MODE_FULL_D30
+
+    sockets: list[FakeWS] = []
+    feed = make_feed(sockets, [])
+    feed.mode = MODE_FULL_D30
+    feed.subscribe(["NSE_INDEX|Nifty 50", "NSE_FO|61471", "BSE_INDEX|SENSEX"], depth=True)
+    feed.start(lambda e: None)
+    wait(sockets[0].opened)
+    sent = {
+        json.loads(f)["data"]["mode"]: json.loads(f)["data"]["instrumentKeys"]
+        for f, _ in sockets[0].sent
+    }
+    assert sent == {
+        "full": ["BSE_INDEX|SENSEX", "NSE_INDEX|Nifty 50"],  # indices: no book, normal mode
+        "full_d30": ["NSE_FO|61471"],
+    }
+    feed.stop()

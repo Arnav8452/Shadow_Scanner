@@ -23,6 +23,18 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## First live Upstox probe (11 Nov 2026, evening)
+
+`tasks.py upstox-probe` was run on the owner's account outside market hours. Upstox sends a snapshot on subscribe.
+- **Analytics token works for the live feed.** The 1-year read-only token opened the V3 socket. No daily login is needed.
+- **F&O data arrives before activation.** Every segment delivered prices: NSE/BSE indices, VIX, Nifty and Sensex futures, ATM options with OI, and Reliance. This is while the account's derivatives activation is still pending.
+- **Upstox Plus is active.** `full_d30` was granted (`requestMode` 3).
+- **Fixed: indices in 30-level mode.** Upstox answers index keys with an empty `fullFeed` in `full_d30`. `UpstoxFeed.mode_for` now subscribes indices in `full` mode on the same connection.
+
+**Open:** the snapshots carried 5 levels even in `full_d30`. Confirm 30 levels during market hours (`upstox-probe D30=1` or `shadow-live MINUTES=5`).
+
+---
+
 ## Live V1 shadow scanner on 30-level depth (11 Nov 2026)
 
 **Decision (owner).** The scanner gets 30-level depth from Upstox Plus `full_d30`. Plus is free to switch to; orders on Upstox cost ₹30 instead of ₹20.
