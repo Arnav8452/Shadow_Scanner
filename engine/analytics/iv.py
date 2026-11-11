@@ -47,7 +47,12 @@ def compute_dual_clock(
     session_minutes_per_day: float = 385.0,  # NSE F&O 09:15-15:40 = 385 mins (375 for 09:15-15:30)
     min_trading_minutes: float = 15.0,
 ) -> DualExpiryClock:
-    """Compute calendar discounting time ``t_cal`` and trading variance time ``t_var``."""
+    """Compute calendar discounting time ``t_cal`` and trading variance time ``t_var``.
+
+    APPROXIMATE (calendar-day ratio, fixed session length, no holidays). For real chains use
+    :func:`engine.analytics.expiry_clock.expiry_clock`, which reads session times and holidays
+    from config/rules (15:30 -> 15:40 close on 3 Aug 2026).
+    """
     if now.tzinfo is None or expiry_ts.tzinfo is None:
         raise ValueError("now and expiry_ts must be timezone-aware")
     delta_s = max(0.0, (expiry_ts - now).total_seconds())

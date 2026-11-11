@@ -137,13 +137,9 @@ def test_eod_bhavcopy_and_relative_delivery_scanner() -> None:
             f"CHURNCO,EQ,2026-11-{d:02d},200,205,198,201,200,500000,1005.0,200000,40.0"
         )
     # Day 11: RELIANCE has a 2.6x delivery spike with 62% delivery and +2.3% close -> LONG_ACCUMULATION
-    csv_lines.append(
-        "RELIANCE,EQ,2026-11-11,1305,1340,1302,1335,1305,190000,2520.0,117800,62.0"
-    )
+    csv_lines.append("RELIANCE,EQ,2026-11-11,1305,1340,1302,1335,1305,190000,2520.0,117800,62.0")
     # Day 11: CHURNCO spikes +8% on tiny 15% delivery -> RETAIL_CHURN_FADE
-    csv_lines.append(
-        "CHURNCO,EQ,2026-11-11,201,222,200,217,201,2000000,4300.0,300000,15.0"
-    )
+    csv_lines.append("CHURNCO,EQ,2026-11-11,201,222,200,217,201,2000000,4300.0,300000,15.0")
 
     rows = parse_cash_bhavcopy_csv("\n".join(csv_lines))
     assert len(rows) == 22
@@ -198,7 +194,12 @@ def test_corporate_actions_constituents_and_event_blackout() -> None:
 
     splits = [SplitBonusAction("RELIANCE", date(2026, 10, 28), numerator=2, denominator=1)]
     adj_k, adj_lot = adjust_strike_and_lot(
-        2600.0, 250, splits, symbol="RELIANCE", from_date=date(2026, 10, 1), to_date=date(2026, 11, 1)
+        2600.0,
+        250,
+        splits,
+        symbol="RELIANCE",
+        from_date=date(2026, 10, 1),
+        to_date=date(2026, 11, 1),
     )
     assert adj_k == 1300.0
     assert adj_lot == 500

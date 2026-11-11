@@ -23,6 +23,36 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## EOD data, IV history, expiry clock, event replay (11 Nov 2026, night)
+
+**Built:**
+- **Intraday contract-file refresh** (`recorder.master_refresh_min: 30`). New strikes listed during the day are added and recorded. Refreshes are saved as `<segment>@HHMM` beside the morning snapshot, never over it.
+- **NSE end-of-day downloads** (`engine/data/eod/download.py`; `tasks.py eod`, `eod-backfill`; scheduler `register_eod.ps1`, not registered):
+  - F&O and cash bhavcopies (the new file format), delivery %, participant OI and index closes incl. India VIX;
+  - stored as downloaded, with `fetched_at`;
+  - a 404 is recorded as missing (holiday or not published).
+- **IV history** (`engine/data/eod/iv_history.py`; `tasks.py iv-history`): daily ATM IV for NIFTY/BANKNIFTY/FINNIFTY plus India VIX closes, in `data/parquet/eod/iv_history.parquet`.
+  - **Method:** parity forward from the 5 strikes nearest spot, Black-76 on EOD closes, real session clock.
+  - **Labels:** tier C (closes, not mids); known at 19:30 on the trade date.
+  - **Sanity check (9 Nov 2026):** Nifty ATM IV 17.65% against India VIX 17.42%; call and put IV within 0.03 points.
+- **Expiry clock** (`engine/analytics/expiry_clock.py`): session times come from `market_sessions.csv` (15:30 → 15:40 on 3 Aug 2026), holidays from the calendar, and the result is flagged `approx` where a year's holidays are missing. `iv.compute_dual_clock` is marked approximate.
+- **IV meets M4's acceptance criterion:** within 0.1 vol pt of an independent Black-76 implementation (30 cases), plus Haug's textbook value of 1.7011.
+- **Risk numbers in config:** the approved margin headroom and loss-streak numbers moved from code into `settings.yaml` (`risk.*`).
+- **Order-rate cap from rules:** `OPSRateLimiter.from_rules` reads the SEBI threshold from `config/rules`.
+- **Event replay backtester** (`engine/backtest/event_replay.py`, M6 core): replays recorded days in known-at order; orders fill on PaperBroker against the book *at arrival time* (latency), never at LTP; `slippage_mult` 2.0 doubles every fill's slippage; unfilled orders are reported.
+- **Settled:** open interest is in **shares** on both Upstox and NSE (Nifty Nov future: 12,062,700 in the bhavcopy, 12,175,085 on Upstox).
+
+**New rule table:** `risk_free_rate.csv`, the 91-day T-bill at 5.34% (UNVERIFIED: a news report of RBI press release 2026-27/777). One value is applied to the whole backfill; it affects short-dated IV by well under 0.1 vol pt.
+
+**Open:**
+- 2025 holidays aren't loaded, so 2025 IV rows use the weekdays-only clock (flagged).
+- The replay currently uses the 5-level `quotes` data; wiring in `depth30` is a follow-up.
+- `fno_charges` still defaults to allowing UNVERIFIED rows until contract notes confirm the IPFT levy.
+
+220 tests pass.
+
+---
+
 ## First live Upstox probe (11 Nov 2026, evening)
 
 `tasks.py upstox-probe` was run on the owner's account outside market hours. Upstox sends a snapshot on subscribe.

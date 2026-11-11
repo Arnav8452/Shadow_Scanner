@@ -17,6 +17,11 @@ Useful without a broker login:
 - `uv run python tasks.py instruments` — downloads today's contract files and prints expiries, lot sizes and lot-size mismatches against `config/rules`.
 - `uv run python tasks.py record SIM=1 MINUTES=2` — dry run on the synthetic feed (writes under `data/sim/`, never mixed with real data).
 
+## Daily — end-of-day data (after 20:00 IST)
+
+- [ ] Automatic once `QuantEngine-EOD` is registered (`powershell -ExecutionPolicy Bypass -File ops\scheduler\windows\register_eod.ps1`). By hand: `uv run python tasks.py eod`, then `uv run python tasks.py iv-history`.
+- First time only: `uv run python tasks.py eod-backfill FROM=2025-11-01 TO=<today>` (about 10 minutes; F&O bhavcopies are ~1.3 MB a day).
+
 ## Daily — event arbitrage
 
 - [ ] 23:30 IST: the event-arb scan runs from Task Scheduler (`QuantEngine-EventArb`). Check the Telegram digest or `reports/event_arb/<date>.html`. To run it manually: `uv run python tasks.py event-arb SEND=1`.

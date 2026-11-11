@@ -6,18 +6,29 @@ Hard-caps order dispatch strictly below the SEBI retail-algo threshold (< 10 OPS
 from __future__ import annotations
 
 from collections import deque
+from datetime import date
+from pathlib import Path
 
 
 class OPSRateLimiter:
     """Sliding 1-second window rate limiter."""
 
-    def __init__(self, max_orders_per_second: int = 5) -> None:
-        if not 1 <= max_orders_per_second < 10:
+    def __init__(self, max_orders_per_second: int = 5, *, sebi_threshold: int = 10) -> None:
+        """``sebi_threshold`` comes from ``config/rules/sebi_algo_rules.csv`` via
+        :meth:`from_rules`; the default only guards direct construction in tests."""
+        if not 1 <= max_orders_per_second < sebi_threshold:
             raise ValueError(
-                f"max_orders_per_second must be in [1, 9] (SEBI < 10), got {max_orders_per_second}"
+                f"max_orders_per_second must be in [1, {sebi_threshold - 1}] "
+                f"(SEBI < {sebi_threshold}), got {max_orders_per_second}"
             )
         self.max_ops = max_orders_per_second
         self._timestamps_ns: deque[int] = deque()
+
+    @classmethod
+    def from_rules(cls, root: Path, on: date, max_orders_per_second: int) -> OPSRateLimiter:
+        from engine.core.config import sebi_ops_threshold
+
+        return cls(max_orders_per_second, sebi_threshold=sebi_ops_threshold(root, on))
 
     def allow(self, now_ns: int) -> bool:
         """Return True and record the order if within the 1-second cap; False otherwise."""

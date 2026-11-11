@@ -181,6 +181,21 @@ class InstrumentMaster:
     def __len__(self) -> int:
         return len(self._by_symbol)
 
+    def add_new(self, instruments: Iterable[Instrument]) -> list[Instrument]:
+        """Add contracts not yet known (e.g. strikes listed intraday); existing ones are kept
+        unchanged. Returns what was added."""
+        added: list[Instrument] = []
+        for ins in instruments:
+            if ins.symbol in self._by_symbol:
+                continue
+            self._by_symbol[ins.symbol] = ins
+            if ins.kind.is_option and ins.expiry is not None:
+                self._options[(ins.underlying, ins.expiry)].append(ins)
+            elif ins.kind is Kind.FUTURE:
+                self._futures[ins.underlying].append(ins)
+            added.append(ins)
+        return added
+
     def __contains__(self, symbol: object) -> bool:
         return symbol in self._by_symbol
 
@@ -288,9 +303,13 @@ def lot_size_mismatches(
 _SUFFIX = {"fyers": ".csv.gz", "upstox": ".json.gz"}
 
 
-def snapshot_path(raw_dir: Path, broker: str, day: date, segment: str) -> Path:
+def snapshot_path(
+    raw_dir: Path, broker: str, day: date, segment: str, tag: str | None = None
+) -> Path:
+    """``tag`` (e.g. ``1130``) names an intraday refresh, stored beside the morning file."""
     suffix = _SUFFIX.get(broker, ".csv.gz")
-    return raw_dir / "instruments" / broker / day.isoformat() / f"{segment}{suffix}"
+    name = f"{segment}@{tag}{suffix}" if tag else f"{segment}{suffix}"
+    return raw_dir / "instruments" / broker / day.isoformat() / name
 
 
 def fetch_fyers_master(
@@ -301,11 +320,12 @@ def fetch_fyers_master(
     now: datetime,
     fetcher: Callable[[str], bytes] = http_get_bytes,
     refresh: bool = False,
+    tag: str | None = None,
 ) -> Path:
     """Download today's Fyers contract file once per day and store it with its metadata."""
     if segment not in {"NSE_FO", "NSE_CM", "BSE_FO", "BSE_CM"}:
         raise ValueError(f"unsupported Fyers master segment {segment!r}")
-    path = snapshot_path(raw_dir, "fyers", day, segment)
+    path = snapshot_path(raw_dir, "fyers", day, segment, tag)
     if path.exists() and not refresh:
         return path
     url = FYERS_MASTER_URL.format(segment=segment)
@@ -459,11 +479,12 @@ def fetch_upstox_master(
     now: datetime,
     fetcher: Callable[[str], bytes] = http_get_bytes,
     refresh: bool = False,
+    tag: str | None = None,
 ) -> Path:
     """Download today's Upstox instrument file (public, no login) once per day."""
     if exchange not in {"NSE", "BSE"}:
         raise ValueError(f"unsupported Upstox master exchange {exchange!r}")
-    path = snapshot_path(raw_dir, "upstox", day, exchange)
+    path = snapshot_path(raw_dir, "upstox", day, exchange, tag)
     if path.exists() and not refresh:
         return path
     url = UPSTOX_MASTER_URL.format(exchange=exchange)

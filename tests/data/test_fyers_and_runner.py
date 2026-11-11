@@ -369,3 +369,29 @@ def test_open_interest_is_restored_from_the_sdk_raw_dict() -> None:
         pass
 
     assert with_open_interest(SomethingElse) is SomethingElse  # unknown layout: unchanged
+
+
+def test_intraday_contract_refresh_adds_new_strikes(rs: RecorderSettings, tmp_path: Path) -> None:
+    from tests.data.conftest import WEEKLY, build_master, opt_symbol
+
+    from engine.data.reference.instrument_master import Kind
+
+    morning = build_master(strikes=range(24000, 25000, 50))  # 25000 not listed yet
+    full = build_master()  # later file lists 24000..26000
+    rs = replace(rs, master_refresh_min=1)
+    clock = ManualClock(datetime(2026, 11, 11, 11, 0, 0, tzinfo=IST))
+    runner, feed = make_runner(rs, morning, tmp_path, clock, cap=200)
+    runner.master_reloader = lambda: full
+    runner.start()
+    feed.pump()
+    runner.step(0)
+    atm = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    assert atm not in feed.symbols
+    clock.advance(61)  # past the 1-minute refresh interval: download starts in the background
+    runner.step(0)
+    assert runner._reload_thread is not None
+    runner._reload_thread.join(5)
+    runner.step(0)  # merge on the recorder thread and re-centre
+    assert runner.contracts_added > 0 and atm in runner.master
+    assert atm in feed.symbols
+    runner.finish()

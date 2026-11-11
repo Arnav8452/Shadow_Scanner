@@ -1,0 +1,2 @@
+tenor,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
+91d_tbill,5.34,pct_annual,2025-01-01,,https://tradersunion.com/news/central-banks/show/2830177-rbi-treasury-bill-auction-91-364-day/,2026-11-11,UNVERIFIED,"91-day T-bill cut-off yield from RBI press release 2026-2027/777 as reported by a news site (auction date not shown). One recent value applied to the whole IV backfill; replace with the RBI weekly series. Used only to discount option prices: effect on short-dated IV is well under 0.1 vol pt."

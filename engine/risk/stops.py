@@ -50,9 +50,7 @@ def evaluate_dynamic_microstructure_stops(
         return DynamicStopDecision(
             should_exit=True,
             exit_type="HARD_STOP_LOSS",
-            rationale=(
-                f"Price ({current_price:.2f}) breached hard SL ({hard_stop_loss:.2f})"
-            ),
+            rationale=(f"Price ({current_price:.2f}) breached hard SL ({hard_stop_loss:.2f})"),
         )
 
     # 2. Structural Invalidation Stop (Delta-Flip or Defending Wall Pulled)

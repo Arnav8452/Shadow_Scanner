@@ -59,6 +59,9 @@ risk:                    # APPROVED (owner, 11 Nov 2026)
   block_first_minutes: 15          # except ORB strategy
   directional_no_entry_after: "14:00"
   stock_fno_expiry_exit_days_before: 2   # SPEC §6 default E-2
+  margin_headroom_max_used_pct: 50.0     # used + proposed margin <= 50% of capital
+  loss_streak_size_cut_after: 3          # x0.5 size after this many losses in a session
+  loss_streak_halt_after: 4              # no new entries for the day after this many
 
 execution:
   live_enabled: false    # never flip without owner confirmation in-session
@@ -117,6 +120,7 @@ recorder:                # M2 — what to record and how (SPEC §3 L1); not risk
   watchdog_silence_s: 20      # restart the feed after this much silence in session
   flush_interval_s: 30
   recenter_interval_s: 60
+  master_refresh_min: 30      # re-download the contract file intraday for newly listed strikes
   stale_quote_s: 120
   lag_warn_s: 5
   clock_ahead_tolerance_s: 1

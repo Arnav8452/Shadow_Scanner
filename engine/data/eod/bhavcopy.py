@@ -81,6 +81,8 @@ class FnOBhavcopyRow:
     oi: int
     change_in_oi: int
     known_at: datetime
+    underlying_price: float = 0.0  # UDiFF UndrlygPric (spot used by NSE for the day)
+    lot_size: int = 0  # UDiFF NewBrdLotQty
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,19 +138,12 @@ def parse_cash_bhavcopy_csv(text: str) -> list[CashBhavcopyRow]:
         open_px = float(norm.get("OPEN_PRICE") or norm.get("OPEN") or norm.get("OPNPRIC") or 0.0)
         high_px = float(norm.get("HIGH_PRICE") or norm.get("HIGH") or norm.get("HGHPRIC") or 0.0)
         low_px = float(norm.get("LOW_PRICE") or norm.get("LOW") or norm.get("LWPRIC") or 0.0)
-        close_px = float(
-            norm.get("CLOSE_PRICE") or norm.get("CLOSE") or norm.get("CLSPRIC") or 0.0
-        )
+        close_px = float(norm.get("CLOSE_PRICE") or norm.get("CLOSE") or norm.get("CLSPRIC") or 0.0)
         prev_px = float(
             norm.get("PREV_CLOSE") or norm.get("PREVCLOSE") or norm.get("PRVSCLSGPRIC") or close_px
         )
         trd_qty = int(
-            float(
-                norm.get("TTL_TRD_QNTY")
-                or norm.get("TOTTRDQTY")
-                or norm.get("TTLTRADGVOL")
-                or 0
-            )
+            float(norm.get("TTL_TRD_QNTY") or norm.get("TOTTRDQTY") or norm.get("TTLTRADGVOL") or 0)
         )
         turnover = float(
             norm.get("TURNOVER_LACS")
@@ -211,6 +206,8 @@ def parse_fno_bhavcopy_csv(text: str) -> list[FnOBhavcopyRow]:
         contracts = int(float(norm.get("CONTRACTS") or norm.get("TTLTRADGVOL") or 0))
         oi = int(float(norm.get("OPEN_INT") or norm.get("OPNINTRST") or 0))
         chg_oi = int(float(norm.get("CHG_IN_OI") or norm.get("CHGINOPNINTRST") or 0))
+        und_px = float(norm.get("UNDRLYGPRIC") or 0.0)
+        lot = int(float(norm.get("NEWBRDLOTQTY") or norm.get("MARKET_LOT") or 0))
 
         rows.append(
             FnOBhavcopyRow(
@@ -229,6 +226,8 @@ def parse_fno_bhavcopy_csv(text: str) -> list[FnOBhavcopyRow]:
                 oi=oi,
                 change_in_oi=chg_oi,
                 known_at=_eod_known_at(t_date),
+                underlying_price=und_px,
+                lot_size=lot,
             )
         )
     return rows
@@ -284,9 +283,8 @@ def scan_relative_delivery_spikes(
                 f"({latest.delivery_pct:.1f}% vs {avg_pct:.1f}% avg) on +{ret:.2f}% close"
             )
         elif (
-            (ret >= min_churn_spike_pct or intraday_range_pct >= min_churn_spike_pct * 1.4)
-            and latest.delivery_pct < avg_pct * max_churn_rel_delivery_ratio
-        ):
+            ret >= min_churn_spike_pct or intraday_range_pct >= min_churn_spike_pct * 1.4
+        ) and latest.delivery_pct < avg_pct * max_churn_rel_delivery_ratio:
             bias = DeliveryBias.RETAIL_CHURN_FADE
             rationale = (
                 f"Speculative retail churn: +{max(ret, intraday_range_pct):.2f}% spike on low "

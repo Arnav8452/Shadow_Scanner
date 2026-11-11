@@ -80,8 +80,11 @@ def check_pre_trade_risk_gate(
     # 2. Max trades per day & Consecutive-Loss Circuit Breaker (PDF §7.4)
     if state.trades_taken_today >= limits.max_trades_per_day:
         reasons.append(f"max_trades_per_day_reached ({state.trades_taken_today})")
-    if state.consecutive_losses_today >= 4:
-        reasons.append("consecutive_loss_circuit_breaker (4 consecutive losses -> session halt)")
+    if state.consecutive_losses_today >= limits.loss_streak_halt_after:
+        reasons.append(
+            f"consecutive_loss_circuit_breaker ({state.consecutive_losses_today} losses -> "
+            "session halt)"
+        )
 
     # 3. Cool-off timer after loss
     if state.last_loss_at is not None and limits.cooloff_after_loss_min > 0:
@@ -117,12 +120,14 @@ def check_pre_trade_risk_gate(
 
     # 6. 50% Margin headroom rule (SPEC §6)
     tot_margin = state.margin_used_inr + proposed_margin_inr
-    if tot_margin > 0.50 * cap:
+    max_used = limits.margin_headroom_max_used_pct / 100.0 * cap
+    if tot_margin > max_used:
         reasons.append(
-            f"margin_headroom_violated (used+proposed {tot_margin:.0f} > 50% of {cap:.0f})"
+            f"margin_headroom_violated (used+proposed {tot_margin:.0f} > "
+            f"{limits.margin_headroom_max_used_pct:g}% of {cap:.0f})"
         )
 
-    scale = 0.5 if state.consecutive_losses_today == 3 else 1.0
+    scale = 0.5 if state.consecutive_losses_today >= limits.loss_streak_size_cut_after else 1.0
     if reasons:
         scale = 0.0
     return PreTradeGateDecision(

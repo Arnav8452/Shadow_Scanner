@@ -116,7 +116,9 @@ def test_1st_2nd_3rd_order_greeks_stress_and_gex() -> None:
     port = compute_portfolio_rupee_greeks(legs, forward=24000.0)
     assert port.net_delta_units < 0
 
-    grid = compute_stress_grid(legs, forward=24000.0, spot_shocks_pct=(-2.0, 0.0, 2.0), iv_shocks_pts=(0.0, 5.0))
+    grid = compute_stress_grid(
+        legs, forward=24000.0, spot_shocks_pct=(-2.0, 0.0, 2.0), iv_shocks_pts=(0.0, 5.0)
+    )
     assert len(grid) == 6
 
     gex = compute_dealer_gex_profile(
@@ -134,7 +136,9 @@ def test_1st_2nd_3rd_order_greeks_stress_and_gex() -> None:
 
 def test_realized_vol_vrp_positioning_and_technicals() -> None:
     bars = [
-        OHLCBar(24000 + i * 15, 24060 + i * 15, 23960 + i * 15, 24020 + i * 15, 24000 + (i - 1) * 15)
+        OHLCBar(
+            24000 + i * 15, 24060 + i * 15, 23960 + i * 15, 24020 + i * 15, 24000 + (i - 1) * 15
+        )
         for i in range(1, 22)
     ]
     suite = compute_realized_vol_suite(bars)
@@ -167,7 +171,9 @@ def test_realized_vol_vrp_positioning_and_technicals() -> None:
 
     vwap = compute_vwap_bands([24000.0, 24020.0, 24040.0], [1000, 2000, 3000])
     assert vwap.vwap > 24020.0 and vwap.upper_1sd > vwap.vwap
-    assert compute_wilder_atr([105.0, 108.0, 107.0], [100.0, 102.0, 101.0], [103.0, 106.0, 104.0]) > 0
+    assert (
+        compute_wilder_atr([105.0, 108.0, 107.0], [100.0, 102.0, 101.0], [103.0, 106.0, 104.0]) > 0
+    )
 
     eq_pools = detect_equal_highs_lows([24200.0, 24205.0], [23900.0, 23895.0])
     assert len(eq_pools) == 2

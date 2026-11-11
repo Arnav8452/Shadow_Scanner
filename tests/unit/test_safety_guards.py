@@ -268,3 +268,36 @@ def test_kill_switch_disconnect_never_flattens_blindly() -> None:
         (1, "NSE:NIFTY26N1725200CE", "BUY", 42.0),
         (2, "NSE:NIFTY26N1725400CE", "SELL", 16.0),
     ]
+
+
+def test_risk_numbers_and_ops_cap_come_from_config(repo_root: Path) -> None:
+    from dataclasses import replace as dc_replace
+
+    from engine.execution.ops_limiter import OPSRateLimiter
+
+    risk = load_settings(root=repo_root, environ={}).risk
+    assert (
+        risk.margin_headroom_max_used_pct,
+        risk.loss_streak_size_cut_after,
+        risk.loss_streak_halt_after,
+    ) == (50.0, 3, 4)
+
+    def gate(r: object, losses: int, margin: float) -> object:
+        return check_pre_trade_risk_gate(
+            r,  # type: ignore[arg-type]
+            AccountRiskState(consecutive_losses_today=losses),
+            proposed_trade_max_loss_inr=1000.0,
+            proposed_margin_inr=margin,
+            proposed_lots=1,
+            now=NOW,
+            session_open=OPEN,
+        )
+
+    stricter = dc_replace(risk, margin_headroom_max_used_pct=10.0, loss_streak_halt_after=2)
+    assert gate(risk, 0, 50_000.0).allowed  # 25% of ₹2L used
+    assert not gate(stricter, 0, 50_000.0).allowed  # same trade, 10% cap from config
+    assert not gate(stricter, 2, 1_000.0).allowed  # halt after 2 losses from config
+    ops = OPSRateLimiter.from_rules(repo_root, NOW.date(), 5)
+    with pytest.raises(ValueError, match="SEBI < 10"):
+        OPSRateLimiter.from_rules(repo_root, NOW.date(), 10)
+    assert ops.max_ops == 5

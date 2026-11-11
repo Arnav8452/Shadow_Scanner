@@ -4,6 +4,7 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | upstox-login | upstox-probe [D30=1] [SECONDS=n]
                       | record [SIM=1] [MINUTES=n] | qc [DATE=...] [SIM=1] [LAST=5]
                       | shadow-live [SIM=1] [MINUTES=n] [SEND=1]
+                      | eod [DATE=] | eod-backfill FROM= TO= | iv-history [FROM= TO=]
                       | event-arb | shadow-scan [VERSION=v1_shadow|v2_bot]
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
@@ -15,6 +16,7 @@ import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent
@@ -246,6 +248,82 @@ def task_record(params: dict[str, str]) -> int:
         verdict = "PASS" if res.qc_passed else "FAIL"
         alert(f"Recorder {day}{' (sim)' if sim else ''}: QC {verdict} — {res.qc_report.name}")
     return 0 if res.status != "failed" else 1
+
+
+def _eod_common() -> tuple[Path, Any, Any]:
+    sys.path.insert(0, str(ROOT))
+    from engine.core.calendar import TradingCalendar
+    from engine.core.config import load_settings
+    from engine.core.rules import RuleBook
+
+    settings = load_settings()
+    book = RuleBook.load(ROOT / "config" / "rules")
+    return settings.paths["raw"], book, TradingCalendar.from_rulebook(book)
+
+
+def task_eod(params: dict[str, str]) -> int:
+    """Download one day's NSE end-of-day files (default: today, after ~19:30 IST).
+    DATE=YYYY-MM-DD, DATASETS=fo,cm,delivery,participant_oi,indices (default all)."""
+    raw_dir, _, _ = _eod_common()
+    from engine.data.eod.download import DATASETS, fetch_eod
+
+    day = date.fromisoformat(params["DATE"]) if params.get("DATE") else _today_ist()
+    sets = params.get("DATASETS", ",".join(DATASETS)).split(",")
+    bad = 0
+    for ds in sets:
+        res = fetch_eod(ds, day, raw_dir=raw_dir, now=datetime.now(IST))
+        print(f"{day} {ds:<15} {res.status:<8} {res.detail}")
+        bad += res.status == "error"
+    return 1 if bad else 0
+
+
+def task_eod_backfill(params: dict[str, str]) -> int:
+    """Backfill NSE end-of-day files for FROM..TO (weekdays; holidays show as missing), then
+    rebuild the IV history. DATASETS default: fo,indices (what the IV history needs)."""
+    raw_dir, _, _ = _eod_common()
+    from engine.data.eod.download import backfill
+
+    if not (params.get("FROM") and params.get("TO")):
+        print("usage: tasks.py eod-backfill FROM=YYYY-MM-DD TO=YYYY-MM-DD", file=sys.stderr)
+        return 2
+    start, end = date.fromisoformat(params["FROM"]), date.fromisoformat(params["TO"])
+    sets = params.get("DATASETS", "fo,indices").split(",")
+    results = backfill(sets, start, end, raw_dir=raw_dir, now=lambda: datetime.now(IST))
+    counts: dict[str, int] = {}
+    for r in results:
+        counts[r.status] = counts.get(r.status, 0) + 1
+    print(f"backfill {start}..{end} {sets}: {counts}")
+    return task_iv_history({"FROM": params["FROM"], "TO": params["TO"]})
+
+
+def task_iv_history(params: dict[str, str]) -> int:
+    """Rebuild data/parquet/eod/iv_history.parquet (tier C: EOD closes) from downloaded
+    bhavcopies. FROM/TO default to the last 400 calendar days."""
+    raw_dir, book, cal = _eod_common()
+    from datetime import timedelta
+
+    from engine.data.eod.download import weekdays
+    from engine.data.eod.iv_history import build_iv_history, write_iv_history
+
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else _today_ist()
+    start = date.fromisoformat(params["FROM"]) if params.get("FROM") else end - timedelta(days=400)
+    unds = params.get("UNDERLYINGS", "NIFTY,BANKNIFTY,FINNIFTY").split(",")
+    ivs, vix = build_iv_history(
+        raw_dir, weekdays(start, end), underlyings=unds, book=book, calendar=cal
+    )
+    out = write_iv_history(raw_dir.parent / "parquet" / "eod" / "iv_history.parquet", ivs, vix)
+    approx = sum(x.clock_approx for x in ivs)
+    print(f"IV history: {len(ivs)} rows, {len(vix)} VIX days -> {out}")
+    if approx:
+        print(f"  {approx} rows used a weekdays-only clock (holidays for that year not loaded)")
+    last = max(
+        (x for x in ivs if x.underlying == "NIFTY"), key=lambda x: x.trade_date, default=None
+    )
+    if last:
+        print(
+            f"  latest NIFTY ATM IV {last.atm_iv:.2%} on {last.trade_date} (expiry {last.expiry})"
+        )
+    return 0
 
 
 def task_upstox_probe(params: dict[str, str]) -> int:

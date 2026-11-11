@@ -74,6 +74,7 @@ class RecorderSettings:
     depth_counts_separately: Mapping[str, bool]
     budget_margin: int
     recenter_interval_s: int
+    master_refresh_min: int
     master_broker: str
     master_segments: tuple[str, ...]
     sessions: tuple[tuple[str, str], ...]
@@ -158,6 +159,7 @@ def load_recorder_settings(settings: Settings) -> RecorderSettings:
         },
         budget_margin=int(raw.get("budget_margin", 2)),
         recenter_interval_s=int(raw.get("recenter_interval_s", 60)),
+        master_refresh_min=int(raw.get("master_refresh_min", 30)),
         master_broker=broker,
         master_segments=tuple(per_broker(master.get("segments", ()), "master.segments")),
         sessions=sessions,
@@ -214,6 +216,7 @@ class RecorderRunner:
         clock: Clock,
         recorder: Recorder,
         sticky: StickyStore,
+        master_reloader: Callable[[], InstrumentMaster] | None = None,
     ) -> None:
         self.rs = rs
         self.adapter = adapter
@@ -228,6 +231,12 @@ class RecorderRunner:
         self.selection: Selection | None = None
         self._next_recenter_ns = 0
         self.restarts = 0
+        self.master_reloader = master_reloader
+        self._reload_every_ns = rs.master_refresh_min * 60 * NS_PER_S
+        self._next_reload_ns = clock.now_ns() + self._reload_every_ns
+        self._reload_thread: threading.Thread | None = None
+        self._pending_master: InstrumentMaster | None = None
+        self.contracts_added = 0
 
     def _enqueue(self, ev: FeedEvent) -> None:
         try:
@@ -327,6 +336,7 @@ class RecorderRunner:
             except queue.Empty:
                 ev = None
         now = self.clock.now_ns()
+        self._maybe_reload_master(now)
         if now >= self._next_recenter_ns or (
             not self._options_selected() and self.spots_and_iv()[0]
         ):
@@ -334,6 +344,36 @@ class RecorderRunner:
         if self.recorder.on_timer(now):
             self.restarts += 1
             self.adapter.restart()
+
+    def _maybe_reload_master(self, now: int) -> None:
+        """Fetch the contract file again every ``master_refresh_min`` in a background thread
+        (download + parse take ~1 s) and merge newly listed contracts on this thread."""
+        pending, self._pending_master = self._pending_master, None
+        if pending is not None:
+            added = self.master.add_new(pending.all())
+            if added:
+                self.contracts_added += len(added)
+                self.recorder.note(now, "note", f"contract file refresh: +{len(added)} contracts")
+                log.info("contract file refresh: %d new contracts", len(added))
+                self.recenter(now, reason="new contracts")
+        if (
+            self.master_reloader is None
+            or self._reload_every_ns <= 0
+            or now < self._next_reload_ns
+            or (self._reload_thread is not None and self._reload_thread.is_alive())
+        ):
+            return
+        self._next_reload_ns = now + self._reload_every_ns
+        reloader = self.master_reloader
+
+        def work() -> None:
+            try:
+                self._pending_master = reloader()
+            except Exception as exc:  # keep recording on the morning file
+                log.warning("contract file refresh failed: %s", exc)
+
+        self._reload_thread = threading.Thread(target=work, name="master-reload", daemon=True)
+        self._reload_thread.start()
 
     def run(self, end_ns: int, stop: threading.Event) -> None:
         while not stop.is_set() and self.clock.now_ns() < end_ns:
@@ -367,7 +407,10 @@ def load_master(
     *,
     fetch: bool,
     close_time: time | None = None,
+    refresh_tag: str | None = None,
 ) -> InstrumentMaster:
+    """Today's master (downloaded once a day). ``refresh_tag`` forces a fresh intraday
+    download saved under that tag, keeping the morning snapshot intact."""
     broker = rs.master_broker
     fetchers = {"fyers": fetch_fyers_master, "upstox": fetch_upstox_master}
     if broker not in fetchers:
@@ -377,7 +420,14 @@ def load_master(
         p: Path | None = None
         if fetch:
             try:
-                p = fetchers[broker](seg, raw_dir=rs.raw_dir, day=day, now=now)
+                p = fetchers[broker](
+                    seg,
+                    raw_dir=rs.raw_dir,
+                    day=day,
+                    now=now,
+                    refresh=refresh_tag is not None,
+                    tag=refresh_tag,
+                )
             except Exception as exc:  # network trouble: fall back to the last snapshot
                 log.warning("master %s fetch failed (%s); using last snapshot", seg, exc)
         if p is None:
@@ -551,6 +601,20 @@ def record_day(
         clock=clock,
         recorder=recorder,
         sticky=StickyStore(rs.sticky_file if not sim else rs.sim_dir / "sticky.json", day),
+        master_reloader=(
+            (
+                lambda: load_master(
+                    rs,
+                    day,
+                    from_ns(clock.now_ns()),
+                    fetch=True,
+                    close_time=primary.normal_close,
+                    refresh_tag=from_ns(clock.now_ns()).strftime("%H%M"),
+                )
+            )
+            if fetch_master and not sim
+            else None
+        ),
     )
     log.info(
         "recording %s %s–%s via %s (cap %d) into %s",
@@ -568,6 +632,7 @@ def record_day(
         runner.finish()
     stats = recorder.stats.__dict__ | {
         "restarts": runner.restarts,
+        "contracts_added_intraday": runner.contracts_added,
         "dropped_events": runner.dropped_events,
     }
     result = RecordResult(day, "recorded", out_dir=out_dir, stats=stats)

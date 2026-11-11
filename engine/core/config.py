@@ -90,6 +90,10 @@ class RiskLimits:
     block_first_minutes: int
     directional_no_entry_after: str
     stock_fno_expiry_exit_days_before: int
+    # Approved by the owner on 11 Nov 2026 (defaults match; config is the source of truth).
+    margin_headroom_max_used_pct: float = 50.0
+    loss_streak_size_cut_after: int = 3
+    loss_streak_halt_after: int = 4
 
     def inr(self, pct: float) -> float:
         return self.capital_inr * pct / 100.0
@@ -286,7 +290,20 @@ def _build(
             _req(r, "stock_fno_expiry_exit_days_before", "risk"),
             "stock_fno_expiry_exit_days_before",
         ),
+        margin_headroom_max_used_pct=_positive(
+            r.get("margin_headroom_max_used_pct", 50.0), "margin_headroom_max_used_pct"
+        ),
+        loss_streak_size_cut_after=int(
+            _positive(r.get("loss_streak_size_cut_after", 3), "loss_streak_size_cut_after")
+        ),
+        loss_streak_halt_after=int(
+            _positive(r.get("loss_streak_halt_after", 4), "loss_streak_halt_after")
+        ),
     )
+    if risk.loss_streak_size_cut_after >= risk.loss_streak_halt_after:
+        raise ConfigError("loss_streak_size_cut_after must be < loss_streak_halt_after")
+    if risk.margin_headroom_max_used_pct > 100:
+        raise ConfigError("margin_headroom_max_used_pct must be <= 100")
     if not _HHMM.match(risk.directional_no_entry_after):
         raise ConfigError("risk.directional_no_entry_after must be HH:MM (24h)")
     if risk.daily_loss_limit_pct > risk.weekly_loss_limit_pct:

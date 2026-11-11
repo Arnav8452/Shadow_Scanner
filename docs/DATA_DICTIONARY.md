@@ -74,6 +74,19 @@ Columns:
 
 Written by `engine/shadow/live.py` and compacted after the session.
 
+### End-of-day files (M3) — `data/raw/eod/<dataset>/<YYYY>/<YYYY-MM-DD>.csv[.zip]`
+
+Datasets: `fo` and `cm` (NSE bhavcopies in the new format), `delivery` (`sec_bhavdata_full`), `participant_oi`, `indices` (`ind_close_all`, includes India VIX). Each file is stored as downloaded, with a `.meta.json` holding the URL, `fetched_at` and SHA-256. Parsers stamp rows known at 19:30 IST on the trade date. OI is in **shares**, not lots.
+
+### `data/parquet/eod/iv_history.parquet`
+
+One row per trade date and underlying:
+- `expiry` (nearest, at least 2 trading days out), `trading_minutes`, `spot`, `forward` (parity, median over 5 strikes), `atm_strike`;
+- `call_iv`, `put_iv`, `atm_iv` (Black-76 on EOD closes), `n_parity_strikes`, `r`;
+- `clock_approx` (holiday calendar missing for that year), `known_at`, `tier` = `C_eod_close`, `vix_close`.
+
+Rebuilt by `tasks.py iv-history`.
+
 ### Other M2 files
 
 - `data/raw/instruments/<broker>/<YYYY-MM-DD>/<segment>.csv.gz` + `.meta.json` — the broker contract file as downloaded, with `fetched_at` (known-at), URL and SHA-256.
