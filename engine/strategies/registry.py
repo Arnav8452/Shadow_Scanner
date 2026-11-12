@@ -92,9 +92,25 @@ REGISTRY: tuple[StrategyItem, ...] = (
         "data/state/swing/*.json",
     ),
     StrategyItem(
-        "5.10", "Expiry-afternoon gamma breakout", "research",
-        "engine/strategies/optional_sleeves.py (evaluate_expiry_gamma_breakout)",
-        "Firing rate unmeasured; measure on recorded expiries before paper.",
+        "5.10", "Expiry-afternoon gamma breakout", "paper",
+        "engine/cockpit/strategies.py (GammaBreakoutStrategy, cockpit.gamma)",
+        "Expiry days 13:45-15:15 after a quiet morning; 30% stop, stop to +40% at +80% (one lot "
+        "cannot be halved). Firing rate still unmeasured.",
+        "data/state/paper_gamma.jsonl",
+    ),
+    StrategyItem(
+        "5.2", "Debit spreads on confirmed setups (naked vs spread A/B)", "paper",
+        "engine/cockpit/strategies.py (DebitSpreadStrategy, cockpit.debit)",
+        "Bull call / bear put on the same confirmed setups as 5.2; target 60% of max value, "
+        "stop at half the debit, 15:20 square-off.",
+        "data/state/paper_debit.jsonl",
+    ),
+    StrategyItem(
+        "test", "Score-follow (original A+ order-flow bot)", "paper",
+        "engine/cockpit/core.py (score account, cockpit.bot)",
+        "Original rules kept to measure them: ATM option on an A+ signal, 25% stop, exit when "
+        "the signal's episode closes (short holds).",
+        "data/state/paper_score.jsonl",
     ),
     StrategyItem(
         "5.9", "VRP measurement (Nifty)", "research",

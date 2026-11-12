@@ -24,8 +24,10 @@ New-Item -ItemType Directory -Force (Join-Path $Repo "logs") | Out-Null
 $cmd = "/c cd /d `"$Repo`" && `"$uv`" run python tasks.py eod >> logs\eod_task.log 2>&1 && `"$uv`" run python tasks.py iv-history >> logs\eod_task.log 2>&1 & `"$uv`" run python tasks.py evening >> logs\evening_task.log 2>&1"
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmd -WorkingDirectory $Repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $Time
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+# Run on battery too: on 12 Nov 2026 the default (no start on batteries) skipped the run on a
+# laptop that was unplugged at 20:00. The 60-minute limit covers the evening job's filings.
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun -DontStopIfGoingOnBatteries `
+    -AllowStartIfOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 60)
 
 Register-ScheduledTask -TaskName "QuantEngine-EOD" -Action $action -Trigger $trigger `
     -Settings $settings -Force `
