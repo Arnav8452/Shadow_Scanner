@@ -16,10 +16,13 @@ paper engine would have done on that day by construction (SPEC §13 M6).
 from __future__ import annotations
 
 import bisect
-from collections.abc import Iterator, Sequence
+import heapq
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
+
+import pyarrow as pa
 
 from engine.core.clock import NS_PER_S, from_ns
 from engine.core.rules import RuleBook
@@ -30,6 +33,7 @@ from engine.execution.order_fsm import OrderRecord, OrderState
 from engine.execution.paper_broker import PaperBroker, PaperFillResult
 
 US = 1000  # ns per microsecond
+ROW_BATCH = 4096  # rows turned into Python dicts at a time
 
 
 def _ns(ts: datetime | None) -> int | None:
@@ -48,82 +52,37 @@ def _in_d30_window(recv_ns: int, d30_times: Sequence[int], hold_ns: int) -> bool
     return recv_ns - d30_times[i] <= hold_ns
 
 
-def recorded_events(
-    store: Store,
-    day: date,
-    *,
-    as_of: datetime,
-    start: datetime | None = None,
-    symbols: Sequence[str] | None = None,
-    include_snapshots: bool = False,
-    include_depth30: bool = True,
-    depth30_hold_s: float = 60.0,
+def _quote_row_events(
+    rows: Iterable[dict[str, Any]], d30_times_by_sym: dict[str, list[int]], hold_ns: int
 ) -> Iterator[Quote | Depth]:
-    """Rebuild feed events from recorded rows, in the order they became known.
-
-    When ``include_depth30`` is True and ``depth30`` Parquet files exist for ``day``, 30-level
-    depth snapshots from ``depth30`` are merged in ``(recv_ns, seq)`` order and supersede the
-    5-level depth columns in ``quotes`` while the symbol is actively receiving ``depth30``
-    updates (within ``depth30_hold_s`` seconds). Outside those windows (before the symbol enters
-    the 30-level watchlist or after it rotates out), replay falls back to the 5-level ``quotes``
-    book so the contract never goes bookless.
-    """
-    capture = None if include_snapshots else "tick"
-    q_table = store.quotes(day, as_of=as_of, start=start, symbols=symbols, capture=capture)
-    d30_table = (
-        store.depth30(day, as_of=as_of, start=start, symbols=symbols) if include_depth30 else None
-    )
-    q_rows = q_table.to_pylist() if q_table.num_rows > 0 else []
-    d30_rows = d30_table.to_pylist() if d30_table is not None and d30_table.num_rows > 0 else []
-    if not q_rows and not d30_rows:
-        return
-
-    hold_ns = int(depth30_hold_s * NS_PER_S)
-    d30_times_by_sym: dict[str, list[int]] = {}
-    for r in d30_rows:
-        t_ns = _ns(r["ts"])
-        if t_ns is not None:
-            d30_times_by_sym.setdefault(str(r["symbol"]), []).append(t_ns)
-    for times in d30_times_by_sym.values():
-        times.sort()
-
-    timed: list[tuple[int, int, Quote | Depth]] = []
-    idx = 0
-
-    for r in q_rows:
+    """Quote and 5-level Depth events from ``quotes`` rows (already in (ts, seq) order)."""
+    for r in rows:
         recv = _ns(r["ts"])
         assert recv is not None
         sym = r["symbol"]
         if r["msg"] in ("quote", "snap") and r.get("quote_recv_ts") is not None:
             exch = r.get("exch_ts")
             ltt = r.get("ltt")
-            idx += 1
-            timed.append(
-                (
-                    recv,
-                    idx,
-                    Quote(
-                        sym,
-                        recv,
-                        exch_ts=int(exch.timestamp()) if exch else None,
-                        ltt=int(ltt.timestamp()) if ltt else None,
-                        ltp=r["ltp"],
-                        ltq=r["ltq"],
-                        atp=r["atp"],
-                        volume=r["volume"],
-                        oi=r["oi"],
-                        tbq=r["tbq"],
-                        tsq=r["tsq"],
-                        bid=r["bid"],
-                        bid_qty=r["bid_qty"],
-                        ask=r["ask"],
-                        ask_qty=r["ask_qty"],
-                        open=r["open"],
-                        high=r["high"],
-                        low=r["low"],
-                        prev_close=r["prev_close"],
-                    ),
-                )
+            yield Quote(
+                sym,
+                recv,
+                exch_ts=int(exch.timestamp()) if exch else None,
+                ltt=int(ltt.timestamp()) if ltt else None,
+                ltp=r["ltp"],
+                ltq=r["ltq"],
+                atp=r["atp"],
+                volume=r["volume"],
+                oi=r["oi"],
+                tbq=r["tbq"],
+                tsq=r["tsq"],
+                bid=r["bid"],
+                bid_qty=r["bid_qty"],
+                ask=r["ask"],
+                ask_qty=r["ask_qty"],
+                open=r["open"],
+                high=r["high"],
+                low=r["low"],
+                prev_close=r["prev_close"],
             )
         if (
             not _in_d30_window(recv, d30_times_by_sym.get(str(sym), ()), hold_ns)
@@ -139,13 +98,14 @@ def recorded_events(
                     bids.append((bp, bq, r.get(f"bid_ord_{i}")))
                 if ap and aq:
                     asks.append((ap, aq, r.get(f"ask_ord_{i}")))
-            idx += 1
-            timed.append((recv, idx, Depth(sym, recv, tuple(bids), tuple(asks))))
+            yield Depth(sym, recv, tuple(bids), tuple(asks))
 
-    for r in d30_rows:
+
+def _depth30_row_events(rows: Iterable[dict[str, Any]]) -> Iterator[Depth]:
+    """30-level Depth events from ``depth30`` rows (already in (ts, seq) order)."""
+    for r in rows:
         recv = _ns(r["ts"])
         assert recv is not None
-        sym = r["symbol"]
         exch = r.get("exch_ts")
         bids30 = tuple(
             (float(px), int(qty), None)
@@ -157,24 +117,113 @@ def recorded_events(
             for px, qty in zip(r.get("ask_px") or (), r.get("ask_qty") or (), strict=False)
             if px and qty
         )
-        idx += 1
-        timed.append(
-            (
-                recv,
-                idx,
-                Depth(
-                    sym,
-                    recv,
-                    bids30,
-                    asks30,
-                    exch_ts=int(exch.timestamp()) if exch else None,
-                ),
-            )
+        yield Depth(
+            r["symbol"], recv, bids30, asks30, exch_ts=int(exch.timestamp()) if exch else None
         )
 
-    timed.sort(key=lambda item: (item[0], item[1]))
-    for _, _, ev in timed:
-        yield ev
+
+def _rows(table: pa.Table | None) -> Iterator[dict[str, Any]]:
+    """Rows as dicts, a small batch at a time (a whole window as dicts would be ~10x Arrow)."""
+    if table is None or table.num_rows == 0:
+        return
+    for batch in table.to_batches(max_chunksize=ROW_BATCH):
+        yield from batch.to_pylist()
+
+
+def recorded_events(
+    store: Store,
+    day: date,
+    *,
+    as_of: datetime,
+    start: datetime | None = None,
+    symbols: Sequence[str] | None = None,
+    include_snapshots: bool = False,
+    include_depth30: bool = True,
+    depth30_hold_s: float = 60.0,
+    window_s: float = 300.0,
+) -> Iterator[Quote | Depth]:
+    """Rebuild feed events from recorded rows, in the order they became known.
+
+    When ``include_depth30`` is True and ``depth30`` Parquet files exist for ``day``, 30-level
+    depth snapshots from ``depth30`` are merged in ``(recv_ns, seq)`` order and supersede the
+    5-level depth columns in ``quotes`` while the symbol is actively receiving ``depth30``
+    updates (within ``depth30_hold_s`` seconds). Outside those windows (before the symbol enters
+    the 30-level watchlist or after it rotates out), replay falls back to the 5-level ``quotes``
+    book so the contract never goes bookless.
+
+    The day is read ``window_s`` seconds of receive time at a time, so memory stays bounded by
+    one window and the first events arrive after one query. Ties at the same receive time keep
+    the quotes-before-depth30 order; the depth30 times used to suppress 5-level books are read
+    from ``depth30_hold_s`` before each window to 1 s after it, so the result is identical to
+    reading the whole day at once.
+    """
+    if window_s <= 0:
+        raise ValueError("window_s must be positive")
+    capture = None if include_snapshots else "tick"
+    syms = list(symbols) if symbols is not None else None
+    use_d30 = include_depth30 and store.has("depth30", day)
+    spans = [store.ts_span("quotes", day, as_of=as_of, start=start, symbols=syms, capture=capture)]
+    if use_d30:
+        spans.append(store.ts_span("depth30", day, as_of=as_of, start=start, symbols=syms))
+    los = [lo for lo, _ in spans if lo is not None]
+    his = [hi for _, hi in spans if hi is not None]
+    if not los:
+        return
+    hold_ns = int(depth30_hold_s * NS_PER_S)
+    width = timedelta(seconds=window_s)
+    # Wider than _in_d30_window looks (hold behind, 1 s ahead): extra times never change it.
+    behind = timedelta(seconds=depth30_hold_s + 1)
+    ahead = timedelta(seconds=2)
+    w0, last = min(los), max(his)
+    while w0 <= last:
+        w1 = w0 + width
+        q_table = store.quotes(day, as_of=as_of, start=w0, end=w1, symbols=syms, capture=capture)
+        d30_table = (
+            store.depth30(day, as_of=as_of, start=w0, end=w1, symbols=syms) if use_d30 else None
+        )
+        n_q = q_table.num_rows
+        n_d = d30_table.num_rows if d30_table is not None else 0
+        if n_q == 0 and n_d == 0:
+            # Skip silence (overnight, feed outages) in one step instead of window by window.
+            nxt = [
+                store.ts_span("quotes", day, as_of=as_of, start=w1, symbols=syms, capture=capture)[
+                    0
+                ]
+            ]
+            if use_d30:
+                nxt.append(store.ts_span("depth30", day, as_of=as_of, start=w1, symbols=syms)[0])
+            found = [t for t in nxt if t is not None]
+            if not found:
+                return
+            w0 = max(w1, min(found))
+            continue
+        d30_times_by_sym: dict[str, list[int]] = {}
+        if use_d30 and n_q:
+            lo_t = w0 - behind if start is None else max(start, w0 - behind)
+            times = store.depth30(
+                day, as_of=as_of, start=lo_t, end=w1 + ahead, symbols=syms, columns="symbol, ts"
+            )
+            for sym, ts in zip(
+                times.column("symbol").to_pylist(), times.column("ts").to_pylist(), strict=True
+            ):
+                t_ns = _ns(ts)
+                if t_ns is not None:
+                    d30_times_by_sym.setdefault(str(sym), []).append(t_ns)
+            for ts_list in d30_times_by_sym.values():
+                ts_list.sort()
+        # Both streams are already in (ts, seq) order; heapq.merge is stable, so at equal
+        # receive times quote-derived events come first, as when the whole day was sorted.
+        yield from heapq.merge(
+            _quote_row_events(_rows(q_table), d30_times_by_sym, hold_ns),
+            _depth30_row_events(_rows(d30_table)),
+            key=_recv_ns,
+        )
+        del q_table, d30_table
+        w0 = w1
+
+
+def _recv_ns(ev: Quote | Depth) -> int:
+    return ev.recv_ns
 
 
 @dataclass

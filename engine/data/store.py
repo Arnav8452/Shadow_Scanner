@@ -135,25 +135,26 @@ class Store:
     def query(self, sql: str, params: Sequence[Any] = ()) -> pa.Table:
         return self.con.sql(sql, params=list(params)).to_arrow_table()
 
-    def quotes(
-        self,
-        day: date,
-        *,
+    @staticmethod
+    def _filters(
         as_of: datetime,
+        *,
         start: datetime | None = None,
+        end: datetime | None = None,
         symbols: Iterable[str] | None = None,
         capture: str | None = None,
-        columns: str = "*",
-    ) -> pa.Table:
+    ) -> tuple[str, list[Any]]:
+        """WHERE clause for a point-in-time read: ``start <= ts < end`` and ``ts <= as_of``."""
         if as_of.tzinfo is None:
             raise ValueError("as_of must be timezone-aware")
-        if not self.has("quotes", day):
-            return pa.table({})
         where = ["ts <= ?"]
         params: list[Any] = [as_of]
         if start is not None:
             where.append("ts >= ?")
             params.append(start)
+        if end is not None:
+            where.append("ts < ?")
+            params.append(end)
         if capture is not None:
             where.append("capture = ?")
             params.append(capture)
@@ -161,11 +162,46 @@ class Store:
             syms = list(symbols)
             where.append(f"symbol IN ({', '.join('?' for _ in syms)})")
             params += syms
+        return " AND ".join(where), params
+
+    def quotes(
+        self,
+        day: date,
+        *,
+        as_of: datetime,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        symbols: Iterable[str] | None = None,
+        capture: str | None = None,
+        columns: str = "*",
+    ) -> pa.Table:
+        """Recorded quote rows with ``start <= ts < end`` known at ``as_of``, by (ts, seq)."""
+        where, params = self._filters(as_of, start=start, end=end, symbols=symbols, capture=capture)
+        if not self.has("quotes", day):
+            return pa.table({})
         sql = (
-            f"SELECT {columns} FROM {self.source_sql('quotes', day)} WHERE {' AND '.join(where)} "
-            "ORDER BY ts, seq"
+            f"SELECT {columns} FROM {self.source_sql('quotes', day)} WHERE {where} ORDER BY ts, seq"
         )
         return self.query(sql, params)
+
+    def ts_span(
+        self,
+        dataset: str,
+        day: date,
+        *,
+        as_of: datetime,
+        start: datetime | None = None,
+        symbols: Iterable[str] | None = None,
+        capture: str | None = None,
+    ) -> tuple[datetime | None, datetime | None]:
+        """(min ts, max ts) of the rows a filtered point-in-time read would return."""
+        where, params = self._filters(as_of, start=start, symbols=symbols, capture=capture)
+        if not self.has(dataset, day):
+            return None, None
+        (lo, hi), *_ = self.rows(
+            f"SELECT min(ts), max(ts) FROM {self.source_sql(dataset, day)} WHERE {where}", params
+        )
+        return lo, hi
 
     def latest(
         self,
@@ -206,26 +242,16 @@ class Store:
         *,
         as_of: datetime,
         start: datetime | None = None,
+        end: datetime | None = None,
         symbols: Iterable[str] | None = None,
         columns: str = "*",
     ) -> pa.Table:
         """30-level order-book snapshots recorded from Upstox ``full_d30``, ordered by (ts, seq)."""
-        if as_of.tzinfo is None:
-            raise ValueError("as_of must be timezone-aware")
+        where, params = self._filters(as_of, start=start, end=end, symbols=symbols)
         if not self.has("depth30", day):
             return pa.table({})
-        where = ["ts <= ?"]
-        params: list[Any] = [as_of]
-        if start is not None:
-            where.append("ts >= ?")
-            params.append(start)
-        if symbols is not None:
-            syms = list(symbols)
-            where.append(f"symbol IN ({', '.join('?' for _ in syms)})")
-            params += syms
         sql = (
-            f"SELECT {columns} FROM {self.source_sql('depth30', day)} WHERE {' AND '.join(where)} "
+            f"SELECT {columns} FROM {self.source_sql('depth30', day)} WHERE {where} "
             "ORDER BY ts, seq"
         )
         return self.query(sql, params)
-
