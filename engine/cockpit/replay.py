@@ -260,7 +260,9 @@ def run_replay_day(
     symbols = _replay_symbols(store, day)
 
     def events() -> Iterator[Quote | Depth]:
-        return recorded_events(store, day, as_of=as_of, symbols=symbols)
+        # The feed runs on its own thread: it gets its own DuckDB connection (one connection
+        # refuses concurrent calls, and the engine thread queries the store for OI walls).
+        return recorded_events(Store(data_dir), day, as_of=as_of, symbols=symbols)
 
     feed = ReplayFeed(events, clock, speed=speed, end_ns=to_ns(end))
     scanner = ShadowOrderBookScanner(
