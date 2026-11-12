@@ -379,7 +379,7 @@ class ShadowLiveRunner:
         self.watchdog_restarts = 0
         self._close_ns = to_ns(session.close_dt)
 
-    def pin(self, owner: str, symbols: list[str], *, limit: int = 8) -> list[str]:
+    def pin(self, owner: str, symbols: list[str], *, limit: int = 10) -> list[str]:
         """Keep ``symbols`` in the feed for ``owner`` (replaces that owner's earlier pins).
         Returns the symbols accepted (known to the master, within ``limit`` pins in total)."""
         others = {s for o, syms in self.pins.items() if o != owner for s in syms}

@@ -15,7 +15,7 @@ import statistics
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from engine.cockpit.analytics_live import LiveAnalytics
@@ -154,6 +154,11 @@ class CockpitCore:
         self._oi_first: dict[str, tuple[int, str]] = {}
         self._search_index: list[tuple[str, str, str, int]] | None = None
         self.user_pins: list[str] = []
+        self.score_acct: PaperAccount | None = None  # original A+ score bot (own account)
+        self.gamma_acct: PaperAccount | None = None  # SPEC 5.10
+        self.debit_acct: Any = None  # SpreadAccount for debit spreads
+        self.debit: Any = None  # DebitSpreadStrategy (made in attach)
+        self.gamma: Any = None  # GammaBreakoutStrategy (made in attach)
         self.feed_frozen = False  # no fresh quotes in market hours: entries and exits wait
         self.feed_age_s: float | None = None
 
@@ -189,12 +194,87 @@ class CockpitCore:
             )
             if self.spread.positions:  # held overnight: bring their legs back into the feed
                 self._pin("condor", self.condor.legs_in_use())
+        from engine.cockpit.strategies import DebitSpreadStrategy, GammaBreakoutStrategy
+
+        if self.debit_acct is not None:
+            self.debit = DebitSpreadStrategy(
+                cfg=self.cfg.debit,
+                account=self.debit_acct,
+                strikes_of=self._strike_grid,
+                option_symbol=self.option_symbol,
+                lot_size=lambda sym: self.master.get(sym).lot_size if sym in self.master else 1,
+                pin=lambda syms: self._pin("debit", syms),
+                context=lambda und: self.market_context(und, from_ns(runner.clock.now_ns())),
+            )
+        if self.gamma_acct is not None:
+            self.gamma = GammaBreakoutStrategy(
+                cfg=self.cfg.gamma,
+                account=self.gamma_acct,
+                expiry_today=self._expiry_today,
+                atm_option=lambda und, kind: self.atm_option(
+                    und, Kind.CALL if kind == "CE" else Kind.PUT
+                ),
+                chain_rows=lambda und: list(
+                    ((self.analytics.chain.get(und) or {}) if self.analytics else {}).get("rows")
+                    or []
+                ),
+                context=lambda und: self.market_context(und, from_ns(runner.clock.now_ns())),
+            )
         self.event("system", f"{self.source} engine started ({runner.adapter.name})")
 
     def _pin(self, owner: str, symbols: list[str]) -> list[str]:
         if self.runner is None or not hasattr(self.runner, "pin"):
             return []
         return list(self.runner.pin(owner, symbols))
+
+    def _strike_grid(self, und: str, kind: str) -> tuple[Any, list[float]] | None:
+        """Nearest expiry with options in the live feed, and all its listed strikes."""
+        assert self.runner is not None
+        want = Kind.CALL if kind == "CE" else Kind.PUT
+        exps: list[date] = sorted(
+            {
+                e
+                for s in self.runner.subscribed
+                if s in self.master
+                and self.master.get(s).underlying == und
+                and self.master.get(s).kind is want
+                and (e := self.master.get(s).expiry) is not None
+            }
+        )
+        if not exps:
+            return None
+        strikes = sorted(
+            float(o.strike)
+            for o in self.master.options(und, exps[0])
+            if o.kind is want and o.strike is not None
+        )
+        return (exps[0], strikes) if strikes else None
+
+    def _expiry_today(self, und: str, day: Any) -> bool:
+        assert self.runner is not None
+        return any(
+            self.master.get(s).expiry == day
+            for s in self.runner.subscribed
+            if s in self.master
+            and self.master.get(s).underlying == und
+            and self.master.get(s).kind.is_option
+        )
+
+    def _front_future(self, und: str) -> Any:
+        assert self.runner is not None
+        best = None
+        for s in self.runner.subscribed:
+            if s not in self.master:
+                continue
+            o = self.master.get(s)
+            if (
+                o.underlying == und
+                and o.kind is Kind.FUTURE
+                and o.expiry is not None
+                and (best is None or o.expiry < best[0])
+            ):
+                best = (o.expiry, s)
+        return self.runner.scanner.states.get(best[1]) if best else None
 
     def option_symbol(self, und: str, expiry: Any, strike: float, kind: str) -> str | None:
         want = Kind.CALL if kind == "CE" else Kind.PUT
@@ -302,6 +382,17 @@ class CockpitCore:
                 context=self.market_context(st.underlying, now),
             )
         self._directional_entry(st.id, st.best_score, st.underlying, st.bullish, vehicle, now)
+        if self.debit is not None and self.runner is not None:
+            text = self.debit.on_confirmed(
+                und=st.underlying,
+                bullish=st.bullish,
+                score=st.best_score,
+                ref=st.id,
+                spot=self.runner.spots().get(st.underlying, 0.0),
+                now=now,
+            )
+            if text:
+                self.event("debit", text, now)
 
     def signal_view(self, sig: ShadowSignal) -> tuple[str, bool, str | None] | None:
         """(underlying, bullish?, ATM long option expressing it) for a signal on any contract."""
@@ -402,9 +493,21 @@ class CockpitCore:
             spots = self.runner.spots()
             self._check_feed(now_ns, now)
             if not self.feed_frozen:
-                for acct in (self.bot, self.manual):
+                for acct in self.long_accounts():
                     for text in acct.check_exits(books, now):
                         self.event(acct.name, text, now)
+                if self.debit is not None:
+                    for text in self.debit.step(now, books):
+                        self.event("debit", text.replace("\n", " "), now)
+                if self.gamma is not None:
+                    for und, spot in spots.items():
+                        fut = self._front_future(und)
+                        self.gamma.on_tick(
+                            now, und, spot, fut.ltp if fut else 0.0, fut.cum_volume if fut else 0.0
+                        )
+                        text = self.gamma.check(now, und, books)
+                        if text:
+                            self.event("gamma", text, now)
                 if self.setups is not None:
                     for st in self.setups.update(now, spots):
                         self._on_setup_confirmed(st, now)
@@ -549,11 +652,18 @@ class CockpitCore:
         if cs.decision != before and (cs.plan is not None or "managing exits" not in cs.decision):
             self.event("condor", cs.decision, now)
 
+    def long_accounts(self) -> list[PaperAccount]:
+        return [a for a in (self.bot, self.manual, self.score_acct, self.gamma_acct) if a]
+
     def finish(self, now: datetime) -> None:
         books = self.books() if self.runner is not None else {}
-        for acct in (self.bot, self.manual):
+        for acct in self.long_accounts():
             for text in acct.flatten(books, now, "session end"):
                 self.event(acct.name, text, now)
+        if self.debit_acct is not None:  # debit spreads are intraday
+            for pos in list(self.debit_acct.positions):
+                _, text = self.debit_acct.close(pos, books, now, "session end")
+                self.event("debit", text, now)
         if self.runner is not None:
             self._follow_track_a(now)
             if self.study is not None:
@@ -588,13 +698,14 @@ class CockpitCore:
                 now,
             )
             vehicle = self._bot_links.pop(o.signal_id, None)
-            if vehicle and vehicle in self.bot.positions:
+            acct = self.score_acct or self.bot
+            if vehicle and vehicle in acct.positions:
                 book = self.books().get(vehicle)
                 if book is not None:
-                    _, text = self.bot.close(
+                    _, text = acct.close(
                         vehicle, book, now=now, reason=f"signal exit ({o.status.value})"
                     )
-                    self.event("bot", text, now)
+                    self.event(acct.name, text, now)
 
     def choose_vehicle(self, sig: ShadowSignal) -> str | None:
         """Long option the paper accounts may buy for a signal (V2: long options only).
@@ -635,7 +746,9 @@ class CockpitCore:
         if book is None:
             self.event("bot", f"no book for {self.label(vehicle)}", now)
             return
-        ok, text = self.bot.open_long_option(
+        acct = self.score_acct or self.bot
+        und = self.master.get(vehicle).underlying if vehicle in self.master else ""
+        ok, text = acct.open_long_option(
             vehicle,
             book,
             now=now,
@@ -643,10 +756,11 @@ class CockpitCore:
             stop_pct=self.cfg.bot.option_stop_pct,
             signal_id=sig.signal_id,
             reason=f"{sig.direction} {self.label(sig.symbol)} score {sig.confidence_score:.0f}",
+            context=self.market_context(und, now),
         )
         if ok:
             self._bot_links[sig.signal_id] = vehicle
-        self.event("bot", text.replace(vehicle, self.label(vehicle)), now)
+        self.event(acct.name, text.replace(vehicle, self.label(vehicle)), now)
 
     # ------------------------------------------------------------------ commands
 
@@ -678,7 +792,8 @@ class CockpitCore:
         assert self.runner is not None
         name = str(cmd.get("cmd", ""))
         books = self.books()
-        acct = self.bot if cmd.get("account") == "bot" else self.manual
+        named = {a.name: a for a in self.long_accounts()}
+        acct = named.get(str(cmd.get("account") or "manual"), self.manual)
         if self.feed_frozen and name in ("buy", "take_signal", "close", "flatten", "condor_close"):
             return False, "feed stale: orders wait until fresh quotes return"
         if name == "buy":
@@ -852,6 +967,54 @@ class CockpitCore:
             for _, sym, _, _ in hits[:limit]
         ]
 
+    def portfolio(self, snap: dict[str, Any]) -> list[dict[str, Any]]:
+        """One row per paper strategy for the overview: status, today's result, open risk."""
+        accts = snap.get("accounts", {})
+        cfg = self.cfg
+
+        def long_row(key: str, title: str, ref: str, enabled: bool, rules: str) -> dict[str, Any]:
+            a = accts.get(key) or {}
+            return {
+                "key": key, "title": title, "ref": ref, "enabled": enabled, "rules": rules,
+                "day_net": a.get("day_net"), "realized": a.get("realized_net"),
+                "open": len(a.get("positions", [])), "trades": a.get("trades_today", 0),
+                "wins": a.get("wins", 0), "losses": a.get("losses", 0),
+            }  # fmt: skip
+
+        d = cfg.directional
+        rows = [
+            long_row("bot", "Directional on confirmed setups", "5.2", d.enabled,
+                     f"naked ATM; stop −{d.stop_pct:g}%, target +{d.target_pct:g}%, trailing"),
+            long_row("score", "Score-follow (original A+ bot)", "test", cfg.bot.enabled,
+                     f"A+ signal (score ≥ {cfg.bot.min_score:g}) → ATM option; stop "
+                     f"−{cfg.bot.option_stop_pct:g}%; exits when the signal's episode closes"),
+            long_row("gamma", "Expiry-afternoon gamma breakout", "5.10", cfg.gamma.enabled,
+                     "expiry days 13:45–15:15 after a quiet morning"),
+            long_row("manual", "Manual", "—", True, "your own tickets"),
+        ]  # fmt: skip
+        for key, title, ref, enabled, block in (
+            ("condor", "Condor / credit spreads", "5.1", cfg.condor.enabled, snap.get("condor")),
+            ("debit", "Debit spreads on confirmed setups", "5.2 variant", cfg.debit.enabled,
+             snap.get("debit")),
+        ):  # fmt: skip
+            a = (block or {}).get("account") or {}
+            rows.append(
+                {
+                    "key": key,
+                    "title": title,
+                    "ref": ref,
+                    "enabled": enabled,
+                    "rules": (block or {}).get("decision", ""),
+                    "day_net": a.get("day_net"),
+                    "realized": a.get("realized_net"),
+                    "open": len(a.get("positions", [])),
+                    "trades": a.get("trades_today", 0),
+                    "wins": sum(1 for t in a.get("closed", []) if t.get("net", 0) > 0),
+                    "losses": sum(1 for t in a.get("closed", []) if t.get("net", 0) < 0),
+                }
+            )
+        return rows
+
     def _score_1m(self, sym: str, score: float | None, wall: float) -> float | None:
         """Average of the per-second scores over the last minute (what the page shows)."""
         h = self._score_hist.setdefault(sym, deque(maxlen=60))
@@ -991,6 +1154,11 @@ class CockpitCore:
             "accounts": {
                 "bot": self._with_greeks(self.bot.view(self.books(), now), now),
                 "manual": self._with_greeks(self.manual.view(self.books(), now), now),
+                **{
+                    a.name: self._with_greeks(a.view(self.books(), now), now)
+                    for a in (self.score_acct, self.gamma_acct)
+                    if a is not None
+                },
             },
             "events": list(self.events)[:80],
             "config": {
@@ -1013,6 +1181,14 @@ class CockpitCore:
                 "trend": self._trend(und, now),
             }
         snap["pins"] = {"page": list(self.user_pins), "max": self.cfg.user_pins_max}
+        if self.debit is not None:
+            snap["debit"] = {
+                **self.debit.view(),
+                "account": self.debit_acct.view(self.books(), now, None),
+            }
+        if self.gamma is not None:
+            snap["gamma"] = self.gamma.view()
+        snap["portfolio"] = self.portfolio(snap)
         if self.analytics is not None:
             snap["chains"] = self.analytics.chains_view()  # the gateway sends these on request
         d = cfg.directional

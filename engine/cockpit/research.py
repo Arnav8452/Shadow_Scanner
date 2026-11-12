@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 BANDS = ((75.0, 80.0, "75–80"), (80.0, 90.0, "80–90"), (90.0, 101.0, "90+"))
+ACCOUNTS = ("bot", "score", "debit", "gamma", "condor", "manual")
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9_\-]{1,60}\.md$")
 
 
@@ -225,7 +226,7 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
     context feature recorded at entry. Many cells are looked at: treat a gap as a lead to test,
     not an edge, until t ≈ 3 over 20–30 sessions."""
     trades: list[dict[str, Any]] = []
-    for name in ("bot", "manual", "condor"):
+    for name in ACCOUNTS:
         for r in _jsonl(journal_dir / f"paper_{name}.jsonl"):
             if r.get("type") != "close" or not isinstance(r.get("context"), dict):
                 continue
@@ -304,7 +305,7 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
 
 def paper_history(journal_dir: Path) -> dict[str, Any]:
     days: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
-    for name in ("bot", "manual", "condor"):
+    for name in ACCOUNTS:
         for r in _jsonl(journal_dir / f"paper_{name}.jsonl"):
             if r.get("type") != "close":
                 continue

@@ -138,6 +138,32 @@ def build_cockpit(
         log.info("paper condor: %d lines today, %d open", restored, len(spread.positions))
     core.spread = spread
     core.trading_calendar = calendar
+    # More strategies, each on its own paper account and journal (results never mix).
+    for name in ("score", "gamma"):
+        acct = PaperAccount(
+            name,
+            book=book,
+            limits=settings.risk,
+            broker_name=sc.cost_broker,
+            session_open=session.open_dt,
+            square_off_at=square_off,
+            lot_size_of=lot_size_of,
+            is_option=is_option,
+            journal=journal_dir / f"paper_{name}.jsonl",
+            entry_block=event_block,
+        )
+        acct.load_journal(day)
+        setattr(core, f"{name}_acct", acct)
+    debit = SpreadAccount(
+        "debit",
+        book=book,
+        limits=settings.risk,
+        broker_name=sc.cost_broker,
+        session_open=session.open_dt,
+        journal=journal_dir / "paper_debit.jsonl",
+    )
+    debit.load_journal(day)
+    core.debit_acct = debit
 
     core.study = SignalStudy(
         book=book,

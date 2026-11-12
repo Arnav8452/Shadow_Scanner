@@ -299,7 +299,7 @@ class SpreadAccount:
         est_credit = sum(books[s.symbol].bids[0][0] for s in shorts) - sum(
             books[w.symbol].asks[0][0] for w in wings
         )
-        max_loss = max(0.0, width_pts - est_credit) * qty
+        max_loss = worst_case(est_credit, width_pts) * qty
         ok, why = self.gate(max_loss, now)
         if not ok:
             return self._refuse(structure, now, why)
@@ -333,7 +333,7 @@ class SpreadAccount:
             qty=qty,
             credit_pts=round(credit, 2),
             width_pts=width_pts,
-            max_loss_inr=round(max(0.0, width_pts - credit) * qty, 2),
+            max_loss_inr=round(worst_case(credit, width_pts) * qty, 2),
             opened_at=now,
             spot0=spot,
             reason=reason,
@@ -342,9 +342,10 @@ class SpreadAccount:
         self.positions.append(pos)
         self.trades_today += 1
         self._write({"type": "open", "t": now.isoformat(), **_pos_json(pos)})
+        what = f"credit {credit:.2f}" if credit >= 0 else f"debit {-credit:.2f}"
         return True, (
-            f"opened {structure.replace('_', ' ').lower()} {_strikes(pos)}: credit "
-            f"{credit:.2f} pts (₹{credit * qty:,.0f}), worst case ₹{pos.max_loss_inr:,.0f}"
+            f"opened {structure.replace('_', ' ').lower()} {_strikes(pos)}: {what} pts "
+            f"(₹{abs(credit) * qty:,.0f}), worst case ₹{pos.max_loss_inr:,.0f}"
         )
 
     def _unwind(self, legs: Sequence[Leg], books: Mapping[str, Book], now: datetime) -> None:
@@ -535,7 +536,15 @@ def _part(lg: Leg, q: int, px: float, ch: float) -> Leg:
     return Leg(lg.symbol, lg.kind, lg.strike, lg.side, q, px, ch)
 
 
+def worst_case(credit: float, width: float) -> float:
+    """Per unit: a credit structure loses at most width − credit; a debit one (spread bought,
+    straddle) at most what was paid."""
+    return max(0.0, width - credit) if credit >= 0 else -credit
+
+
 def _strikes(p: SpreadPosition) -> str:
+    if p.structure not in ("IRON_CONDOR", "BULL_PUT", "BEAR_CALL"):
+        return " / ".join(f"{lg.side[0]} {lg.strike:g} {lg.kind}" for lg in p.legs)
     sp, sc = p.short_put, p.short_call
     wp = next((lg.strike for lg in p.legs if lg.side == "BUY" and lg.kind == "PE"), None)
     wc = next((lg.strike for lg in p.legs if lg.side == "BUY" and lg.kind == "CE"), None)

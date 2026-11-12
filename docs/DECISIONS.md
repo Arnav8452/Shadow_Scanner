@@ -4,6 +4,31 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## A portfolio of paper strategies (12 Nov 2026, evening)
+
+The owner asked for more option strategies the signals can drive, to be tested on paper and built into a portfolio for later bots. They also asked to bring back the score-driven paper trades.
+
+**Built:** each strategy has its own paper account and journal, one lot, defined risk, the approved risk gate, full costs and context at entry (`engine/cockpit/strategies.py`).
+- **Score-follow:** the original A+ bot is back (`cockpit.bot.enabled: true`) on its own `score` account, with its original rules: ATM option, 25% premium stop, exit when the signal's episode closes. It was switched off this morning under the owner's "no scalping" direction; it now runs as one strategy to measure, not the default.
+- **Debit spreads on confirmed setups** (`cockpit.debit`):
+  - The same confirmed setups that §5.2 buys naked become a bull call / bear put spread: buy ATM, sell 2 strikes out.
+  - Exits: target at 60% of the maximum value, stop at half the debit, square-off 15:20.
+  - One idea per index per day.
+  - This is an A/B test of naked vs spread on the same signal.
+- **§5.10 expiry-afternoon gamma breakout** (`cockpit.gamma`): the SPEC rules (compression, 5-minute close beyond the morning range and VWAP on 1.8× volume, OI at the breached ATM strike lower than at 13:30), with a 30% stop.
+  - Deviation from SPEC: one lot cannot be halved, so "book half at 1.8×" becomes "at +80% the stop moves to +40%".
+- **Spread account generalized:** `SpreadAccount` now handles debit structures (worst case = debit paid).
+- **Page:** a Strategies **Overview** tab (status, today's net, realized, trades, W/L, open positions per strategy), plus tabs for debit spreads, gamma and score-follow.
+
+**Recommended next (not built):**
+- event long straddles before RBI MPC or the Budget (overnight; needs IV vs realized event-move history);
+- calendar spreads (§5.4);
+- swing trades (§5.8, from the equity branch).
+
+Opening-range breakout (§5.3) holds trades for 1–3 minutes, close to the scalping the owner ruled out, so it is left as research only.
+
+---
+
 ## Option chain, F&O screener, context at entry, and outage handling (12 Nov 2026, afternoon)
 
 The owner compared the page with Sensibull's option chain and screener and asked for the data and analysis that give an edge. They want to see which signals and conditions contributed to a position, and to know what happens when Wi-Fi drops.

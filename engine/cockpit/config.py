@@ -10,6 +10,7 @@ from typing import Any
 
 from engine.cockpit.condor import CondorConfig
 from engine.cockpit.setups import SetupConfig
+from engine.cockpit.strategies import DebitConfig, GammaConfig
 from engine.core.config import Settings
 
 
@@ -50,6 +51,8 @@ class CockpitConfig:
     directional: DirectionalConfig = DirectionalConfig()
     setups: SetupConfig = SetupConfig()  # noqa: RUF009 (frozen, immutable default)
     condor: CondorConfig = CondorConfig()  # noqa: RUF009 (frozen, immutable default)
+    debit: DebitConfig = DebitConfig()  # noqa: RUF009 (frozen, immutable default)
+    gamma: GammaConfig = GammaConfig()  # noqa: RUF009 (frozen, immutable default)
     user_pins_max: int = 3
     # execution.disconnect_kill_after_s (APPROVED): no fresh quote for this long in market hours
     # freezes new paper entries and pauses exits (never flatten on stale prices).
@@ -123,6 +126,30 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
     )
     if not 0.05 <= condor.short_delta <= 0.40:
         raise ValueError("cockpit.condor.short_delta must be between 0.05 and 0.40")
+    d_raw: Any = raw.get("debit", {}) or {}
+    debit = DebitConfig(
+        enabled=bool(d_raw.get("enabled", True)),
+        underlyings=tuple(str(u) for u in d_raw.get("underlyings", ("NIFTY", "SENSEX"))),
+        min_score=float(d_raw.get("min_score", 80)),
+        first_entry=str(d_raw.get("first_entry", "09:30")),
+        last_entry=str(d_raw.get("last_entry", "14:00")),
+        width_steps=int(d_raw.get("width_steps", 2)),
+        target_pct_of_max=float(d_raw.get("target_pct_of_max", 60)),
+        stop_pct_of_debit=float(d_raw.get("stop_pct_of_debit", 50)),
+        square_off=str(d_raw.get("square_off", "15:20")),
+        max_entries_per_day=int(d_raw.get("max_entries_per_day", 2)),
+    )
+    g_raw: Any = raw.get("gamma", {}) or {}
+    gamma = GammaConfig(
+        enabled=bool(g_raw.get("enabled", True)),
+        underlyings=tuple(str(u) for u in g_raw.get("underlyings", ("NIFTY", "SENSEX"))),
+        morning_end=str(g_raw.get("morning_end", "13:30")),
+        first_entry=str(g_raw.get("first_entry", "13:45")),
+        last_entry=str(g_raw.get("last_entry", "15:15")),
+        compression_pct=float(g_raw.get("compression_pct", 0.45)),
+        vol_mult=float(g_raw.get("vol_mult", 1.8)),
+        stop_pct=float(g_raw.get("stop_pct", 30)),
+    )
     if condor.stop_mult <= 1.0:
         raise ValueError("cockpit.condor.stop_mult must be above 1 (x credit)")
     host = str(raw.get("host", "127.0.0.1"))
@@ -151,6 +178,8 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         directional=directional,
         setups=setups,
         condor=condor,
+        debit=debit,
+        gamma=gamma,
         user_pins_max=int(raw.get("user_pins_max", 3)),
         feed_stale_s=float(
             (settings.raw.get("execution") or {}).get("disconnect_kill_after_s", 10)

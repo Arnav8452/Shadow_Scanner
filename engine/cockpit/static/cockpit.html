@@ -319,7 +319,7 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
     </section>
     <div class="hsplit" id="split-scan" title="Drag to resize the scanner (double-click to reset)"></div>
     <section class="panel" id="right">
-      <div class="hd"><h2>Strategies (paper)</h2><div class="seg" id="rtabs"><button data-r="condor" class="on">Condor / spreads (5.1)</button><button data-r="bot">Directional (5.2)</button><button data-r="manual">Manual</button><button data-r="sig">Signal study</button><button data-r="events">Events</button></div></div>
+      <div class="hd"><h2>Strategies (paper)</h2><div class="seg" id="rtabs" style="flex-wrap:wrap"><button data-r="overview" class="on">Overview</button><button data-r="condor">Condor / spreads (5.1)</button><button data-r="bot">Directional (5.2)</button><button data-r="debit">Debit spreads</button><button data-r="gamma">Gamma 5.10</button><button data-r="score">Score-follow</button><button data-r="manual">Manual</button><button data-r="sig">Signal study</button><button data-r="events">Events</button></div></div>
       <div id="right-body"></div>
     </section>
     <div class="hsplit" id="split-paper" title="Drag to resize this panel (double-click to reset)"></div>
@@ -387,7 +387,7 @@ const sgn = (v, d = 2) => v == null ? "—" : (v > 0 ? "+" : "") + num(v, d);
 const big = (v) => v == null ? "—" : Math.abs(v) >= 1e7 ? num(v / 1e7, 2) + " cr" : Math.abs(v) >= 1e5 ? num(v / 1e5, 2) + " L" : Math.round(v).toLocaleString("en-IN");
 
 let ws = null, snap = null, status = {}, source = "live", selected = null, book = null;
-let filter = "all", rtab = "condor", tab = "desk", itab = "depth", pending = false, chainUnd = null;
+let filter = "all", rtab = "overview", tab = "desk", itab = "depth", pending = false, chainUnd = null;
 const hist = {}; const lastPush = {}; const prevLtp = {};
 const VIEW_KEY = "cockpit.view.v2";
 const view = (() => { try { return JSON.parse(localStorage.getItem(VIEW_KEY) || "{}"); } catch (e) { return {}; } })();
@@ -845,6 +845,8 @@ function condorView(c) {
 }
 $("right-body").addEventListener("pointerdown", (e) => {
   const b = e.target.closest("button[data-close]"); if (b) { e.preventDefault(); cmd({ cmd: "close", symbol: b.dataset.close, account: b.dataset.acct }); return; }
+  const g = e.target.closest("tr[data-goto]");
+  if (g) { rtab = g.dataset.goto; rightHtml = ""; for (const x of $("rtabs").children) x.classList.toggle("on", x.dataset.r === rtab); schedule(); return; }
   const c = e.target.closest("button[data-condor-close]"); if (c) { e.preventDefault(); if (confirm("Close the condor now (shorts bought back first)?")) cmd({ cmd: "condor_close" }); }
 });
 
@@ -895,9 +897,28 @@ function studyView(st) {
 }
 
 let rightHtml = "";
+function overviewView(rows) {
+  if (!rows.length) return `<div class="empty">No strategies.</div>`;
+  const tot = rows.reduce((t, r) => t + (r.day_net || 0), 0);
+  return `<div class="muted small" style="padding:4px 10px 0">Every strategy runs on its own paper account, one lot, defined risk, the same approved risk gate and full costs. Today net across all: <b class="${cls(tot)}">${inr(tot)}</b>. Click a row for its detail. Results need 20+ sessions before anything is concluded; the Research tab splits them by entry conditions.</div><div class="scroll"><table><thead><tr><th>Strategy</th><th>Ref</th><th>Status</th><th class="n">Today net</th><th class="n">Realized</th><th class="n">Trades</th><th class="n">W / L</th><th class="n">Open</th><th>Rules / now</th></tr></thead><tbody>${rows.map((r) => `<tr class="row" data-goto="${esc(r.key)}"><td><b>${esc(r.title)}</b></td><td class="muted">${esc(r.ref)}</td><td class="${r.enabled ? "up" : "muted"}">${r.enabled ? "on" : "off"}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n ${cls(r.realized)}">${r.realized == null ? "—" : inr(r.realized)}</td><td class="n">${r.trades}</td><td class="n">${r.wins} / ${r.losses}</td><td class="n">${r.open}</td><td class="small muted" style="white-space:normal">${esc(r.rules)}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function debitView(d) {
+  if (!d) return `<div class="empty">Debit-spread strategy not running.</div>`;
+  const a = d.account;
+  const pos = a.positions.map((p) => `<div class="spos"><div class="row1"><b>${esc(p.structure.replace(/_/g, " ").toLowerCase())}</b><span class="mono">${esc(p.strikes)}</span><span class="muted small">expiry ${esc(p.expiry)} · opened ${esc(p.opened)}</span><span style="margin-left:auto" class="mono ${cls(p.net)}">${p.net == null ? "—" : inr(p.net)} net</span></div>
+    <div class="kv4">${kvd("Debit paid", `${num(-p.credit)} pts · ${inr(-p.credit * p.qty)}`)}${kvd("Worth now", p.cost_to_close == null ? "—" : num(-p.cost_to_close) + " pts")}${kvd("Max value", `${num(p.width, 0)} pts`)}${kvd("Worst case", inr(p.max_loss), "down")}</div>
+    <table><thead><tr><th>Leg</th><th class="n">Entry</th><th class="n">Bid</th><th class="n">Ask</th></tr></thead><tbody>${p.legs.map((l) => `<tr><td class="${l.side === "SELL" ? "down" : "up"}">${esc(l.label)}</td><td class="n">${num(l.entry)}</td><td class="n">${num(l.bid)}</td><td class="n">${num(l.ask)}</td></tr>`).join("")}</tbody></table></div>`).join("");
+  const closed = a.closed.length ? `<h4>Closed</h4><table><thead><tr><th>Closed</th><th class="n">Paid</th><th class="n">Got</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${num(-x.credit)}</td><td class="n">${num(-x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
+  const ref = a.refusals.length ? `<h4>Refused</h4>${a.refusals.map((x) => `<div class="ev"><span class="t">${esc(x.time || "")}</span><span>${esc(x.why)}</span></div>`).join("")}` : "";
+  return `<div class="decision ${a.positions.length ? "hold" : "no"}"><b>Debit spreads</b> · ${esc(d.decision)}<div class="muted small">${esc(d.rules)}</div></div><div class="scroll">${pos || '<div class="empty">No open spread.</div>'}${closed}${ref}</div>`;
+}
 function renderRight() {
   let html;
-  if (rtab === "condor") html = condorView(snap.condor);
+  if (rtab === "overview") html = overviewView(snap.portfolio || []);
+  else if (rtab === "condor") html = condorView(snap.condor);
+  else if (rtab === "debit") html = debitView(snap.debit);
+  else if (rtab === "gamma") html = (snap.gamma ? `<div class="decision no"><b>Gamma breakout 5.10</b> · ${esc(snap.gamma.decision)}<div class="muted small">${esc(snap.gamma.rules)}</div></div>` : "") + acctView(snap.accounts.gamma, "gamma");
+  else if (rtab === "score") html = `<div class="muted small" style="padding:4px 10px 0">Score-follow: the original A+ bot, kept as one strategy to test. ${esc(((snap.portfolio || []).find((r) => r.key === "score") || {}).rules || "")}</div>` + acctView(snap.accounts.score, "score");
   else if (rtab === "sig") html = studyView(snap.study);
   else if (rtab === "events") html = `<div class="scroll evlist">${(snap.events || []).map((e) => `<div class="ev ${esc(e.kind)}"><span class="t">${esc(e.t)}</span><span class="muted">${esc(e.kind)}</span><span class="x">${esc(e.text)}</span></div>`).join("") || '<div class="empty">Nothing yet.</div>'}</div>`;
   else html = acctView(snap.accounts[rtab], rtab);

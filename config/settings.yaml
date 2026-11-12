@@ -64,8 +64,8 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   publish_interval_ms: 200        # snapshot push rate (5 a second); sooner after a fill
   analytics_interval_s: 1         # forward / ATM IV / IV percentile from in-memory books
   chain_interval_s: 60            # OI walls, PCR, GEX from the recorder's 1-minute snapshots
-  bot:                            # Track B paper account (Track A = every signal, unlimited)
-    enabled: false                # OFF (owner, 12 Nov): no scalping on raw order-flow signals
+  bot:                            # score-follow test: original A+ bot, on its own "score" account
+    enabled: true                 # owner, 12 Nov (evening): keep testing it as one strategy of many
     min_score: 80                 # takes A+ signals only
     option_stop_pct: 25           # HYPOTHESIS, paper only: stop on premium so the risk gate
                                   # can size the trade (a stop-less long option risks all premium)
@@ -105,6 +105,26 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     max_per_day: 1
     hold_block_categories: [RBI_MPC, UNION_BUDGET, ELECTION_EXIT_POLL]  # none before the exit
     hold_earnings_weight_pct: 10  # results of this much index weight before the exit blocks
+  debit:                          # debit spreads on confirmed setups (HYPOTHESIS; paper)
+    enabled: true
+    underlyings: [NIFTY, SENSEX]
+    min_score: 80
+    first_entry: "09:30"
+    last_entry: "14:00"
+    width_steps: 2                # short leg 2 strikes out (Nifty 100 pts, Sensex 200)
+    target_pct_of_max: 60         # exit when the spread is worth debit + 60% of the rest
+    stop_pct_of_debit: 50         # exit when it is worth half of what was paid
+    square_off: "15:20"
+    max_entries_per_day: 2
+  gamma:                          # SPEC 5.10 expiry-afternoon gamma breakout (HYPOTHESIS; paper)
+    enabled: true
+    underlyings: [NIFTY, SENSEX]
+    morning_end: "13:30"
+    first_entry: "13:45"
+    last_entry: "15:15"
+    compression_pct: 0.45
+    vol_mult: 1.8
+    stop_pct: 30
   user_pins_max: 3                # contracts the page may add to the 50-key live feed
   manual_default_stop_pct: 25     # Track C ticket default; editable on the page
   key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
