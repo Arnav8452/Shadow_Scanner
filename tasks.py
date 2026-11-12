@@ -4,7 +4,9 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | upstox-login | upstox-probe [D30=1] [SECONDS=n]
                       | record [SIM=1] [MINUTES=n] | qc [DATE=...] [SIM=1] [LAST=5]
                       | shadow-live [SIM=1] [MINUTES=n] [SEND=1]
+                      | cockpit [OPEN=0] | replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]
                       | eod [DATE=] | eod-backfill FROM= TO= | iv-history [FROM= TO=]
+                      | screener-history [DAYS=400]
                       | event-arb | shadow-scan [VERSION=v1_shadow|v2_bot]
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
@@ -12,9 +14,10 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -263,7 +266,8 @@ def _eod_common() -> tuple[Path, Any, Any]:
 
 def task_eod(params: dict[str, str]) -> int:
     """Download one day's NSE end-of-day files (default: today, after ~19:30 IST).
-    DATE=YYYY-MM-DD, DATASETS=fo,cm,delivery,participant_oi,indices (default all)."""
+    DATE=YYYY-MM-DD, DATASETS=fo,cm,delivery,participant_oi,participant_vol,indices (default
+    all). Without DATE it also saves the F&O ban list and bulk/block deals (current-only files)."""
     raw_dir, _, _ = _eod_common()
     from engine.data.eod.download import DATASETS, fetch_eod
 
@@ -274,7 +278,48 @@ def task_eod(params: dict[str, str]) -> int:
         res = fetch_eod(ds, day, raw_dir=raw_dir, now=datetime.now(IST))
         print(f"{day} {ds:<15} {res.status:<8} {res.detail}")
         bad += res.status == "error"
+    if not params.get("DATE"):
+        # NSE keeps only today's ban list and bulk/block deals: save them every evening.
+        from engine.data.eod.flows import CURRENT_EOD_URLS, fetch_current_eod
+
+        for ds in CURRENT_EOD_URLS:
+            res = fetch_current_eod(ds, raw_dir=raw_dir, now=datetime.now(IST))
+            print(f"{res.day} {ds:<15} {res.status:<8} {res.detail}")
+            bad += res.status == "error"
+        # Catch up: a night missed (no network, laptop asleep) is fetched on the next run.
+        # Files already on disk are skipped; holidays come back as "missing" (404).
+        from engine.data.eod.download import backfill
+
+        start = day - timedelta(days=int(params.get("CATCHUP_DAYS", "7")))
+        for res in backfill(sets, start, day - timedelta(days=1), raw_dir=raw_dir,
+                            now=lambda: datetime.now(IST)):  # fmt: skip
+            if res.status not in ("cached", "missing"):
+                print(f"{res.day} {res.dataset:<15} {res.status:<8} catch-up {res.detail}")
+                bad += res.status == "error"
+        try:  # the screener's per-session summary (cached; one parse per file)
+            from engine.cockpit.screener import ScreenerCache
+
+            _, book, cal = _eod_common()
+            sc = ScreenerCache(
+                raw_dir, ROOT / "data" / "state" / "screener", book=book, calendar=cal
+            )
+            sc.build(sc.available_days(day, back_days=10))
+        except Exception as exc:
+            print(f"screener summary skipped: {type(exc).__name__}: {exc}")
     return 1 if bad else 0
+
+
+def task_screener_history(params: dict[str, str]) -> int:
+    """Build the screener's per-session summaries (ATM IV, OI, volume per F&O underlying) for
+    every F&O bhavcopy on disk, DAYS= back (default 400). One-time ~10 min; cached after."""
+    raw_dir, book, cal = _eod_common()
+    from engine.cockpit.screener import ScreenerCache
+
+    cache = ScreenerCache(raw_dir, ROOT / "data" / "state" / "screener", book=book, calendar=cal)
+    days = cache.available_days(_today_ist(), back_days=int(params.get("DAYS", "400")))
+    done = cache.build(days, progress=lambda d: print(f"{d} summarised", flush=True))
+    print(f"screener history: {done} sessions cached")
+    return 0
 
 
 def task_eod_backfill(params: dict[str, str]) -> int:
@@ -622,7 +667,11 @@ def task_shadow_scan(params: dict[str, str]) -> int:
 
 
 def task_mine_log(params: dict[str, str]) -> int:
-    """Parse and validate a pdftotext Trade History layout file (FILE=path)."""
+    """Parse, reconcile and summarise a reference Trade History PDF (FILE=..., LABEL=log1).
+
+    Outputs go to data/private/mined/<LABEL>.* and are named by LABEL only: the PDF's file name
+    often contains the trader's name, so it is never printed or written anywhere.
+    """
     sys.path.insert(0, str(ROOT))
     from engine.trade_mining import (
         parse_pdftotext_report,
@@ -632,17 +681,60 @@ def task_mine_log(params: dict[str, str]) -> int:
 
     path_str = params.get("FILE")
     if not path_str:
-        print("Usage: tasks.py mine-log FILE=path/to/report.txt", file=sys.stderr)
+        print("Usage: tasks.py mine-log FILE=data/private/<report>.pdf LABEL=log1", file=sys.stderr)
         return 2
-    text = Path(path_str).read_text(encoding="utf-8")
-    parsed = parse_pdftotext_report(text)
-    val = validate_parsed_report(parsed)
-    prof = profile_mined_trader(parsed.rows)
+    path = Path(path_str)
+    if path.suffix.lower() != ".pdf":
+        parsed = parse_pdftotext_report(path.read_text(encoding="utf-8"))
+        val = validate_parsed_report(parsed)
+        prof = profile_mined_trader(parsed.rows)
+        print(
+            f"parsed {val.total_rows} trades, valid={val.valid_rows}, "
+            f"passed={val.passed}, style={prof.inferred_style}"
+        )
+        return 0 if val.passed else 1
+
+    import csv
+    import dataclasses
+
+    from engine.trade_mining.diagnostics import diagnostics_markdown
+    from engine.trade_mining.pdf_report import parse_trade_history_pdf
+
+    label = params.get("LABEL", "log")
+    if not re.fullmatch(r"[A-Za-z0-9_\-]{1,40}", label):
+        print("LABEL must be letters, digits, _ or - (no names)", file=sys.stderr)
+        return 2
+    res = parse_trade_history_pdf(path)
+    rep = res.report
+    val = validate_parsed_report(rep)
+    prof = profile_mined_trader(rep.rows)
+    out_dir = ROOT / "data" / "private" / "mined"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with (out_dir / f"{label}_fills.csv").open("w", newline="", encoding="utf-8") as fh:
+        fields = [f.name for f in dataclasses.fields(rep.rows[0])] if rep.rows else []
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        for r in rep.rows:
+            w.writerow(dataclasses.asdict(r))
+    md = diagnostics_markdown(rep.rows, label=label, stated_daily_nets=rep.stated_daily_nets)
+    (out_dir / f"{label}.md").write_text(md, encoding="utf-8")
+    passed = val.passed and not res.issues and bool(rep.rows)
     print(
-        f"parsed {val.total_rows} trades, valid={val.valid_rows}, "
-        f"passed={val.passed}, style={prof.inferred_style}"
+        f"{label}: {len(rep.rows)} fills on {len({r.trade_date for r in rep.rows})} days, "
+        f"net ₹{sum(r.net_pnl_inr for r in rep.rows):,.2f}; "
+        f"row errors {len(val.row_mismatches)}, day errors {len(val.daily_net_mismatches)}, "
+        f"parse issues {len(res.issues)} -> {'RECONCILED' if passed else 'NOT RECONCILED'}; "
+        f"style {prof.inferred_style}"
     )
-    return 0 if val.passed else 1
+    for issue in res.issues[:10]:
+        print(f"  issue p{issue.page + 1} {issue.trade_date}: {issue.message}")
+    for m in val.daily_net_mismatches[:10]:
+        print(
+            f"  day {m.trade_date}: summed ₹{m.summed_net_inr:,.2f} "
+            f"vs stated ₹{m.stated_net_inr:,.2f}"
+        )
+    print(f"report: data/private/mined/{label}.md (private, gitignored)")
+    return 0 if passed else 1
 
 
 def task_self_review(params: dict[str, str]) -> int:
@@ -802,6 +894,68 @@ def task_backtest(params: dict[str, str]) -> int:
 def task_report(params: dict[str, str]) -> int:
     """Generate Shadow Scanner dashboard report."""
     return task_shadow_scan(params)
+
+
+def task_cockpit(params: dict[str, str]) -> int:
+    """Local cockpit page (P3) at http://127.0.0.1:8765: live scanner, order books, paper
+    accounts, replays and research. Runs alongside `record` and `shadow-live`; stopping it never
+    affects them. OPEN=0 skips opening the browser."""
+    sys.path.insert(0, str(ROOT))
+    from engine.cockpit.config import load_cockpit_config
+    from engine.cockpit.gateway import run_gateway
+    from engine.core.config import load_settings
+    from engine.core.logging_setup import setup_logging
+
+    settings = load_settings()
+    setup_logging(settings.logging_config)
+    ccfg = load_cockpit_config(settings, ROOT)
+    run_gateway(
+        ccfg,
+        ROOT,
+        ledger_file=settings.shadow_scanner.ledger_file,
+        open_browser=params.get("OPEN", "1") != "0",
+    )
+    return 0
+
+
+def task_replay(params: dict[str, str]) -> int:
+    """Replay a recorded day through the engine (P4), normally started from the cockpit page.
+    DATE=YYYY-MM-DD, SPEED=0 (max)|1|2|5|10|20|50, SIM=1 for the synthetic recordings.
+    Writes only under data/replay/; never touches live journals or recordings."""
+    sys.path.insert(0, str(ROOT))
+    import signal
+    import threading
+    from datetime import date as _date
+
+    from engine.cockpit.config import load_cockpit_config
+    from engine.cockpit.replay import run_replay_day
+    from engine.core.config import load_settings
+    from engine.core.logging_setup import setup_logging
+
+    if not params.get("DATE"):
+        print("Usage: tasks.py replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]", file=sys.stderr)
+        return 2
+    settings = load_settings()
+    setup_logging(settings.logging_config)
+    ccfg = load_cockpit_config(settings, ROOT)
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    try:
+        res = run_replay_day(
+            settings,
+            ROOT,
+            day=_date.fromisoformat(params["DATE"]),
+            speed=float(params.get("SPEED", "5")),
+            sim=params.get("SIM") == "1",
+            port=ccfg.replay_port,
+            stop=stop,
+            hold_after_s=float(params.get("HOLD_S", 6 * 3600)),
+        )
+    except FileNotFoundError as exc:
+        print(f"replay: {exc}", file=sys.stderr)
+        return 1
+    print("replay: " + ", ".join(f"{k}={v}" for k, v in res.items()))
+    return 0
 
 
 def main(argv: list[str]) -> int:

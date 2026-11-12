@@ -168,8 +168,16 @@ def render_shadow_dashboard_html(
       <div class="value">{_esc(summary["win_rate_pct"])}%</div>
     </div>
     <div class="card">
-      <div class="label">Net Ledger P&amp;L (after STT)</div>
+      <div class="label">Net Ledger P&amp;L (all charges, {_esc(summary["cost_broker"])})</div>
       <div class="value">₹{_esc(summary["net_pnl_inr"])}</div>
+    </div>
+    <div class="card">
+      <div class="label">Net at 2&times; slippage</div>
+      <div class="value">₹{_esc(summary["net_pnl_2x_slippage_inr"])}</div>
+    </div>
+    <div class="card">
+      <div class="label">Scored, not paper-traded</div>
+      <div class="value">{_esc(sum(summary["not_paper_traded"].values()))}</div>
     </div>
     <div class="card">
       <div class="label">Quarter-Kelly Risk Cap</div>

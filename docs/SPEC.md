@@ -162,7 +162,7 @@ Every query takes an `as_of` timestamp and returns only data known then (partici
 ## 4. Analytics
 
 - **Synthetic forward**: `F = K + e^(rT) × (C_mid − P_mid)`; take the median over 3–5 strikes nearest ATM.
-- **IV**: Black-76 on mids with F, solved with a bracketed root-finder (`scipy.optimize.brentq`, not Newton, which fails when vega → 0 on far-OTM strikes); return NaN with a reason when price is outside no-arbitrage bounds; `r` from a T-bill/MIBOR series; `T` in trading minutes to expiry (15:30), with a variance-time clock (weights for trading minutes vs overnight vs weekends/holidays).
+- **IV**: Black-76 on mids with F, solved with a bracketed root-finder (`scipy.optimize.brentq`, not Newton, which fails when vega → 0 on far-OTM strikes); return NaN with a reason when price is outside no-arbitrage bounds; `r` from a T-bill/MIBOR series; `T` in trading minutes to expiry close (15:30 before 3 Aug 2026, 15:40 from 3 Aug 2026 per `NSE/FAOP/74467` in `config/rules/market_sessions.csv`), with a variance-time clock (weights for trading minutes vs overnight vs weekends/holidays).
 - **Surface**: cubic spline in log-moneyness `k = ln(K/F)` per expiry (v1); SVI with no-arbitrage checks (v2).
 - **Greeks**: full set in §4.1 (first-order in v1; vanna/charm and higher orders in v2).
 - **Realized vol**: close-to-close, Parkinson, Garman-Klass, Yang-Zhang.
@@ -377,7 +377,7 @@ Purpose: learn strategies from other traders' logs, and review **my own** tradin
 - **My own journal**: every manual and bot trade from L8 (paper and live), plus broker contract notes/tradebooks.
 
 ### 9.2 Parser (proven on three reports; port into `parse_report.py`)
-- Extract with `pdftotext -layout`; replace form-feeds `\f` with newlines (page breaks).
+- Extract **word positions** with `pdfplumber` (`engine/trade_mining/pdf_report.py`, `uv sync --extra mining`). Columns sit at fixed x; a trade is the block between its entry and exit time cells, and a table can continue onto the next page without a repeated header. *(Changed 11 Nov 2026: `pdftotext -layout` misplaces cells, and the xpdf build drops the ₹ sign. The text parser remains for `.txt` input.)*
 - Day header: `YYYY-MM-DD  True Equity: ₹X  Daily Net: ₹Y` — may contain `₹Y ₹Z (Legal)` (take first = net; second = after a daily profit cap) or multi-account `ACC: ₹a | ACC: ₹b` (sum).
 - Two row layouts: (a) account, instrument, side, qty, margin%, entry, exit, ₹gross, -₹charges, ₹net on one line; (b) account on the time line, instrument line without account, prices + amounts on the next line. Times: entry time line above, exit time line below.
 - Gross = first ₹ on the amount line; net = last ₹; charges = gross − net. Also parse the MFE/MAE columns (seed parser skips them).

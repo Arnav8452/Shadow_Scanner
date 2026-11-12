@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -52,7 +53,13 @@ def test_shadow_scanner_100pt_scoring_ledger_and_v1_v2_dispatch(
     settings_v1 = load_settings(root=repo_root, version="v1_shadow", environ={})
     settings_v2 = load_settings(root=repo_root, version="v2_bot", environ={})
 
-    scanner = ShadowOrderBookScanner(settings_v1.shadow_scanner, capital_inr=200_000.0)
+    # Standard Upstox rows go back to 2024; the Plus rows start on their verification date.
+    # signal_confirm_s=0: this scenario activates a signal from a single book update.
+    scanner = ShadowOrderBookScanner(
+        replace(settings_v1.shadow_scanner, signal_confirm_s=0.0),
+        capital_inr=200_000.0,
+        cost_broker="upstox",
+    )
     st = InstrumentMicrostructureState(
         symbol="NSE:NIFTY50-FUT",
         tick_size=0.05,

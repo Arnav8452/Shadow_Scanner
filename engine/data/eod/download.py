@@ -33,6 +33,7 @@ NSE_EOD_URLS: dict[str, str] = {
     "cm": "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip",
     "delivery": "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_{dmy}.csv",
     "participant_oi": "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{dmy}.csv",
+    "participant_vol": "https://nsearchives.nseindia.com/content/nsccl/fao_participant_vol_{dmy}.csv",
     "indices": "https://nsearchives.nseindia.com/content/indices/ind_close_all_{dmy}.csv",
 }
 # A text marker each genuine file contains (NSE sometimes answers with an HTML error page).
@@ -41,6 +42,7 @@ _MARKERS: dict[str, bytes] = {
     "cm": b"TckrSymb",
     "delivery": b"DELIV_PER",
     "participant_oi": b"Client Type",
+    "participant_vol": b"Client Type",
     "indices": b"Index Name",
 }
 DATASETS = tuple(NSE_EOD_URLS)

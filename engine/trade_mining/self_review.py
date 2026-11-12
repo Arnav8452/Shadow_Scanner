@@ -9,7 +9,7 @@ Quantifies:
 4. **Time-of-Day Expectancy Buckets**: Morning Open (09:15–09:30), Morning Trend (09:30–11:00),
    Midday Chop (11:00–13:30), Afternoon (13:30–15:00), and Closing CAS Window (15:00–15:40).
 5. **Slippage Stress Test (+1, +2, +4 Ticks)**: Recomputes total net P&L assuming 1, 2, or 4 extra
-   ticks of adverse fill slippage per round-trip.
+   ticks of adverse slippage on each side (entry and exit) of every trade.
 """
 
 from __future__ import annotations
@@ -147,12 +147,12 @@ def analyze_trade_journal(
         "HIGH_ACTIVITY_DAYS": round(sum(daily_nets[d] for d in high_days) / len(high_days), 2),
     }
 
-    # 4. Slippage sensitivity (+1, +2, +4 ticks per trade)
+    # 4. Slippage sensitivity: +1, +2, +4 ticks on each side (SPEC §9.4), i.e. two fills a trade
     total_qty = sum(r.qty for r in ordered)
     slippage_stress = {
-        "+1_tick": round(net - 1.0 * tick_size * total_qty, 2),
-        "+2_ticks": round(net - 2.0 * tick_size * total_qty, 2),
-        "+4_ticks": round(net - 4.0 * tick_size * total_qty, 2),
+        "+1_tick": round(net - 2 * 1.0 * tick_size * total_qty, 2),
+        "+2_ticks": round(net - 2 * 2.0 * tick_size * total_qty, 2),
+        "+4_ticks": round(net - 2 * 4.0 * tick_size * total_qty, 2),
     }
 
     return SelfReviewSummary(

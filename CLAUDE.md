@@ -23,7 +23,7 @@ Success is honest measurement, not a pretty equity curve. Never claim a strategy
 ## Data and research rules
 - Point-in-time always: every query takes `as_of`; never use data that was not known then (EOD participant OI is next-day data; index membership and weights as of date; earnings dates as announced).
 - No survivorship: use historical index constituents with change dates.
-- Compute IV yourself: Black-76 on mid prices with the synthetic forward `F = K + e^(rT)(C_mid − P_mid)` (median of 3–5 near-ATM strikes), trading-minute time to 15:30 expiry, `r` from a T-bill/MIBOR series. Do not trust broker/NSE IV fields.
+- Compute IV yourself: Black-76 on mid prices with the synthetic forward `F = K + e^(rT)(C_mid − P_mid)` (median of 3–5 near-ATM strikes), trading-minute time to session close (15:30 before 3 Aug 2026, 15:40 from 3 Aug 2026 per `NSE/FAOP/74467` in `config/rules/market_sessions.csv`), `r` from a T-bill/MIBOR series. Do not trust broker/NSE IV fields.
 - Backtest fills at bid/ask from recorded depth, never at LTP. Include full costs and margin. Rerun at 2× slippage.
 - Count every variant you test; report deflated Sharpe; treat new signals as unproven unless t ≈ 3; assume live ≈ half of backtest.
 - Data-quality checks (stale, crossed, zero bid, missing strikes, gaps, clock skew) run on every recording; flags travel with the data.

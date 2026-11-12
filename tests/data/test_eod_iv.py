@@ -83,9 +83,14 @@ def test_expiry_clock_uses_sessions_and_holidays(book: RuleBook) -> None:
         datetime(2026, 7, 28, 9, 15, tzinfo=IST), date(2026, 7, 28), book=book, calendar=cal
     )
     assert old.trading_minutes == 375 and old.expiry_close.time() == time(15, 30)
+    # 2025 is covered (5 Nov 2025 is Guru Nanak Jayanti holiday, so 3 Nov close -> 6 Nov close = 2 sessions x 375 min)
+    c25 = expiry_clock(
+        datetime(2025, 11, 3, 15, 30, tzinfo=IST), date(2025, 11, 6), book=book, calendar=cal
+    )
+    assert c25.trading_minutes == 2 * 375 and not c25.approx
     # a year with no holiday list falls back to weekdays and says so
     assert expiry_clock(
-        datetime(2025, 11, 3, 15, 30, tzinfo=IST), date(2025, 11, 4), book=book, calendar=cal
+        datetime(2024, 11, 4, 15, 30, tzinfo=IST), date(2024, 11, 5), book=book, calendar=cal
     ).approx
 
 

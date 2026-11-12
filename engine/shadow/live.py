@@ -23,7 +23,8 @@ import logging
 import os
 import queue
 import threading
-from collections.abc import Callable, Mapping
+from collections import deque
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -80,6 +81,9 @@ class ShadowLiveConfig:
     dashboard_interval_s: int = 60
     oi_wall_refresh_s: int = 60
     flush_interval_s: float = 30.0
+    # No feed message for this long in market hours -> restart the socket (the adapter's own
+    # ping catches most drops; this catches a silent, half-open connection).
+    watchdog_silence_s: float = 60.0
     opening_range_min: int = 15
     alert_grades: tuple[str, ...] = ("A_PLUS",)
     max_alerts_per_day: int = 10
@@ -109,6 +113,7 @@ def load_shadow_live_config(settings: Settings) -> ShadowLiveConfig:
         dashboard_interval_s=int(raw.get("dashboard_interval_s", 60)),
         oi_wall_refresh_s=int(raw.get("oi_wall_refresh_s", 60)),
         flush_interval_s=float(raw.get("flush_interval_s", 30)),
+        watchdog_silence_s=float(raw.get("watchdog_silence_s", 60)),
         opening_range_min=int(raw.get("opening_range_min", 15)),
         alert_grades=tuple(str(g) for g in raw.get("alert_grades", ["A_PLUS"])),
         max_alerts_per_day=int(raw.get("max_alerts_per_day", 10)),
@@ -183,6 +188,89 @@ def previous_day_levels(store: Store, prev_day: date) -> dict[str, tuple[float, 
     return out
 
 
+# NSE index names in ind_close_all for the index underlyings the scanner watches.
+_EOD_INDEX_NAMES = {
+    "NIFTY": "nifty 50",
+    "BANKNIFTY": "nifty bank",
+    "FINNIFTY": "nifty financial services",
+    "MIDCPNIFTY": "nifty midcap select",
+    "NIFTYNXT50": "nifty next 50",
+}
+
+
+def eod_previous_day_levels(
+    raw_dir: Path,
+    prev_day: date,
+    instruments: Iterable[Instrument],
+    *,
+    now: datetime | None = None,
+    fetcher: Callable[[str], bytes] | None = None,
+) -> dict[str, tuple[float, float, float]]:
+    """``symbol -> (high, low, close)`` for ``prev_day`` from NSE's end-of-day files.
+
+    Covers NSE index spots, India VIX, and NSE futures and options (matched on underlying,
+    expiry, strike and type). BSE contracts (Sensex) are not in these files. Files are known
+    from 19:30 IST on ``prev_day``, so they are point-in-time safe for the next session. With
+    ``now`` given, a missing file is downloaded first (not before 19:30 of ``prev_day``).
+    """
+    from engine.core.net import http_get_bytes
+    from engine.data.eod.bhavcopy import parse_fno_bhavcopy_csv
+    from engine.data.eod.download import eod_path, fetch_eod, read_eod_text
+
+    if now is not None and now >= datetime.combine(prev_day, time(19, 30), IST):
+        for ds in ("fo", "indices"):
+            res = fetch_eod(
+                ds, prev_day, raw_dir=raw_dir, now=now, fetcher=fetcher or http_get_bytes
+            )
+            if res.status not in ("ok", "cached"):
+                log.warning("EOD %s for %s: %s %s", ds, prev_day, res.status, res.detail)
+
+    index_levels: dict[str, tuple[float, float, float]] = {}
+    idx_path = eod_path(raw_dir, "indices", prev_day)
+    if idx_path.exists():
+        for line in read_eod_text(idx_path).splitlines()[1:]:
+            cells = [c.strip() for c in line.split(",")]
+            if len(cells) < 6:
+                continue
+            try:
+                hi, lo, close = float(cells[3]), float(cells[4]), float(cells[5])
+            except ValueError:
+                continue
+            if hi > 0 and lo > 0:
+                index_levels[cells[0].lower()] = (hi, lo, close)
+
+    contract_levels: dict[tuple[str, date, float, str], tuple[float, float, float]] = {}
+    fo_path = eod_path(raw_dir, "fo", prev_day)
+    if fo_path.exists():
+        for row in parse_fno_bhavcopy_csv(read_eod_text(fo_path)):
+            if row.trade_date != prev_day or row.high <= 0 or row.low <= 0:
+                continue  # untraded contracts carry zero high/low
+            kind = row.option_type if row.option_type in ("CE", "PE") else "FUT"
+            strike = round(row.strike, 2) if kind != "FUT" else 0.0
+            contract_levels[(row.symbol, row.expiry, strike, kind)] = (
+                row.high,
+                row.low,
+                row.close,
+            )
+
+    out: dict[str, tuple[float, float, float]] = {}
+    for ins in instruments:
+        if ins.exchange != "NSE":
+            continue
+        if ins.kind is Kind.INDEX:
+            name = (
+                "india vix" if "VIX" in ins.symbol.upper() else _EOD_INDEX_NAMES.get(ins.underlying)
+            )
+            if name and name in index_levels:
+                out[ins.symbol] = index_levels[name]
+        elif ins.kind in (Kind.FUTURE, Kind.CALL, Kind.PUT) and ins.expiry is not None:
+            strike = round(ins.strike or 0.0, 2) if ins.kind.is_option else 0.0
+            key = (ins.underlying, ins.expiry, strike, str(ins.kind.value))
+            if key in contract_levels:
+                out[ins.symbol] = contract_levels[key]
+    return out
+
+
 def oi_walls(
     store: Store, day: date, *, underlying: str, expiry: date, now: datetime, lookback_s: int = 180
 ) -> tuple[float, float] | None:
@@ -240,6 +328,8 @@ class ShadowLiveRunner:
         feed_label: str,
         prev_levels: Mapping[str, tuple[float, float, float]] | None = None,
         alert: Callable[[str], None] | None = None,
+        cockpit: Any | None = None,
+        record_depth: bool = True,
     ) -> None:
         self.cfg = cfg
         self.rs = rs
@@ -255,6 +345,13 @@ class ShadowLiveRunner:
         self.feed_label = feed_label
         self.prev_levels = dict(prev_levels or {})
         self.alert = alert
+        # Cockpit hook (engine/cockpit/core.py); every call is guarded, see _cockpit().
+        self.cockpit = cockpit
+        self.cockpit_errors = 0
+        self.record_depth = record_depth  # False in replay: never re-record recorded data
+        self.last_eval: dict[str, ShadowSignal] = {}
+        self.lag_ms: deque[float] = deque(maxlen=500)
+        self.last_feed_status = ""
         self.queue: queue.Queue[FeedEvent] = queue.Queue(maxsize=200_000)
         self.subscribed: list[str] = []
         self.stats = ShadowLiveStats()
@@ -266,12 +363,37 @@ class ShadowLiveRunner:
         self.or_hi: dict[str, float] = {}
         self.or_lo: dict[str, float] = {}
         self.or_frozen = False
+        # Paper trades still open at this time are closed at the book (config).
+        self.square_off_ns = to_ns(session.at(scanner.config.paper_square_off_at))
+        self.squared_off = False
         now = clock.now_ns()
         self._next_recenter = 0
         self._next_dashboard = now + cfg.dashboard_interval_s * NS_PER_S
         self._next_oi = now
         self._next_flush = now + int(cfg.flush_interval_s * NS_PER_S)
         self.spot_symbol = {u.name: u.spot_symbol for u in rs.universe.underlyings}
+        # Contracts added on demand (owner -> symbols): the page's "open any instrument" and a
+        # strategy's legs. They displace the farthest auto-selected options, never the cap.
+        self.pins: dict[str, list[str]] = {}
+        self.last_event_ns = now  # last feed message of any kind (for the watchdog)
+        self.watchdog_restarts = 0
+        self._close_ns = to_ns(session.close_dt)
+
+    def pin(self, owner: str, symbols: list[str], *, limit: int = 8) -> list[str]:
+        """Keep ``symbols`` in the feed for ``owner`` (replaces that owner's earlier pins).
+        Returns the symbols accepted (known to the master, within ``limit`` pins in total)."""
+        others = {s for o, syms in self.pins.items() if o != owner for s in syms}
+        room = max(0, limit - len(others))
+        ok = [s for s in dict.fromkeys(symbols) if s in self.master][:room]
+        if ok:
+            self.pins[owner] = ok
+        else:
+            self.pins.pop(owner, None)
+        self.recenter(self.clock.now_ns(), f"pin {owner}")
+        return ok
+
+    def pinned(self) -> list[str]:
+        return list(dict.fromkeys(s for syms in self.pins.values() for s in syms))
 
     # ------------------------------------------------------------------ events
 
@@ -281,7 +403,18 @@ class ShadowLiveRunner:
         except queue.Full:  # the recorder is the system of record; count, don't hide
             self.stats.dropped_events += 1
 
+    def _cockpit(self, fn: Callable[..., Any], *args: Any) -> None:
+        """Run a cockpit hook; its failures are logged and counted, never raised."""
+        try:
+            fn(*args)
+        except Exception:
+            self.cockpit_errors += 1
+            if self.cockpit_errors <= 5 or self.cockpit_errors % 1000 == 0:
+                log.exception("cockpit hook failed (%d so far)", self.cockpit_errors)
+
     def start(self) -> None:
+        if self.cockpit is not None:
+            self._cockpit(self.cockpit.attach, self)
         self.adapter.start(self._enqueue)
         self.recenter(self.clock.now_ns(), "start")
 
@@ -302,12 +435,17 @@ class ShadowLiveRunner:
             pdh=hi,
             pdl=lo,
             prev_close=close,
+            is_option=ins.kind.is_option,
         )
 
     def recenter(self, now_ns: int, reason: str) -> None:
         want = select_watchlist(
             self.master, self.cfg, self.rs, now=from_ns(now_ns), spots=self.spots()
         )
+        pinned = self.pinned()
+        if pinned:
+            auto = [s for s in want if s not in pinned]
+            want = list(dict.fromkeys(auto[: max(0, self.cfg.max_symbols - len(pinned))] + pinned))
         gone = [s for s in self.subscribed if s not in want]
         new = [s for s in want if s not in self.subscribed]
         if gone:
@@ -332,8 +470,11 @@ class ShadowLiveRunner:
         self._next_recenter = now_ns + self.cfg.recenter_interval_s * NS_PER_S
 
     def on_event(self, ev: FeedEvent) -> None:
+        if not isinstance(ev, FeedStatus):
+            self.last_event_ns = self.clock.now_ns()
         if isinstance(ev, FeedStatus):
             key = ev.kind.value
+            self.last_feed_status = key
             self.stats.feed_events[key] = self.stats.feed_events.get(key, 0) + 1
             if ev.kind in (StatusKind.AUTH_FAILED, StatusKind.LIMIT, StatusKind.ERROR):
                 log.warning("shadow feed %s: %s", key, ev.detail)
@@ -346,9 +487,13 @@ class ShadowLiveRunner:
                 self.or_lo[ev.symbol] = min(self.or_lo.get(ev.symbol, ev.ltp), ev.ltp)
             return
         self.stats.depths += 1
-        self._record_depth(ev)
+        if ev.exch_ts:
+            self.lag_ms.append(ev.recv_ns / 1e6 - ev.exch_ts * 1000.0)
+        if self.record_depth:
+            self._record_depth(ev)
         sig = self.scanner.on_depth(ev, now=from_ns(ev.recv_ns))
         if sig is not None:
+            self.last_eval[ev.symbol] = sig
             self._on_signal(sig)
 
     def _record_depth(self, d: Depth) -> None:
@@ -378,7 +523,7 @@ class ShadowLiveRunner:
         A signal *episode* is (symbol, direction, setup) at a tradeable grade; it is counted and
         alerted once, and continues while it keeps reappearing within the cool-down."""
         self.stats.evaluations += 1
-        if sig.grade.value not in ("A_PLUS", "ACTIONABLE"):
+        if sig.grade.value not in ("A_PLUS", "ACTIONABLE") or not getattr(sig, "confirmed", True):
             return
         key = (sig.symbol, sig.direction, sig.wave.value)
         now_ns = to_ns(sig.created_at)
@@ -387,6 +532,8 @@ class ShadowLiveRunner:
         if last is not None and now_ns - last < self.cfg.alert_cooldown_min * 60 * NS_PER_S:
             return
         self.stats.signals += 1
+        if self.cockpit is not None:
+            self._cockpit(self.cockpit.on_episode, sig)
         if (
             self.alert is not None
             and sig.grade.value in self.cfg.alert_grades
@@ -462,22 +609,35 @@ class ShadowLiveRunner:
             )
         except queue.Empty:
             ev = None
+        # With the cockpit on, publish between batches so a burst (e.g. a max-speed replay)
+        # never freezes the page. Only take the next event when it will be processed.
+        cap = 2_000 if self.cockpit is not None else 50_000
         n = 0
-        while ev is not None and n < 50_000:
+        while ev is not None:
             self.on_event(ev)
             n += 1
+            if n >= cap:
+                break
             try:
                 ev = self.queue.get_nowait()
             except queue.Empty:
                 ev = None
         now = self.clock.now_ns()
+        pinned = set(self.pinned())
+        # Pinned contracts (strategy legs, the page's picks) do not count: the auto-selected
+        # strikes around spot still have to be added once the spot price is known.
         has_options = any(
-            self.master.get(s).kind.is_option for s in self.subscribed if s in self.master
+            self.master.get(s).kind.is_option
+            for s in self.subscribed
+            if s in self.master and s not in pinned
         )
         if now >= self._next_recenter or (not has_options and self.spots()):
             self.recenter(now, "recenter")
         if not self.or_frozen and now >= self.or_end_ns:
             self._freeze_opening_range()
+        if not self.squared_off and now >= self.square_off_ns:
+            self.scanner.close_open_signals(from_ns(now), "Square-off time")
+            self.squared_off = True
         if now >= self._next_oi:
             self._refresh_oi_walls(now)
             self._next_oi = now + self.cfg.oi_wall_refresh_s * NS_PER_S
@@ -488,14 +648,37 @@ class ShadowLiveRunner:
             self.write_dashboard()
             self.append_ledger()
             self._next_dashboard = now + self.cfg.dashboard_interval_s * NS_PER_S
+        self._watchdog(now)
+        if self.cockpit is not None:
+            self._cockpit(self.cockpit.on_step, now)
+
+    def _watchdog(self, now: int) -> None:
+        """Restart a silent feed during market hours, at most once per silence period."""
+        silent_s = (now - self.last_event_ns) / NS_PER_S
+        if not (self.open_ns <= now < self._close_ns) or silent_s < self.cfg.watchdog_silence_s:
+            return
+        self.watchdog_restarts += 1
+        log.warning("shadow feed silent for %.0f s in market hours: restarting it", silent_s)
+        self.last_event_ns = now  # wait another full period before the next restart
+        try:
+            self.adapter.restart()
+        except Exception as exc:  # the adapter's own reconnect loop keeps trying
+            log.warning("shadow feed restart failed: %s", type(exc).__name__)
 
     def run(self, end_ns: int, stop: threading.Event) -> None:
+        # With the cockpit on, wake at least 10x a second so snapshots go out on time.
+        wait = 0.1 if self.cockpit is not None else 0.5
         while not stop.is_set() and self.clock.now_ns() < end_ns:
-            self.step()
+            self.step(wait)
 
     def finish(self) -> None:
         self.adapter.stop()
         self.step(0)
+        # Never leave paper trades open: close at the last book seen (e.g. a short test run or a
+        # feed that stopped early). Untriggered signals are dropped and counted.
+        self.scanner.close_open_signals(from_ns(self.clock.now_ns()), "Session end")
+        if self.cockpit is not None:
+            self._cockpit(self.cockpit.finish, from_ns(self.clock.now_ns()))
         self.depth_writer.flush()
         self.write_dashboard()
         self.append_ledger()
@@ -590,8 +773,20 @@ def run_shadow_day(
     data_dir = rs.sim_dir if sim else rs.parquet_dir
     store = Store(data_dir)
     prev_levels: dict[str, tuple[float, float, float]] = {}
+    eod_filled = 0
     try:
-        prev_levels = previous_day_levels(store, cal.previous_trading_day(day))
+        prev_day = cal.previous_trading_day(day)
+        prev_levels = previous_day_levels(store, prev_day)
+        if not sim:
+            # Our own recordings first (they cover BSE/Sensex too); NSE's EOD files fill the rest,
+            # e.g. on the first recording day or for contracts the recorder did not watch.
+            eod = eod_previous_day_levels(
+                rs.raw_dir, prev_day, master.all(), now=from_ns(clock.now_ns())
+            )
+            for sym, lv in eod.items():
+                if sym not in prev_levels:
+                    prev_levels[sym] = lv
+                    eod_filled += 1
     except (CalendarCoverageError, OSError) as exc:
         log.warning("previous-day levels unavailable: %s", exc)
     if sim:  # synthetic data never lands next to real dashboards or the real ledger
@@ -608,6 +803,29 @@ def run_shadow_day(
         max_lots=settings.risk.max_lots_per_strategy,
     )
     adapter = adapter_factory(cfg, rs, master, clock)
+    cockpit = None
+    try:
+        from engine.cockpit.build import build_cockpit
+        from engine.cockpit.config import load_cockpit_config
+
+        ccfg = load_cockpit_config(settings, root)
+        cockpit = build_cockpit(
+            settings,
+            root,
+            source="sim" if sim else "live",
+            day=day,
+            session=primary,
+            master=master,
+            rs=rs,
+            book=book,
+            calendar=cal,
+            port=ccfg.engine_port,
+            journal_dir=(root / "data" / "demo") if sim else ccfg.journal_dir,
+            chain_dir=data_dir,
+        )
+    except Exception as exc:  # the cockpit is optional; recording must start regardless
+        log.warning("cockpit disabled for this run: %s", exc)
+        cockpit = None
     runner = ShadowLiveRunner(
         cfg,
         rs,
@@ -623,6 +841,7 @@ def run_shadow_day(
         feed_label=feed_label,
         prev_levels=prev_levels,
         alert=alert,
+        cockpit=cockpit,
     )
     while not stop.is_set() and clock.now_ns() < to_ns(start):
         stop.wait(1.0)
@@ -632,10 +851,16 @@ def run_shadow_day(
         runner.run(to_ns(end), stop)
     finally:
         runner.finish()
+        if cockpit is not None:
+            if cockpit.analytics is not None:
+                cockpit.analytics.stop()
+            if cockpit.publisher is not None:
+                cockpit.publisher.close()
     compact_day(data_dir, "depth30", day, DEPTH30_SCHEMA)
     return ShadowRunResult(
         day,
         "ran",
         dashboard=report_path,
-        stats=runner.stats.__dict__ | {"prev_day_levels": len(prev_levels)},
+        stats=runner.stats.__dict__
+        | {"prev_day_levels": len(prev_levels), "prev_day_levels_from_eod": eod_filled},
     )

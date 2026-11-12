@@ -14,14 +14,17 @@ Implements the complete Human-in-the-Loop Radar & Microstructure Pricing Engine 
    L1–L15 defending Bid/Ask Wall or sweep extreme), **Target 1** (≥ 1.5R, 1–2 ticks *in front of*
    the next L10–L30 opposing wall or VWAP), and **Target 2** (≥ 2.5R–2.8R).
 4. Forward paper-tests every actionable signal in the **Shadow Ledger**, tracking transitions
-   ``PENDING_TRIGGER -> ACTIVE -> HIT_T1 / HIT_T2 / HIT_SL / INVALIDATED_DELTA_FLIP``
-   and computing net-of-tax expectancy & Dynamic Quarter-Kelly risk sizing.
+   ``PENDING_TRIGGER -> ACTIVE -> HIT_T1 / HIT_T2 / HIT_SL / INVALIDATED_DELTA_FLIP /
+   SQUARED_OFF_EOD``. Fills walk the recorded book; costs come from config/rules for the
+   configured brokerage plan; each trade also carries net P&L at 2x slippage. Naked option
+   shorts and entries after the cut-off time are scored but never paper-traded.
 """
 
 from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, time
 from typing import Any
@@ -73,6 +76,9 @@ class InstrumentMicrostructureState:
     delivery_bias: DeliveryBias = DeliveryBias.NEUTRAL
     gex_regime: str = "POSITIVE_GAMMA_PIN"
     breadth_aligned: bool = False  # unknown until constituent breadth is fed (no free points)
+    # From the instrument master. Broker keys such as Upstox "NSE_FO|54749" do not show the
+    # contract type, so the symbol pattern is only a fallback when this is unknown.
+    is_option: bool | None = None
 
     # Live intraday state
     ltp: float = 0.0
@@ -90,7 +96,9 @@ class InstrumentMicrostructureState:
     def __post_init__(self) -> None:
         self.prices: deque[float] = deque(maxlen=300)
         self.volumes: deque[int] = deque(maxlen=300)
-        self.oi_history: deque[tuple[int, float, int]] = deque(maxlen=120)  # (recv_ns, px, oi)
+        # (recv_ns, price, oi) recorded only when OI changes: exchanges publish OI less often than
+        # prices, so OI build-up compares price at the moments OI actually updated.
+        self.oi_history: deque[tuple[int, float, int]] = deque(maxlen=600)
         self.flow_tracker = RollingOrderFlowTracker(window=60)
 
     def stop_pools(self) -> list[StopPoolLevel]:
@@ -115,6 +123,34 @@ class InstrumentMicrostructureState:
 
 
 _OPTION_SYMBOL_RE = re.compile(r"\d(CE|PE)(?:_[A-Z0-9]+)?$")
+
+
+OI_WINDOW_NS = 180 * 1_000_000_000  # compare OI over ~3 minutes
+OI_MIN_SPAN_NS = 120 * 1_000_000_000  # and never over less than 2 minutes
+
+
+def oi_window(
+    history: Sequence[tuple[int, float, int]], window_ns: int, min_span_ns: int
+) -> tuple[tuple[int, float, int], tuple[int, float, int]] | None:
+    """(earlier, latest) OI updates about ``window_ns`` apart, or None.
+
+    ``history`` holds (recv_ns, price, oi) at each OI *change*. The earlier point is the last
+    update at or before ``latest - window_ns``; prices are those seen at the same instants, so a
+    fresh price move is never compared against a stale OI print.
+    """
+    if len(history) < 2:
+        return None
+    latest = history[-1]
+    target = latest[0] - window_ns
+    earlier = None
+    for h in history:
+        if h[0] <= target:
+            earlier = h
+        else:
+            break
+    if earlier is None or latest[0] - earlier[0] < min_span_ns:
+        return None
+    return earlier, latest
 
 
 def _round_tick(price: float, tick: float) -> float:
@@ -237,17 +273,22 @@ class ShadowOrderBookScanner:
         capital_inr: float = 200_000.0,
         max_lots: int = 1,
         book: RuleBook | None = None,
-        cost_broker: str = "zerodha",
+        cost_broker: str | None = None,
     ) -> None:
         self.config = config or ShadowScannerConfig()
         self.capital_inr = capital_inr
         self.max_lots = max(1, max_lots)  # CLAUDE.md rule 5: one lot until 20-30 live trades
         self._book = book
-        self.cost_broker = cost_broker
+        # Brokerage plan the paper costs assume (config: shadow_scanner.cost_broker).
+        self.cost_broker = cost_broker or self.config.cost_broker
         self.states: dict[str, InstrumentMicrostructureState] = {}
         self.active_signals: dict[str, ShadowSignal] = {}
         self.watchlist_signals: dict[str, ShadowSignal] = {}
         self.closed_outcomes: list[ShadowLedgerOutcome] = []
+        # Signals that were scored but not paper-traded, by reason (shown in the summary).
+        self.not_paper_traded: dict[str, int] = {}
+        # (symbol, direction) -> when it first reached a tradeable grade without dropping below.
+        self._tradeable_since: dict[tuple[str, str], datetime] = {}
         self._seq = 0
 
     def register_instrument(self, state: InstrumentMicrostructureState) -> None:
@@ -315,8 +356,9 @@ class ShadowOrderBookScanner:
         if quote.prev_close is not None and st.prev_close <= 0:
             st.prev_close = quote.prev_close
         if quote.oi is not None and quote.oi > 0:
+            if quote.oi != st.oi_now or not st.oi_history:
+                st.oi_history.append((quote.recv_ns, st.ltp, quote.oi))
             st.oi_now = quote.oi
-            st.oi_history.append((quote.recv_ns, st.ltp, quote.oi))
         if quote.iep is not None:
             st.iep = quote.iep
         if quote.iiq_total is not None:
@@ -493,6 +535,18 @@ class ShadowOrderBookScanner:
             min_rr_t2=self.config.min_rr_t2,
         )
 
+        # Scores are recomputed on every book update and cross thresholds on noise. A grade
+        # counts only after it has held, in the same direction, for signal_confirm_s.
+        confirmed = True
+        if grade in {SignalGrade.A_PLUS, SignalGrade.ACTIONABLE}:
+            for key in [k for k in self._tradeable_since if k[0] == symbol and k[1] != direction]:
+                del self._tradeable_since[key]
+            since = self._tradeable_since.setdefault((symbol, direction), ts)
+            confirmed = (ts - since).total_seconds() >= self.config.signal_confirm_s
+        else:
+            for key in [k for k in self._tradeable_since if k[0] == symbol]:
+                del self._tradeable_since[key]
+
         risk_pct = self.empirical_quarter_kelly_risk_pct()
         risk_inr = self.capital_inr * (risk_pct / 100.0)
         per_unit_risk = max(st.tick_size, abs(entry - sl))
@@ -543,13 +597,18 @@ class ShadowOrderBookScanner:
             recommended_risk_pct=risk_pct,
             recommended_qty=rec_qty,
             rationale=rationale,
+            confirmed=confirmed,
         )
 
-        if grade in {SignalGrade.A_PLUS, SignalGrade.ACTIONABLE}:
+        if grade in {SignalGrade.A_PLUS, SignalGrade.ACTIONABLE} and confirmed:
             # Keep active trade if already triggered, else update with highest-scoring signal
             existing = self.active_signals.get(symbol)
             if existing is None or existing.status is ShadowSignalStatus.PENDING_TRIGGER:
-                self.active_signals[symbol] = sig
+                skip = self._paper_skip_reason(sig, ts)
+                if skip is None:
+                    self.active_signals[symbol] = sig
+                else:
+                    self._count_skip(skip)
         elif grade is SignalGrade.WATCHLIST:
             self.watchlist_signals[symbol] = sig
 
@@ -558,7 +617,8 @@ class ShadowOrderBookScanner:
     def _evaluate_futures_oi(
         self, st: InstrumentMicrostructureState, *, is_stop_hunt: bool
     ) -> FuturesOIBuildup:
-        if len(st.oi_history) < 2:
+        pair = oi_window(st.oi_history, OI_WINDOW_NS, OI_MIN_SPAN_NS)
+        if pair is None:
             # Not enough OI history to classify a build-up: award no points. (Previously this
             # granted 15 of 20 points to both directions from no data.)
             return FuturesOIBuildup(
@@ -572,8 +632,7 @@ class ShadowOrderBookScanner:
                 0.0,
                 "OI history unavailable (no points)",
             )
-        oldest = st.oi_history[0]
-        latest = st.oi_history[-1]
+        oldest, latest = pair
         return classify_futures_oi_buildup(
             price_now=latest[1],
             price_3m_ago=oldest[1],
@@ -582,26 +641,66 @@ class ShadowOrderBookScanner:
             is_stop_hunt_reclaim=is_stop_hunt,
         )
 
+    def is_option(self, symbol: str) -> bool:
+        st = self.states.get(symbol)
+        if st is not None and st.is_option is not None:
+            return st.is_option
+        return bool(_OPTION_SYMBOL_RE.search(symbol.upper()))
+
+    def is_tradable(self, sig: ShadowSignal) -> bool:
+        """A SHORT on an option means selling it unhedged (CLAUDE.md rule 1): never tradable."""
+        return not (sig.direction == "SHORT" and self.is_option(sig.symbol))
+
+    def _paper_skip_reason(self, sig: ShadowSignal, ts: datetime) -> str | None:
+        """Why a 75+ signal is not tracked in the signal ledger (Track A), or None.
+
+        Track A measures signals, not tradability: SHORT signals on options are tracked and
+        tagged ``tradable=False`` (see :meth:`is_tradable`) instead of being dropped, so the
+        sample is not censored. The paper accounts (Tracks B/C) never sell options.
+        """
+        if ts.astimezone(IST).time() >= self.config.paper_no_new_entries_after:
+            return "after_no_new_entries_time"
+        return None
+
+    def _count_skip(self, reason: str) -> None:
+        self.not_paper_traded[reason] = self.not_paper_traded.get(reason, 0) + 1
+
     def _update_active_ledger(self, st: InstrumentMicrostructureState, ts: datetime) -> None:
         sig = self.active_signals.get(st.symbol)
         if sig is None:
             return
         px = st.ltp
         is_long = sig.direction == "LONG"
+        clock = ts.astimezone(IST).time()
 
         if sig.status is ShadowSignalStatus.PENDING_TRIGGER:
+            if clock >= self.config.paper_no_new_entries_after:
+                del self.active_signals[st.symbol]  # never triggered: no trade to count
+                self._count_skip("pending_cancelled_at_cutoff")
+                return
             triggered = (is_long and px >= sig.entry_price) or (
                 not is_long and px <= sig.entry_price
             )
             if triggered:
-                # Fill at the touch (ask for longs, bid for shorts), never at LTP (CLAUDE.md).
-                fill = self._touch(st, buy=is_long, fallback=px)
+                # Fill by walking the book from the touch (ask for longs, bid for shorts) for
+                # the whole quantity, never at LTP (CLAUDE.md).
+                fill, slip, thin = self._walk_book(
+                    st, buy=is_long, qty=sig.recommended_qty, fallback=px
+                )
                 self.active_signals[st.symbol] = replace(
-                    sig, status=ShadowSignalStatus.ACTIVE, entry_price=fill
+                    sig,
+                    status=ShadowSignalStatus.ACTIVE,
+                    entry_price=fill,
+                    entry_slippage_inr=slip,
+                    entry_thin_book=thin,
                 )
             return
 
         if sig.status is not ShadowSignalStatus.ACTIVE:
+            return
+
+        if clock >= self.config.paper_square_off_at:
+            self._close(st, sig, ShadowSignalStatus.SQUARED_OFF_EOD, "Square-off time", ts)
             return
 
         # Check Stop Loss, Target 2, Target 1, or Delta-Flip structural invalidation
@@ -612,61 +711,80 @@ class ShadowOrderBookScanner:
         book = analyze_book_microstructure(st.bids, st.asks)
         delta_flipped = (is_long and book.obi_l5 <= -0.65) or (not is_long and book.obi_l5 >= 0.65)
 
-        new_status: ShadowSignalStatus | None = None
-        exit_px = px
-        reason = ""
         if hit_sl:
-            new_status = ShadowSignalStatus.HIT_SL
-            exit_px = sig.stop_loss
+            status = ShadowSignalStatus.HIT_SL
             reason = f"Hit Microstructure Stop-Loss ({sig.stop_loss:.2f})"
         elif hit_t2:
-            new_status = ShadowSignalStatus.HIT_T2
-            exit_px = sig.target_2
+            status = ShadowSignalStatus.HIT_T2
             reason = f"Hit Target 2 ({sig.target_2:.2f}, {sig.rr_t2:.1f}R)"
         elif hit_t1:
-            new_status = ShadowSignalStatus.HIT_T1
-            exit_px = sig.target_1
+            status = ShadowSignalStatus.HIT_T1
             reason = f"Hit Target 1 ({sig.target_1:.2f}, {sig.rr_t1:.1f}R)"
         elif delta_flipped:
-            new_status = ShadowSignalStatus.INVALIDATED_DELTA_FLIP
-            exit_px = px
+            status = ShadowSignalStatus.INVALIDATED_DELTA_FLIP
             reason = f"Structural Invalidation: Order-Book OBI flipped ({book.obi_l5:+.2f})"
+        else:
+            return
+        self._close(st, sig, status, reason, ts)
 
-        if new_status is not None:
-            # Exit at the touch when the level is hit (bid for longs, ask for shorts), not at the
-            # stop/target price itself: gaps and thin books make that fill optimistic.
-            exit_px = self._touch(st, buy=not is_long, fallback=exit_px)
-            gross = (
-                (exit_px - sig.entry_price) * sig.recommended_qty
-                if is_long
-                else (sig.entry_price - exit_px) * sig.recommended_qty
-            )
-            charges = self._round_trip_charges(
-                sig.symbol,
-                entry_turnover=sig.entry_price * sig.recommended_qty,
-                exit_turnover=exit_px * sig.recommended_qty,
-                is_long=is_long,
-                on=ts.astimezone(IST).date(),
-            )
-            net = gross - charges
-            unit_risk = (
-                max(st.tick_size, abs(sig.entry_price - sig.stop_loss)) * sig.recommended_qty
-            )
-            r_net = net / unit_risk if unit_risk > 0 else 0.0
+    def close_open_signals(self, ts: datetime, reason: str = "Session end") -> int:
+        """Square off every ACTIVE paper trade at the current book; drop untriggered ones.
 
-            outcome = ShadowLedgerOutcome(
+        Called at the square-off time and when the session ends, so open trades never go
+        missing from the ledger. Returns the number of trades closed.
+        """
+        closed = 0
+        for symbol, sig in list(self.active_signals.items()):
+            st = self.states.get(symbol)
+            if sig.status is ShadowSignalStatus.ACTIVE and st is not None:
+                self._close(st, sig, ShadowSignalStatus.SQUARED_OFF_EOD, reason, ts)
+                closed += 1
+            elif sig.status is ShadowSignalStatus.PENDING_TRIGGER:
+                del self.active_signals[symbol]
+                self._count_skip("pending_cancelled_at_cutoff")
+        return closed
+
+    def _close(
+        self,
+        st: InstrumentMicrostructureState,
+        sig: ShadowSignal,
+        status: ShadowSignalStatus,
+        reason: str,
+        ts: datetime,
+    ) -> None:
+        is_long = sig.direction == "LONG"
+        qty = sig.recommended_qty
+        # Exit by walking the opposite side of the book (bid for longs, ask for shorts) when the
+        # level is hit, not at the stop/target price: gaps and thin books make that optimistic.
+        exit_px, exit_slip, exit_thin = self._walk_book(
+            st, buy=not is_long, qty=qty, fallback=st.ltp
+        )
+        gross = (exit_px - sig.entry_price) * qty if is_long else (sig.entry_price - exit_px) * qty
+        charges = self._round_trip_charges(
+            sig.symbol,
+            entry_turnover=sig.entry_price * qty,
+            exit_turnover=exit_px * qty,
+            is_long=is_long,
+            on=ts.astimezone(IST).date(),
+        )
+        net = gross - charges
+        slippage = sig.entry_slippage_inr + exit_slip
+        unit_risk = max(st.tick_size, abs(sig.entry_price - sig.stop_loss)) * qty
+        r_net = net / unit_risk if unit_risk > 0 else 0.0
+        self.closed_outcomes.append(
+            ShadowLedgerOutcome(
                 signal_id=sig.signal_id,
                 symbol=sig.symbol,
                 direction=sig.direction,
                 wave=sig.wave,
                 confidence_score=sig.confidence_score,
-                status=new_status,
+                status=status,
                 entry_price=sig.entry_price,
                 exit_price=round(exit_px, 2),
                 stop_loss=sig.stop_loss,
                 target_1=sig.target_1,
                 target_2=sig.target_2,
-                qty=sig.recommended_qty,
+                qty=qty,
                 gross_pnl_inr=round(gross, 2),
                 charges_inr=round(charges, 2),
                 net_pnl_inr=round(net, 2),
@@ -674,14 +792,47 @@ class ShadowOrderBookScanner:
                 opened_at=sig.created_at,
                 closed_at=ts,
                 exit_reason=reason,
+                slippage_inr=round(slippage, 2),
+                net_pnl_2x_slippage_inr=round(net - slippage, 2),
+                thin_book=sig.entry_thin_book or exit_thin,
+                tradable=self.is_tradable(sig),
             )
-            self.closed_outcomes.append(outcome)
-            del self.active_signals[st.symbol]
+        )
+        del self.active_signals[sig.symbol]
 
     @staticmethod
-    def _touch(st: InstrumentMicrostructureState, *, buy: bool, fallback: float) -> float:
+    def _walk_book(
+        st: InstrumentMicrostructureState, *, buy: bool, qty: int, fallback: float
+    ) -> tuple[float, float, bool]:
+        """(average fill price, slippage vs mid in ₹ for the whole qty, ran past the book).
+
+        Takes liquidity level by level from the touch. Quantity beyond the visible book is
+        priced at the last visible level and flagged, since its true cost is unknown.
+        """
         side = st.asks if buy else st.bids
-        return side[0][0] if side and side[0][0] > 0 else fallback
+        remaining = max(0, qty)
+        cost = 0.0
+        last_px = 0.0
+        for px, lvl_qty, _ in side:
+            if px <= 0 or lvl_qty <= 0:
+                continue
+            take = min(remaining, lvl_qty)
+            cost += take * px
+            remaining -= take
+            last_px = px
+            if remaining == 0:
+                break
+        if last_px <= 0:  # no usable book at all
+            return fallback, 0.0, True
+        thin = remaining > 0
+        cost += remaining * last_px
+        avg = cost / qty if qty > 0 else last_px
+        if st.bids and st.asks and st.bids[0][0] > 0 and st.asks[0][0] > 0:
+            mid = 0.5 * (st.bids[0][0] + st.asks[0][0])
+        else:
+            mid = avg
+        slip = (avg - mid) * qty if buy else (mid - avg) * qty
+        return avg, max(0.0, slip), thin
 
     def _round_trip_charges(
         self, symbol: str, *, entry_turnover: float, exit_turnover: float, is_long: bool, on: Any
@@ -689,7 +840,7 @@ class ShadowOrderBookScanner:
         """Full statutory + broker charges from config/rules (no hardcoded rates)."""
         if self._book is None:
             self._book = RuleBook.load(REPO_ROOT / "config" / "rules")
-        segment: Any = "options" if _OPTION_SYMBOL_RE.search(symbol.upper()) else "futures"
+        segment: Any = "options" if self.is_option(symbol) else "futures"
         buy_turnover, sell_turnover = (
             (entry_turnover, exit_turnover) if is_long else (exit_turnover, entry_turnover)
         )
@@ -731,8 +882,12 @@ class ShadowOrderBookScanner:
                 "gross_pnl_inr": 0.0,
                 "charges_inr": 0.0,
                 "net_pnl_inr": 0.0,
+                "slippage_inr": 0.0,
+                "net_pnl_2x_slippage_inr": 0.0,
                 "avg_r_multiple_net": 0.0,
                 "quarter_kelly_risk_pct": self.empirical_quarter_kelly_risk_pct(),
+                "cost_broker": self.cost_broker,
+                "not_paper_traded": dict(self.not_paper_traded),
             }
         wins = [o for o in self.closed_outcomes if o.net_pnl_inr > 0]
         gross = sum(o.gross_pnl_inr for o in self.closed_outcomes)
@@ -745,6 +900,12 @@ class ShadowOrderBookScanner:
             "gross_pnl_inr": round(gross, 2),
             "charges_inr": round(charges, 2),
             "net_pnl_inr": round(net, 2),
+            "slippage_inr": round(sum(o.slippage_inr for o in self.closed_outcomes), 2),
+            "net_pnl_2x_slippage_inr": round(
+                sum(o.net_pnl_2x_slippage_inr for o in self.closed_outcomes), 2
+            ),
             "avg_r_multiple_net": round(avg_r, 3),
             "quarter_kelly_risk_pct": self.empirical_quarter_kelly_risk_pct(),
+            "cost_broker": self.cost_broker,
+            "not_paper_traded": dict(self.not_paper_traded),
         }

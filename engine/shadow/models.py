@@ -29,6 +29,7 @@ class ShadowSignalStatus(StrEnum):
     HIT_SL = "HIT_SL"
     INVALIDATED_DELTA_FLIP = "INVALIDATED_DELTA_FLIP"
     EXPIRED_TIME_DECAY = "EXPIRED_TIME_DECAY"
+    SQUARED_OFF_EOD = "SQUARED_OFF_EOD"  # still open at the square-off time or session end
     BLOCKED_SPOOF = "BLOCKED_SPOOF"
 
 
@@ -94,6 +95,10 @@ class ShadowSignal:
     recommended_risk_pct: float
     recommended_qty: int
     rationale: str
+    # False while a tradeable grade has not yet held for ``signal_confirm_s`` (flicker).
+    confirmed: bool = True
+    entry_slippage_inr: float = 0.0  # paid vs mid when the paper entry filled (whole qty)
+    entry_thin_book: bool = False  # the visible book could not fill the whole qty
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,3 +122,7 @@ class ShadowLedgerOutcome:
     opened_at: datetime
     closed_at: datetime
     exit_reason: str
+    slippage_inr: float = 0.0  # entry + exit fills vs mid, for the whole quantity
+    net_pnl_2x_slippage_inr: float = 0.0  # net with slippage doubled (CLAUDE.md stress)
+    thin_book: bool = False  # a fill walked past the visible book
+    tradable: bool = True  # False for SHORT signals on options (would be a naked short)

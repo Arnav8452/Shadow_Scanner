@@ -16,7 +16,7 @@ shadow-live: ; $(PY) shadow-live SIM=$(SIM) MINUTES=$(MINUTES) SEND=$(SEND)
 qc:          ; $(PY) qc DATE=$(DATE) SIM=$(SIM) LAST=$(LAST)
 backtest:    ; $(PY) backtest STRAT=$(STRAT) FROM=$(FROM) TO=$(TO)
 paper:       ; $(PY) paper STRAT=$(STRAT)
-mine-log:    ; $(PY) mine-log FILE=$(FILE)
+mine-log:    ; uv run --extra mining python tasks.py mine-log FILE="$(FILE)" LABEL=$(LABEL)
 self-review: ; $(PY) self-review
 report:      ; $(PY) report
 event-arb:   ; $(PY) event-arb DATE=$(DATE) SEND=$(SEND)

@@ -70,7 +70,9 @@ class SimFeed:
         self._lock = threading.Lock()
         self.connects = 0
 
-    # ------------------------------------------------------------------ adapter API
+        # ------------------------------------------------------------------ adapter API
+        self.equity_px: dict[str, float] = {}
+        self.equity_prev_close: dict[str, float] = {}
 
     def start(self, sink: Sink) -> None:
         self.sink = sink
@@ -125,8 +127,16 @@ class SimFeed:
         now = self.clock.now_ns()
         if self.sink is None or now < self.paused_until_ns:
             return 0
+        moves = []
         for u in list(self.spots):
-            self.spots[u] *= math.exp(self.rng.gauss(0.0, 0.00015))
+            mv = self.rng.gauss(0.0, 0.00015)
+            self.spots[u] *= math.exp(mv)
+            moves.append(mv)
+        # Stocks (e.g. index heavyweights) follow the market with beta 0.8 plus their own noise,
+        # so breadth and realized correlation have something to measure in dry runs.
+        market = moves[0] if moves else 0.0
+        for k in list(self.equity_px):
+            self.equity_px[k] *= math.exp(0.8 * market + self.rng.gauss(0.0, 0.0002))
         with self._lock:
             syms = sorted(self.symbols)
             depth = set(self.depth)
@@ -153,6 +163,17 @@ class SimFeed:
             if "VIX" in ins.symbol.upper():  # NSE:INDIAVIX-INDEX or NSE_INDEX|India VIX
                 level = self.iv * 100
             return Quote(sym, now, exch_ts=exch, ltp=round(level, 2), prev_close=level), None
+        if ins.kind is Kind.EQUITY:
+            if sym not in self.equity_px:
+                base = 500.0 + 2500.0 * self.rng.random()
+                self.equity_prev_close[sym] = base
+                self.equity_px[sym] = base * math.exp(self.rng.gauss(0.0, 0.01))
+            px = self.equity_px[sym]
+            return Quote(
+                sym, now, exch_ts=exch, ltt=exch, ltp=round(px, 2),
+                prev_close=round(self.equity_prev_close[sym], 2),
+                bid=round(px - 0.05, 2), ask=round(px + 0.05, 2),
+            ), None  # fmt: skip
         if spot is None:
             return None, None
         if ins.kind is Kind.FUTURE:

@@ -15,6 +15,7 @@ paper engine would have done on that day by construction (SPEC §13 M6).
 
 from __future__ import annotations
 
+import bisect
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -37,6 +38,16 @@ def _ns(ts: datetime | None) -> int | None:
     return int(ts.timestamp()) * NS_PER_S + ts.microsecond * US
 
 
+def _in_d30_window(recv_ns: int, d30_times: Sequence[int], hold_ns: int) -> bool:
+    """True when ``recv_ns`` falls inside an active 30-level depth window for this symbol."""
+    if not d30_times:
+        return False
+    i = bisect.bisect_right(d30_times, recv_ns + NS_PER_S) - 1
+    if i < 0:
+        return False
+    return recv_ns - d30_times[i] <= hold_ns
+
+
 def recorded_events(
     store: Store,
     day: date,
@@ -45,41 +56,80 @@ def recorded_events(
     start: datetime | None = None,
     symbols: Sequence[str] | None = None,
     include_snapshots: bool = False,
+    include_depth30: bool = True,
+    depth30_hold_s: float = 60.0,
 ) -> Iterator[Quote | Depth]:
-    """Rebuild feed events from recorded rows, in the order they became known."""
+    """Rebuild feed events from recorded rows, in the order they became known.
+
+    When ``include_depth30`` is True and ``depth30`` Parquet files exist for ``day``, 30-level
+    depth snapshots from ``depth30`` are merged in ``(recv_ns, seq)`` order and supersede the
+    5-level depth columns in ``quotes`` while the symbol is actively receiving ``depth30``
+    updates (within ``depth30_hold_s`` seconds). Outside those windows (before the symbol enters
+    the 30-level watchlist or after it rotates out), replay falls back to the 5-level ``quotes``
+    book so the contract never goes bookless.
+    """
     capture = None if include_snapshots else "tick"
-    table = store.quotes(day, as_of=as_of, start=start, symbols=symbols, capture=capture)
-    if table.num_rows == 0:
+    q_table = store.quotes(day, as_of=as_of, start=start, symbols=symbols, capture=capture)
+    d30_table = (
+        store.depth30(day, as_of=as_of, start=start, symbols=symbols) if include_depth30 else None
+    )
+    q_rows = q_table.to_pylist() if q_table.num_rows > 0 else []
+    d30_rows = d30_table.to_pylist() if d30_table is not None and d30_table.num_rows > 0 else []
+    if not q_rows and not d30_rows:
         return
-    for r in table.to_pylist():
+
+    hold_ns = int(depth30_hold_s * NS_PER_S)
+    d30_times_by_sym: dict[str, list[int]] = {}
+    for r in d30_rows:
+        t_ns = _ns(r["ts"])
+        if t_ns is not None:
+            d30_times_by_sym.setdefault(str(r["symbol"]), []).append(t_ns)
+    for times in d30_times_by_sym.values():
+        times.sort()
+
+    timed: list[tuple[int, int, Quote | Depth]] = []
+    idx = 0
+
+    for r in q_rows:
         recv = _ns(r["ts"])
         assert recv is not None
         sym = r["symbol"]
         if r["msg"] in ("quote", "snap") and r.get("quote_recv_ts") is not None:
             exch = r.get("exch_ts")
             ltt = r.get("ltt")
-            yield Quote(
-                sym,
-                recv,
-                exch_ts=int(exch.timestamp()) if exch else None,
-                ltt=int(ltt.timestamp()) if ltt else None,
-                ltp=r["ltp"],
-                ltq=r["ltq"],
-                atp=r["atp"],
-                volume=r["volume"],
-                oi=r["oi"],
-                tbq=r["tbq"],
-                tsq=r["tsq"],
-                bid=r["bid"],
-                bid_qty=r["bid_qty"],
-                ask=r["ask"],
-                ask_qty=r["ask_qty"],
-                open=r["open"],
-                high=r["high"],
-                low=r["low"],
-                prev_close=r["prev_close"],
+            idx += 1
+            timed.append(
+                (
+                    recv,
+                    idx,
+                    Quote(
+                        sym,
+                        recv,
+                        exch_ts=int(exch.timestamp()) if exch else None,
+                        ltt=int(ltt.timestamp()) if ltt else None,
+                        ltp=r["ltp"],
+                        ltq=r["ltq"],
+                        atp=r["atp"],
+                        volume=r["volume"],
+                        oi=r["oi"],
+                        tbq=r["tbq"],
+                        tsq=r["tsq"],
+                        bid=r["bid"],
+                        bid_qty=r["bid_qty"],
+                        ask=r["ask"],
+                        ask_qty=r["ask_qty"],
+                        open=r["open"],
+                        high=r["high"],
+                        low=r["low"],
+                        prev_close=r["prev_close"],
+                    ),
+                )
             )
-        if r["msg"] in ("depth", "snap") and r.get("depth_recv_ts") is not None:
+        if (
+            not _in_d30_window(recv, d30_times_by_sym.get(str(sym), ()), hold_ns)
+            and r["msg"] in ("depth", "snap")
+            and r.get("depth_recv_ts") is not None
+        ):
             bids: list[Level] = []
             asks: list[Level] = []
             for i in range(1, DEPTH_LEVELS + 1):
@@ -89,7 +139,42 @@ def recorded_events(
                     bids.append((bp, bq, r.get(f"bid_ord_{i}")))
                 if ap and aq:
                     asks.append((ap, aq, r.get(f"ask_ord_{i}")))
-            yield Depth(sym, recv, tuple(bids), tuple(asks))
+            idx += 1
+            timed.append((recv, idx, Depth(sym, recv, tuple(bids), tuple(asks))))
+
+    for r in d30_rows:
+        recv = _ns(r["ts"])
+        assert recv is not None
+        sym = r["symbol"]
+        exch = r.get("exch_ts")
+        bids30 = tuple(
+            (float(px), int(qty), None)
+            for px, qty in zip(r.get("bid_px") or (), r.get("bid_qty") or (), strict=False)
+            if px and qty
+        )
+        asks30 = tuple(
+            (float(px), int(qty), None)
+            for px, qty in zip(r.get("ask_px") or (), r.get("ask_qty") or (), strict=False)
+            if px and qty
+        )
+        idx += 1
+        timed.append(
+            (
+                recv,
+                idx,
+                Depth(
+                    sym,
+                    recv,
+                    bids30,
+                    asks30,
+                    exch_ts=int(exch.timestamp()) if exch else None,
+                ),
+            )
+        )
+
+    timed.sort(key=lambda item: (item[0], item[1]))
+    for _, _, ev in timed:
+        yield ev
 
 
 @dataclass

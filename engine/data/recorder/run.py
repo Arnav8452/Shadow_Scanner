@@ -33,7 +33,7 @@ from engine.core.clock import (
 )
 from engine.core.config import Settings
 from engine.core.env import Secret, get_secret, load_dotenv
-from engine.core.rules import RuleBook, RuleNotFoundError
+from engine.core.rules import IST, RuleBook, RuleNotFoundError
 from engine.data.adapters.base import FeedAdapter, FeedEvent
 from engine.data.quality.checks import FlagThresholds, qc_day, write_qc
 from engine.data.recorder.core import Recorder, RecorderConfig
@@ -89,6 +89,22 @@ class RecorderSettings:
     log_dir: Path
 
 
+def constituent_keys(spec: Any, broker: str, on: date | None = None) -> list[str]:
+    """Broker keys of an index's heavyweights (SPEC L9 dispersion), from the reference table.
+
+    ``spec``: ``{index: NIFTY, top_n: 8, file: config/reference/nifty50_constituents.csv}``.
+    """
+    if not isinstance(spec, Mapping) or not spec:
+        return []
+    from engine.core.config import REPO_ROOT
+    from engine.data.constituents.table import broker_key, heavyweights, load_constituent_table
+
+    rows = load_constituent_table(REPO_ROOT / str(spec["file"]))
+    day = on or datetime.now(IST).date()
+    top = heavyweights(rows, str(spec.get("index", "NIFTY")), day, int(spec.get("top_n", 8)))
+    return [broker_key(r, broker) for r in top]
+
+
 def load_recorder_settings(settings: Settings) -> RecorderSettings:
     raw = settings.raw.get("recorder")
     if not isinstance(raw, Mapping):
@@ -119,10 +135,12 @@ def load_recorder_settings(settings: Settings) -> RecorderSettings:
         )
         for u in raw["underlyings"]
     )
+    extra = list(raw.get("extra_symbols") or ())
+    extra += constituent_keys(raw.get("constituents"), broker)
     universe = UniverseConfig(
         underlyings=unds,
         budget=0,
-        extra_symbols=tuple(raw.get("extra_symbols") or ()),
+        extra_symbols=tuple(dict.fromkeys(extra)),
         vix_symbol=per_broker(raw.get("vix_symbol"), "vix_symbol"),
         min_strikes_each_side=int(band.get("min_strikes_each_side", 25)),
         buffer_strikes=int(band.get("buffer_strikes", 0)),

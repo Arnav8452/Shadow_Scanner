@@ -11,7 +11,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -58,6 +58,8 @@ class ShadowScannerConfig:
     depth_levels: int = 30
     min_confidence_score: float = 75.0
     a_plus_confidence_score: float = 80.0
+    # HYPOTHESIS: a tradeable grade must hold (same direction) this long before it counts.
+    signal_confirm_s: float = 5.0
     watchlist_score: float = 65.0
     rer_confirm_min: float = 0.75
     rer_spoof_max: float = 0.20
@@ -73,6 +75,10 @@ class ShadowScannerConfig:
     kelly_fraction: float = 0.25
     kelly_max_risk_pct: float = 1.5
     kelly_rolling_window: int = 100
+    # Paper ledger (forward test). Times are IST; brokerage plan rows live in brokerage.csv.
+    paper_no_new_entries_after: time = time(15, 0)
+    paper_square_off_at: time = time(15, 20)
+    cost_broker: str = "upstox_plus"
     report_dir: Path = Path("reports/shadow_scanner")
     ledger_file: Path = Path("data/state/shadow_ledger.jsonl")
 
@@ -188,6 +194,14 @@ def _parse_engine_version(val: Any) -> EngineVersion:
     return aliases[s]
 
 
+def _hhmm_time(value: Any, name: str) -> time:
+    text = str(value)
+    if not _HHMM.match(text):
+        raise ConfigError(f"{name} must be HH:MM (24h)")
+    hh, mm = text.split(":")
+    return time(int(hh), int(mm))
+
+
 def _build_shadow_scanner(raw: Mapping[str, Any], root: Path) -> ShadowScannerConfig:
     sc = raw.get("shadow_scanner")
     if not isinstance(sc, Mapping):
@@ -206,6 +220,7 @@ def _build_shadow_scanner(raw: Mapping[str, Any], root: Path) -> ShadowScannerCo
         a_plus_confidence_score=_positive(
             sc.get("a_plus_confidence_score", 80.0), "shadow_scanner.a_plus_confidence_score"
         ),
+        signal_confirm_s=float(sc.get("signal_confirm_s", 5.0)),
         watchlist_score=_positive(
             sc.get("watchlist_score", 65.0), "shadow_scanner.watchlist_score"
         ),
@@ -243,6 +258,14 @@ def _build_shadow_scanner(raw: Mapping[str, Any], root: Path) -> ShadowScannerCo
         kelly_rolling_window=int(
             _positive(sc.get("kelly_rolling_window", 100), "shadow_scanner.kelly_rolling_window")
         ),
+        paper_no_new_entries_after=_hhmm_time(
+            sc.get("paper_no_new_entries_after", "15:00"),
+            "shadow_scanner.paper_no_new_entries_after",
+        ),
+        paper_square_off_at=_hhmm_time(
+            sc.get("paper_square_off_at", "15:20"), "shadow_scanner.paper_square_off_at"
+        ),
+        cost_broker=str(sc.get("cost_broker", "upstox_plus")),
         report_dir=root / str(sc.get("report_dir", "reports/shadow_scanner")),
         ledger_file=root / str(sc.get("ledger_file", "data/state/shadow_ledger.jsonl")),
     )

@@ -13,6 +13,7 @@ dependencies = [
     "pyyaml>=6.0",
     "tzdata>=2024.1",  # Windows has no system tz database for zoneinfo
     "websocket-client>=1.6.1",
+    "aiohttp>=3.9",  # cockpit gateway: local web page + WebSocket push (engine/cockpit)
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,10 @@ dependencies = [
 # opt-in: `uv sync --extra fyers` only on the machine that records live data.
 fyers = [
     "fyers-apiv3==3.2.1",
+]
+# Reads reference trade-log PDFs for M1 trade mining (word positions); research only.
+mining = [
+    "pdfplumber>=0.11",
 ]
 
 [dependency-groups]

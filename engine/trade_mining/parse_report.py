@@ -49,6 +49,14 @@ class MinedTradeRow:
     breach_inr: float
     is_live: bool
     exit_order_type: str
+    # Filled by the PDF word-position parser (pdf_report.py); defaults keep older callers working.
+    entry_order_type: str = ""
+    requested_in: str = ""  # "MKT" or the requested limit/stop price, as printed
+    requested_out: str = ""
+    mfe_inr: float = 0.0  # MFE / MAE columns are rupees for the whole quantity
+    mae_inr: float = 0.0
+    stated_charges_inr: float | None = None  # CHARGES column as printed (negative = paid)
+    flags: str = ""
 
     @property
     def holding_seconds(self) -> int | None:

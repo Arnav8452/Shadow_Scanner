@@ -5,7 +5,7 @@ zerodha,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://zero
 fyers,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,"Verify on fyers.in pricing page before use."
 dhan,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,,,UNVERIFIED,"Verify on dhan.co pricing page before use."
 upstox,options,flat_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Upstox F&O options flat ₹20 per executed order."
-upstox,futures,pct_of_turnover,0.03,pct,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Lower of 0.03% and ₹20 cap."
+upstox,futures,pct_of_turnover,0.05,pct,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-11,secondary,"Page on 11 Nov 2026: ₹20 per executed order or 0.05%, whichever is lower (was entered as 0.03%). Date of any change not researched; the ₹20 cap binds for any index futures lot."
 upstox,futures,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,
 upstox,equity_delivery,flat_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-09,secondary,"Upstox equity delivery ₹20 or 2.5% whichever is lower."
 fyers,futures,pct_of_turnover,0.03,pct,2024-10-01,,,,UNVERIFIED,"Verify on fyers.in pricing page before use."
@@ -18,3 +18,6 @@ paper,futures,pct_of_turnover,0.03,pct,2000-01-01,,,,UNVERIFIED,"Paper default f
 paper,futures,cap_per_order,20,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default futures cap."
 paper,equity_delivery,flat_per_order,0,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default delivery."
 zerodha,equity_delivery,flat_per_order,0,inr_per_executed_order,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Zero brokerage on delivery."
+upstox_plus,options,flat_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,"Upstox Plus plan: ₹30 per order for equity options (Compare Plans table; brokerage-charges page: Up to ₹30/order). Plan start date not researched, so the row starts on the verification date. Plus subscription fee, if any, not stated on the page."
+upstox_plus,futures,pct_of_turnover,0.05,pct,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,"Upstox Plus: ₹30 or 0.05% per order, whichever is lower."
+upstox_plus,futures,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,

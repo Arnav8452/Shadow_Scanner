@@ -28,6 +28,8 @@ shadow_scanner:          # Version 1 ("Shadow Order Book") & Order-Flow Confluen
   depth_levels: 30                # L1-L30 market depth levels
   min_confidence_score: 75.0      # Minimum 0-100 composite score to emit a Shadow Signal
   a_plus_confidence_score: 80.0   # High-conviction A+ alert threshold
+  signal_confirm_s: 5             # HYPOTHESIS: grade must hold this many seconds (same direction)
+                                  # before Track A tracks it, the bot takes it or it is alerted
   watchlist_score: 65.0           # Pre-alert radar threshold
   rer_confirm_min: 0.75           # Real Execution Ratio > 0.75 confirms genuine absorption/breakout
   rer_spoof_max: 0.20             # Real Execution Ratio < 0.20 blocks trade as spoof/pull
@@ -43,8 +45,71 @@ shadow_scanner:          # Version 1 ("Shadow Order Book") & Order-Flow Confluen
   kelly_fraction: 0.25            # Quarter-Kelly multiplier
   kelly_max_risk_pct: 1.5         # Clamped max risk per trade (%) for dynamic Kelly
   kelly_rolling_window: 100       # Rolling Shadow/Bot trade window for empirical Kelly
+  # Paper ledger (forward test of 75+ signals). No new paper entries after this time; anything
+  # still open is closed at the touch at square-off (or when the session ends earlier).
+  paper_no_new_entries_after: "15:00"
+  paper_square_off_at: "15:20"
+  cost_broker: upstox_plus        # brokerage plan the costs assume (rows in rules/brokerage.csv)
   report_dir: reports/shadow_scanner
   ledger_file: data/state/shadow_ledger.jsonl
+
+cockpit:                 # Local live page (engine/cockpit): uv run python tasks.py cockpit
+  # Loopback only. The engine (shadow-live) publishes on engine_port; the gateway serves the
+  # page on gateway_port and relays; replays publish on replay_port. Never places live orders.
+  enabled: true
+  host: 127.0.0.1
+  gateway_port: 8765
+  engine_port: 8766
+  replay_port: 8767
+  publish_interval_ms: 200        # snapshot push rate (5 a second); sooner after a fill
+  analytics_interval_s: 1         # forward / ATM IV / IV percentile from in-memory books
+  chain_interval_s: 60            # OI walls, PCR, GEX from the recorder's 1-minute snapshots
+  bot:                            # Track B paper account (Track A = every signal, unlimited)
+    enabled: false                # OFF (owner, 12 Nov): no scalping on raw order-flow signals
+    min_score: 80                 # takes A+ signals only
+    option_stop_pct: 25           # HYPOTHESIS, paper only: stop on premium so the risk gate
+                                  # can size the trade (a stop-less long option risks all premium)
+  directional:                    # SPEC 5.2 on the Bot account; order flow confirms entries
+    enabled: true                 # HYPOTHESIS rules from the Log-3 study; paper only
+    min_score: 80                 # confirmed (5-s hold) order-flow reading on the index or its options
+    first_entry: "09:30"
+    last_entry: "14:00"           # SPEC: no entries after 14:00 (late trades lost)
+    max_entries_per_day: 2        # one idea; one same-direction re-entry after a stop
+    stop_pct: 10                  # premium stop (SPEC: about -10%)
+    target_pct: 30                # premium target (SPEC: about +30%)
+    trail: [[15, 7], [25, 12]]    # at +15% lock +7%; at +25% lock +12%
+    underlyings: [NIFTY, SENSEX]
+  setups:                         # order-flow readings -> confirmed setups (HYPOTHESIS)
+    confirm_move_pct: 0.05        # index must follow through this far (Nifty ~13 pts)...
+    hold_s: 60                    # ...and stay past it this long
+    window_min: 10                # or the setup fails
+    fail_move_pct: 0.08           # fails if the index moves this far against it first
+    valid_min: 60                 # a confirmed setup counts for this long
+  condor:                         # SPEC 5.1 on paper; order flow is the veto (HYPOTHESIS)
+    enabled: true
+    underlying: NIFTY
+    first_entry: "10:00"
+    last_entry: "14:30"
+    min_days_to_expiry: 2         # calendar days to the weekly expiry
+    short_delta: 0.16             # SPEC: ~15-20 delta
+    wing_widths: [200, 150, 100]  # widest whose worst case fits risk.per_trade_max_loss_pct
+    min_credit_pct_of_width: 10
+    min_iv_percentile: 50         # SPEC: IV percentile > 50
+    veto_lookback_min: 30         # confirmed setups in this window: one side only or none
+    one_sided_on_trend: true      # UP -> bull put spread, DOWN -> bear call spread
+    take_profit_pct: 50           # of the credit (SPEC 50-70%)
+    stop_mult: 2.0                # close when the cost to close reaches 2x the credit
+    exit_on_short_touch: true
+    defend_within_pct: 0.5        # confirmed setup toward a short strike this close -> exit
+    exit_time: "15:00"            # on the trading day before expiry
+    max_per_day: 1
+    hold_block_categories: [RBI_MPC, UNION_BUDGET, ELECTION_EXIT_POLL]  # none before the exit
+    hold_earnings_weight_pct: 10  # results of this much index weight before the exit blocks
+  user_pins_max: 3                # contracts the page may add to the 50-key live feed
+  manual_default_stop_pct: 25     # Track C ticket default; editable on the page
+  key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
+  journal_dir: data/state          # paper_bot.jsonl, paper_manual.jsonl
+  replay_dir: data/replay
 
 risk:                    # APPROVED (owner, 11 Nov 2026)
   per_trade_max_loss_pct:
@@ -126,7 +191,11 @@ recorder:                # M2 — what to record and how (SPEC §3 L1); not risk
   clock_ahead_tolerance_s: 1
   depth: true
   vix_symbol: {upstox: "NSE_INDEX|India VIX", fyers: "NSE:INDIAVIX-INDEX"}
-  extra_symbols: []           # e.g. Nifty constituents for L9 (M9)
+  extra_symbols: []           # any further broker keys to record all day
+  constituents:               # SPEC L9: heavyweights' prices for index dispersion and breadth
+    index: NIFTY
+    top_n: 8                  # largest by weight (weights UNVERIFIED until checked)
+    file: config/reference/nifty50_constituents.csv
   band:
     min_strikes_each_side: 25 # QC requirement (SPEC: max(±25 strikes, ±3σ))
     buffer_strikes: 2         # selected beyond the minimum so drift between re-centres keeps ±25

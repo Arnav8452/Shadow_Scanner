@@ -4,6 +4,392 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Option chain, F&O screener, context at entry, and outage handling (12 Nov 2026, afternoon)
+
+The owner compared the page with Sensibull's option chain and screener and asked for the data and analysis that give an edge. They want to see which signals and conditions contributed to a position, and to know what happens when Wi-Fi drops.
+
+**Option chain tab** (`engine/cockpit/chain.py`; LTP, Greeks and All-columns views, per-unit or per-lot):
+- **Source:** the recorder's 1-minute snapshots for the nearest 2–3 recorded expiries. Each expiry uses its own synthetic forward.
+- **Our own maths:** IV and greeks from each strike's mid. Also intrinsic and time value, breakeven for a buyer at the ask, and POP from a lognormal with the strike's IV (a model number).
+- **OI and summary:** OI change vs the previous session's NSE bhavcopy (Sensex is BSE, so it has none), per-strike PCR, PCR by OI and by volume, and max pain.
+- **Delivery:** chains go to the page only on request and only when they change (once a minute). They no longer ride in every snapshot.
+- **Spot check against Sensibull (25250 CE, 17 Nov):** delta 0.50 vs 0.49, theta −19.8 vs −19, vega 11.6 vs 12, POP 34% vs 35%. IV is 16.6 vs 16.0 because the forward method differs.
+
+**Screener tab** (`engine/cockpit/screener.py`, all ~220 F&O underlyings, end of day):
+- **Columns:** futures price and change, our ATM IV (tier C, from closes) with its change and percentile over up to 252 cached sessions, volume vs the 20-session average, futures OI change and the price/OI quadrant, near-expiry PCR and max pain, results dates from the calendar, and the ban list.
+- **Live rows:** Nifty and Sensex are shown intraday from the engine.
+- **Flags** (HYPOTHESES for attention, not signals):
+  - rich premium (IVP ≥ 70 and no results within 7 days) → 5.1 candidate;
+  - cheap options (IVP ≤ 25);
+  - results within 10 days;
+  - volume ≥ 2×;
+  - ban.
+- **Cache:** per-session summaries in `data/state/screener/` (`tasks.py screener-history` built 252 sessions in about 15 minutes; the nightly `eod` adds each day).
+- **Stock IV:** main's `atm_iv_for_day` reads index options only, so stock rows are relabelled before the call instead of editing that file. The equity branch has the same function with an `instruments` parameter and a `stock_iv.parquet`. After its merge, switch the screener to those.
+- **Agrees with Sensibull** on today's percentiles: Nifty 75 (live) / 84 (EOD) vs 76; Bank Nifty 76 vs 75.
+
+**Context at entry** (`CockpitCore.market_context`):
+- **What is recorded:** with every paper trade (directional, manual, condor) and every signal-study row:
+  - time of day, IV and IVP, VIX, PCR, dealer gamma, skew;
+  - distance to the OI walls and max pain;
+  - position against the opening range and the previous day's range;
+  - heavyweight breadth and correlation;
+  - confirmed setups in the last 30 minutes;
+  - the event window.
+- **Where it shows:** Research has a new panel that splits paper-trade net and signal hit-rate by each condition, including breadth with or against the trade's direction, with t-stats and a multiple-comparisons warning. It is empty until trades accumulate (from 12 Nov).
+
+**Outages** (RUNBOOK, "If the internet drops"):
+- **Shadow engine:** gained a 60-s silence watchdog, like the recorder's.
+- **Cockpit:** now applies the approved `execution.disconnect_kill_after_s: 10`. Without a fresh quote in market hours, new paper entries freeze and exits pause; nothing is closed on stale prices, and both resume on the first fresh quote.
+- **Nightly EOD:** catches up on the last 7 days.
+- **Page token:** persists across gateway restarts. Until now, every restart left open pages "offline" until reloaded, which is what the owner saw.
+
+**Open:**
+- An intraday stock screener would need stock option chains during the session (Upstox's REST option chain with our own IV, within its rate limits). Not built.
+- The screener's volume ratio includes expiry days in the 20-day average.
+- The page's extra feed slots are not restored after an engine restart.
+
+---
+
+## Desk for people, confirmed setups, and SPEC 5.1 condor / credit spreads on paper (12 Nov 2026, afternoon)
+
+The owner's review of the page:
+- Data was hidden.
+- The depth view was unusable.
+- Only contracts in the scanner could be opened.
+- Scores jumped every tick, like a scalping bot.
+
+The intended use is waiting for confirmation, entering, and holding until the strategy's own conditions say to exit.
+
+**Built:**
+- **Setups** (`engine/cockpit/setups.py`, `cockpit.setups`, HYPOTHESIS):
+  - Each order-flow reading (75+, 5-s hold) on any contract becomes a view on the index.
+  - Readings for one index and direction form a setup, which is FORMING first.
+  - It becomes CONFIRMED only after the index moves 0.05% its way and holds there for 60 s, within 10 minutes.
+  - It FAILS on an opposite reading, a 0.08% move against it, or the time running out. It ENDS when it gives back the whole move, when an opposite setup is confirmed, or after 60 minutes.
+  - The journal (`setups.jsonl`) restores the day's setups after a restart.
+  - **Directional 5.2 now enters only on a confirmed setup**, not on a reading. Confirmed setups also go into the signal study as `SETUP_CONFIRMED`.
+- **§5.1 condor / credit spreads** (`engine/cockpit/condor.py`, `cockpit.condor`, paper only, HYPOTHESIS):
+  - Entry checklist, evaluated each minute and shown as ✓ / ✗ on the page:
+    - window 10:00–14:30, one structure a day;
+    - expiry at least 2 days away;
+    - no RBI MPC, Budget or election event, and no results cluster of 10%+ index weight, before the planned exit;
+    - IV percentile ≥ 50;
+    - not inside an event window.
+  - **Order-flow veto**, from confirmed setups in the last 30 minutes:
+    - none → iron condor;
+    - UP only → bull put spread;
+    - DOWN only → bear call spread;
+    - both directions → no trade;
+    - a setup still forming → wait.
+  - **Strikes:** shorts at about 0.16 delta, from our own IV for each strike in the 1-minute chain. The wing width is the widest of 200 / 150 / 100 whose worst case fits the ₹10,000 per-trade limit, and the credit must be at least 10% of the width.
+  - **Feed and fills:** the legs are pinned into the live feed. The structure trades only once all of them have books. Wings are bought before shorts are sold (`sequence_entry_legs` guards it); a failed short unwinds the filled legs. On exit, shorts are bought back first.
+  - **Exits:**
+    - take profit at 50% of the credit;
+    - stop when the cost to close reaches 2× the credit;
+    - the index touches a short strike;
+    - a confirmed setup toward a short strike with the index within 0.5% of it;
+    - 15:00 on the trading day before expiry.
+  - It is held overnight; the journal `paper_condor.jsonl` restores it and re-pins its legs.
+  - Margin: SPAN is not modelled. The worst-case loss is used as the margin proxy (UNVERIFIED).
+- **Feed pins** (`ShadowLiveRunner.pin`): contracts added on demand, either by the page (up to 3) or by a strategy's legs. They displace the farthest auto-selected options and stay within the 50-key cap.
+- **Page (Desk):**
+  - Index cards are always shown, with a one-line option. Nothing is behind a Details button.
+  - A setups list with progress toward confirmation.
+  - The scanner shows OI, ΔOI, IV, Δ and a 1-minute average score, re-sorted every 30 s.
+  - The instrument panel has a search box for any contract in the master. Contracts outside the feed are added to it.
+  - **Market depth tab:** 30 levels with cumulative size and walls (≥ 3× the median) highlighted, spread, micro-price, top-5 and all-level imbalance, the largest bid and ask, and a 30-minute price line.
+  - **Analytics tab:** greeks from the contract's own mid, the day's OHLC, OI and ΔOI, and the reading as four pillar bars with plain-language explanations.
+  - **Option chain tab:** OI, ΔOI, IV, Δ, bid and ask per strike, with walls, ATM, in-the-money and condor legs marked. Clicking a cell opens that contract. The smile is shown below.
+  - Strategy tabs: Condor (5.1) first, then Directional (5.2), Manual, Signal study and Events.
+- **Bugs found live and fixed:**
+  - Upstox `full_d30` sends no order count per level (None), which broke the snapshot.
+  - Pinned legs counted as "options subscribed", so after a restart the auto strikes waited 5 minutes.
+  - The put side of the chain table was mirrored.
+
+**First live use (12 Nov, 13:00):** about a minute after start the checklist passed (IV percentile 74–75, no event before the exit on 16 Nov 15:00, quiet tape). It paper-traded an iron condor: 24650/24800 PE and 25800/25950 CE, 150-point wings, credit 32.7 pts (₹2,126), worst case ₹7,625. This is one paper trade, not evidence.
+
+**Open:**
+- The adjustments in SPEC 5.1 (rolling the untested side, converting to an iron fly) are not built. The strategy exits instead.
+- Term-structure and skew-spike filters are not checked; only one expiry is watched.
+- GEX is shown for information only.
+- The condor's numbers are SPEC priors, not fitted.
+- The paper record needs 20+ sessions before anything is concluded.
+
+---
+
+## Re-scope: order flow confirms and times trades; it no longer scalps (12 Nov 2026, owner approved)
+
+**What was built:**
+- **Bot scalping is off.** `cockpit.bot.enabled: false`. The bot no longer follows Track A episodes or exits when the book flips.
+- **SPEC §5.2 directional on the Bot account** (`cockpit.directional`, HYPOTHESIS rules, paper only):
+  - Entry: the first confirmed (5-s hold) order-flow reading scoring at least 80 between 09:30 and 14:00 buys 1 lot of the ATM call (index up) or ATM put (index down). The rule allows one idea per index per day, never flips direction, takes at most 2 entries, and skips any index already held.
+  - Exits: premium stop −10%, target +30%, a trailing stop (at +15% it locks +7%; at +25% it locks +12%) and the 15:20 square-off. The stop only rises.
+  - `PaperPosition` gained `target_price` and `trail`, and the journal restores both after a restart.
+- **Track A is now a signal study** (`engine/cockpit/study.py`, journal `data/state/signal_study.jsonl`). For every confirmed reading it records the underlying and the ATM option (bought at the ask) at the signal, at +15, +30 and +60 minutes, and at the close. The option result is net of full round-trip charges. A horizon that falls after square-off is marked skipped. Nothing is traded.
+- **Page changes:**
+  - The scanner shows what each reading says about the index (for example "NIFTY ↓" for a bid-heavy put) and its setup. The Entry/SL/T1 columns, the A tags, the chart's level lines and the ladder marks are gone.
+  - The Bot tab is now "Directional (B)", with the rules on hover. Positions show the target and a ↑ when the trailing stop has locked a gain.
+  - "Signal study (A)" shows today's horizon table and each signal's result.
+- **Research:** new panels show the study by score band, index and direction, setup, and hour, with hit %, n, t-stat of the mean move and the ATM-option average after charges (`/api/research/study`). The old ledger is kept as "Micro ledger (legacy scalp exits)" for comparison only.
+
+**Decisions:**
+- The micro levels still exist inside the scanner (it needs them to close episodes and write the legacy ledger). They are no longer shown or traded as trade levels.
+- The study counts every confirmed episode (score 75+, 5-s hold, one per symbol/direction/setup per cool-down), so the 75–80, 80–90 and 90+ bands can be compared. Every band, horizon or setup looked at counts as a trial. Nothing is called an edge without t ≈ 3 over 20–30 sessions.
+
+**Open:**
+- §5.1 condor / credit spread with an order-flow veto, which needs a multi-leg, hedge-first paper account.
+- §5.10 gamma breakout.
+- Hedging: wings and the NIFTYBEES trend sleeve, in the equity session's scope.
+- The directional numbers (score 80, −10%, +30%, trail steps) are priors from SPEC §5.2 and the Log-3 study, not fitted values.
+
+---
+
+## First live session (12 Nov 2026, from 11:22 IST)
+
+**5-minute tests, run together:**
+- **Recorder:** QC PASS. 233,006 messages, 419 contracts, 0 gaps, 0 reconnects, nothing dropped; recv−exchange latency median 0.10 s, p99 0.52 s; strike coverage ±27–45; all 8 heavyweights in each 1-minute snapshot.
+- **Shadow engine:**
+  - 40,172 30-level books (42 contracts), 89% with all 30 levels (average 27), which confirms Upstox Plus `full_d30` in market hours;
+  - 17,053 previous-day levels from last night's NSE files;
+  - 2 Track A episodes, both closed within minutes on an OBI flip, both net losers after costs.
+- **Cockpit:** live on real data: forward, own ATM IV (Nifty ~16.3%), smile (fit error under 0.3 vol points), walls, PCR, GEX, breadth.
+
+**Full-day runs** were started at 11:27 in the Terminal panel (recorder, shadow-live, cockpit). The morning before 11:22 was not recorded, so today's QC will fail on coverage. That's expected; M2 acceptance counts from the first full session.
+
+**Cockpit usability fixes (owner feedback, 12 Nov, live):**
+- **Problems observed at 1024×768:**
+  - The page was 1,687 px tall (paper and events off-screen).
+  - The top scanner row changed 9 times in 10 s, and raw scores jumped 43→60→53 between updates (step thresholds on noisy inputs).
+  - Rows rebuilt 5×/s swallowed clicks.
+- **Fixed on the page:**
+  - One screen with no page scroll. Owner's layout: market depth full height on the right; on the left, compact market lines (details behind a toggle), a wide scanner, and paper below it.
+  - The scanner shows each contract's 30-s high score with a 30-s average mark (raw score on hover). It re-sorts at most every 5 s and never while the mouse is over it, with a fixed "By contract" order available.
+  - Selection and close buttons act on press.
+  - The paper panel is only rebuilt when it changes, and keeps its scroll position.
+  - Signal levels are marked once on the ladder.
+  - Measured after the fix: 2 order changes in 12 s, each at a re-sort tick.
+- **Engine (takes effect at the next engine start, i.e. 13 Nov 08:46):** `shadow_scanner.signal_confirm_s: 5` (HYPOTHESIS). A 75+ grade must hold in the same direction for 5 s before Track A tracks it, the bot can take it, or it counts as an episode or alert. Today's ledger stays on the old definition, so 12 Nov Track A results are not comparable with later days.
+- **Noted:** Sensex (BSE) options arrive with 5 depth levels on the `full_d30` connection; Nifty contracts get 30.
+- **Revised on owner feedback the same day:** the one-screen clamp was wrong; the owner wants a scrolling page with adjustable panels.
+  - The page scrolls again and the Research tab is back to its original layout.
+  - Drag handles set the depth panel's width and the scanner and paper panels' heights (double-click resets). Sizes are remembered per browser.
+  - The depth panel stays in view while scrolling.
+  - On first load, the depth panel narrows if the scanner would need a sideways scroll.
+
+**Why Track A lost money today (34 episodes to 11:56):**
+- Gross +₹275, charges ₹3,427, net −₹3,152.
+- Median target (T1) distance was 2.08 points against 1.59 points of round-trip charges per unit, with a median hold of 14 s.
+- The signals were about flat before costs: target hits +₹1,131 against stop hits −₹1,186.
+- The order-flow PDF's own viability rule (average edge ≥ 2× round-trip cost) fails by construction for these 2-point scalps on ₹100–400 options.
+
+Proposed: a cost hurdle, so only signals whose T1 distance is at least 2× the round-trip cost per unit count as tradeable. Superseded by the owner's direction below.
+
+**Owner direction (12 Nov): no scalping.** The system is for options strategies (iron condor, spreads), swing trades, equity, event-driven cash and hedging. Order flow was never meant to be a scalper or to compete on speed. The scanner's micro levels (stop 1–2 ticks behind a wall, targets about 2 points, OBI-flip exits, 14-s median hold) are a scalping design and do not match that intent. A re-scope plan was proposed to the owner (order flow as a confirmation and timing input to the playbook strategies; Track A measured over 15/30/60-minute and close horizons).
+
+**Page:** the Details button is now static (it was rebuilt 5×/s and missed clicks). The Research tab gained a column control (1/2/3), per-panel height handles, full width on double-clicking a title, and Reset; it remembers its layout per browser.
+
+**Scheduler registered (owner approved, 12 Nov):**
+
+| Task | When | Command |
+|---|---|---|
+| `QuantEngine-Recorder` | weekdays 08:45 | `record SEND=1` |
+| `QuantEngine-ShadowLive` | weekdays 08:46 | `shadow-live SEND=1` |
+| `QuantEngine-Cockpit` | weekdays 08:45 | `cockpit OPEN=0` (restarts up to 5 times) |
+| `QuantEngine-EOD` | weekdays 20:00 | `eod`, then `iv-history` |
+
+The tasks run while the owner's Windows account is logged in (the screen may be locked). Recorder and engine exit by themselves on holidays and after 15:45.
+
+---
+
+## Layers from the "retail access to hedge-fund data" review (12 Nov 2026)
+
+`data/private/retail access to hedge fund data.pdf` is the Gemini conversation SPEC was built from. Most of its recommendations were already in place:
+- bid/ask with quantities;
+- the ±3σ / ±25-strike band;
+- our own IV on the synthetic forward;
+- the variance-time clock;
+- expiry-day margin rules;
+- hedge-first leg sequencing;
+- vanna and charm in `greeks.py`.
+
+**Corrections to the PDF:**
+- Exercise STT is 0.15% from 1 Apr 2026, the same as STT on a sale. The PDF's 0.125% is outdated, so the "square off vs let expire" saving is mostly gone.
+- Upstox Plus gives 30 levels of depth, not 5 or 20.
+- Index options need no dividend table, because the parity forward prices in expected dividends.
+
+**Built:**
+1. **OI timing** (`scanner.oi_window`). OI history is recorded only when OI changes, with the price at that instant, and build-up compares updates about 3 minutes apart (never less than 2). Also fixed: the old "3-minute" comparison actually used the 120th-previous quote, which was seconds apart on an active future.
+2. **Constituents and dispersion** (SPEC L9).
+   - `config/reference/nifty50_constituents.csv` holds all 50 members and ISINs from NSE's `ind_nifty50list.csv` (primary, 11 Nov 2026).
+   - The 12 weights carried over from code have no source, so they are `weight_status = UNVERIFIED`.
+   - The recorder now records the top 8 by weight all day (`recorder.constituents`), starting at its next start.
+   - The cockpit's chain worker computes weight-adjusted breadth and the weighted average 60-minute realized correlation of 1-minute returns. Breadth feeds the scanner's `breadth_aligned` for Nifty spot and futures (|breadth| ≥ 25% in the index's direction).
+   - The simulator now quotes equities (beta 0.8 to the market plus noise) for dry runs.
+3. **Macro calendar.** `config/events/macro_calendar.csv` lists events with source and status:
+   - RBI MPC dates from RBI PR 2025-2026/2306;
+   - Fed meetings from federalreserve.gov (updated 28 Oct 2026);
+   - US CPI from bls.gov;
+   - India CPI from the MoSPI advance release calendar;
+   - the 2027 Budget and the 14 Dec India CPI date marked UNVERIFIED.
+
+   Release times not stated by the issuer use convention (RBI 10:00 IST; Fed 14:00 ET converted with US daylight time). New paper entries are refused inside an event window (`cockpit.block_entries_in_event_window`). The cockpit shows the next events.
+4. **EOD flows.**
+   - `participant_vol` (dated) was added to `tasks.py eod`.
+   - The current-only `fo_ban`, `bulk` and `block` files are saved each evening under the date written inside them (`engine/data/eod/flows.py`).
+   - The FII-stats and MWPL files are legacy `.xls` and were skipped, and cash-market FII/DII is only on NSE's site API. Participant OI and volume cover derivatives positioning.
+5. **SVI smile and position Greeks** (`engine/analytics/svi.py`).
+   - The SVI fit is pure Python: multi-start Nelder–Mead with the positive-variance and Lee wing constraints.
+   - Error: 0.001 vol points on a clean smile, 0.11 with noise; 0.06 s per fit.
+   - It is fitted each minute to OTM IVs; the cockpit shows the smile, ATM IV, 98/102 skew and fit error.
+   - Open paper positions show IV, delta, gamma, theta, vega, vanna and charm from our forward and IV.
+
+**Not built, with reasons:**
+- Alternative-data scrapers (Vahan, RERA, DGFT, POSOCO, FASTag): fundamental/swing data that no strategy uses yet.
+- Broker OTM strike blocks: broker-specific, a Mode B concern.
+- Paid vendors: we record our own data.
+- Screener.in, Sensibull and similar: products with no public API; we compute the derivatives analytics ourselves.
+
+**Open**
+- Check the 12 index weights against the NSE Indices factsheet.
+- Add constituent results dates as companies announce them.
+- Implied correlation needs the heavyweights' ATM option IVs (more recorder keys).
+
+---
+
+## Cockpit: live local page, three paper tracks, replay (11 Nov 2026)
+
+**Built (`engine/cockpit/`)**
+- **Engine publisher.** `shadow-live` publishes a snapshot 5 times a second over an authenticated loopback socket (port 8766) and takes paper orders back. Every cockpit hook is guarded, so an error there cannot stop 30-level recording.
+- **Gateway.** `tasks.py cockpit` serves http://127.0.0.1:8765 over a WebSocket.
+  - Security: loopback only; a per-start token on the WebSocket and every API call; `Host` and `Origin` checks.
+  - It holds no trading state, so restarting it never affects recording or paper trading.
+- **Replay.** `tasks.py replay` runs the same engine on a recorded day at 1–50× or max speed, with its own state and journals under `data/replay/`. The gateway starts it at below-normal priority.
+- **Three paper tracks.**
+  - Track A, the scanner ledger: unconstrained; option shorts are now tracked and tagged not tradable.
+  - Track B, bot: A+ signals only (score ≥ 80) → long ATM option, risk gate, paper stop 25% of premium (HYPOTHESIS), exits when the episode closes.
+  - Track C, manual: the page's ticket, through the same risk gate.
+  - Journals: `data/state/paper_{bot,manual}.jsonl`; open positions are restored on restart.
+- **Market strip.** Each second: forward, our ATM IV and its percentile, VIX. Each minute, on its own DuckDB connection: walls, PCR, GEX (HYPOTHESIS).
+- **Research tab.** Track A by score band, setup, hour and exit; paper history by day; IV chart; QC verdicts; mining reports.
+
+**Fixed in browser testing (12 Nov):**
+- **Max-speed replay froze the page.** The engine drained up to 50,000 events before publishing; with the cockpit on it now publishes between batches of 2,000. The old loop also dropped one event whenever it hit the cap.
+- **Snapshot timing.** It used the engine clock, which stands still in a replay's quiet stretches; it now uses the wall clock (data times stay on the engine clock).
+- **Long silences in a replay.** Silences over 60 s play as one second.
+- **Stale replay state.** A new replay no longer shows the previous one's last state.
+- **Layout.** Below 1,500 px the layout is two columns, and the scanner has fewer columns.
+
+**Fixed:** with live Upstox keys (`NSE_FO|…`), the scanner used a symbol regex to tell options from futures and found none. Options were charged as futures, and option shorts went undetected. The contract type now comes from the instrument master.
+
+**Open**
+- `aiohttp` is held at 3.9.3 by the Fyers extra's pin. Its known issues don't apply to a loopback-only server that serves no static files.
+- V2 `order_flow_bots` still uses the regex; it refuses Upstox options, which is the safe direction.
+
+
+
+---
+
+## Shadow paper ledger: four gaps closed (11 Nov 2026)
+
+1. **Open trades at the close.** Paper trades still open at `paper_square_off_at` (15:20) are closed at the book with status `SQUARED_OFF_EOD`. So is anything open when the run ends early (a 5-minute test, a feed stop). Untriggered signals are dropped at `paper_no_new_entries_after` (15:00), and no new paper entries start after it.
+2. **Naked option shorts.** A 75+ SHORT signal on an option contract is scored and shown but not paper-traded (rule 1); futures shorts and long options still are. Skips are counted in `ledger_summary()["not_paper_traded"]` and shown on the dashboard.
+3. **Fills.**
+   - Entries and exits walk the visible book level by level for the whole quantity.
+   - Quantity beyond the book is priced at the last level and flagged `thin_book`.
+   - Each trade records `slippage_inr` (vs mid, both sides) and `net_pnl_2x_slippage_inr` (net with slippage doubled); the dashboard shows the 2× total.
+4. **Brokerage plan.** `shadow_scanner.cost_broker: upstox_plus` (config). New `brokerage.csv` rows, `secondary`, from https://upstox.com/plus/ on 11 Nov 2026:
+   - Upstox Plus options ₹30 per order;
+   - Upstox Plus futures ₹30 or 0.05%, whichever is lower.
+
+   The rows start on the verification date because the plan's start date was not researched.
+
+**Corrected:** the standard Upstox futures rate was entered as 0.03%; Upstox's page says "₹20 or 0.05%, whichever is lower". The ₹20 cap binds for any index futures lot, so past figures don't change.
+
+**Open:** whether Upstox Plus has a subscription fee (the page states none). Fills still assume our order doesn't move the book after it fills.
+
+---
+
+## Shadow scanner: previous-day levels from NSE EOD files (11 Nov 2026)
+
+- **Why:** `previous_day_levels` read only our own recordings, so on the first live day (and for contracts the recorder did not watch) the scanner had no previous high, low or close.
+- **Built:** `eod_previous_day_levels`, which reads yesterday's levels from NSE's `ind_close_all` (index spots, India VIX) and the F&O bhavcopy (futures and options, matched on underlying, expiry, strike and type).
+  - `run_shadow_day` fills only the symbols the recordings lack; recordings still come first.
+  - It downloads a missing file, but never before 19:30 IST on that day.
+  - Untraded contracts (zero high/low) are skipped.
+- **Checked on the 11 Nov 2026 files:** 17,053 contracts matched, including Nifty spot, VIX, Nifty futures and every near-ATM weekly option.
+- **Open:** BSE (Sensex) contracts are not in NSE files, so Sensex levels still need a recorded day or the BSE bhavcopy.
+
+---
+
+## M1 trade mining: PDF parser on word positions; all three logs reconcile (11 Nov 2026)
+
+**Built**
+- `engine/trade_mining/pdf_report.py` reads the Trade History PDFs with `pdfplumber` word coordinates. pdfplumber is the optional `mining` extra (`uv sync --extra mining`). Each column starts at a fixed x, and each trade is the block between its entry and exit time cells.
+- **Layout cases handled:**
+  - the contract printed by the exit time;
+  - a charge wrapped onto two lines;
+  - a day continuing onto the next page without a repeated header;
+  - Daily Net headers that are `(Legal)` or multi-account.
+- `engine/trade_mining/diagnostics.py` writes the §9.3–9.4 report.
+- `tasks.py mine-log FILE=<pdf> LABEL=log1` writes `data/private/mined/<LABEL>.md` and `<LABEL>_fills.csv`. Outputs are named by LABEL only, because the PDF file names contain the traders' names.
+
+**Result (M1 acceptance):** every row passes `(exit − entry) × qty × side = gross` and every day's Σ net matches its Daily Net (worst gap ₹0.01).
+
+| Log | Fills | Days | Net | SPEC §9.5 |
+|---|---:|---:|---:|---|
+| 1 | 1,261 | 63 | ₹1,45,647.52 | 1,261 fills, ₹1,45,648, gross ₹4.09L ✓ |
+| 2 | 60 | 12 | ₹38,068.97 | 60 fills, ₹38,069 ✓ |
+| 3 | 23 | 10 | ₹23,327.83 | 23 fills, ₹23,328, PF 2.37 ✓ |
+
+Style checks:
+- Log 2: ₹39.8k from 09:15–09:30 entries and a 1.2-min median hold (§5.3 ✓).
+- Log 3: entries after 14:00 lost ₹5.3k; Sensex options only (§5.2 ✓).
+- Log 1: charges were 64% of gross; ADANIENT futures +₹2.88L while long options lost.
+- Self-review runs on the demo journal.
+
+**Decisions and fixes**
+- **SPEC §9.2 was outdated.** The installed `pdftotext` (xpdf 4.00) drops the ₹ sign, so the text parser found 0 trades. Text mode also misplaces cells. SPEC now names the word-position parser; the text parser is kept for `.txt` input.
+- **Fixed:** `ValidationReport.passed` was true for a report with 0 trades. It is now false.
+- **Fixed:** the slippage stress added ticks on one side only. SPEC says per side, so it now charges entry and exit.
+- **Privacy:**
+  - only the 4-digit account suffix is read from rows, and it is hashed;
+  - full account IDs in headers are never stored;
+  - test fixtures are synthetic.
+- **Charges column:** the logs' charges are the firm's own model, not exchange contract notes. They are not golden tests for our cost model.
+
+**Open**
+- The revenge-trading figure (SPEC: ~₹97k lost) used a different window than our 15-min one, which shows +₹45.5k for Log 1. Pick one definition.
+- `log3_entry_features` (§5.2) needs 1-min index candles at each entry time.
+- The slippage stress uses a ₹0.05 tick for every instrument; the futures tick is UNVERIFIED.
+
+---
+
+## Review of the entry below (11 Nov 2026, late)
+
+- **2025 holidays:** all 14 dates checked against the NSE/CMTR/65587 PDF; they match, and the `primary` status in `holidays.csv` is right. The circular also announces a Muhurat session on Tue 21 Oct 2025 (a holiday weekday); not modelled, and normal-hours data is unaffected. The IV history was rebuilt: 0 rows now use the approximate clock.
+- **Corrected: T-bill rate.** One July 2026 auction yield had been marked `secondary` from 1 Jan 2025. It is now split:
+  - `secondary` from the 29 Jul 2026 auction;
+  - an UNVERIFIED placeholder for 2025-01-01 to 2026-07-29, because actual yields then differed.
+
+  The source URL is still the RBI homepage; link the press release itself.
+- **`depth30` replay gap (fixed):** previously, a symbol with *any* `depth30` rows that day lost its 5-level book for the whole day even after rotating out of the scanner's 5-minute watchlist. `recorded_events` (`_in_d30_window`, `depth30_hold_s=60.0`) now suppresses 5-level `quotes` depth only while the symbol is inside an active `depth30` window and falls back to the 5-level `quotes` book before the symbol enters or after it leaves the 30-level watchlist.
+
+---
+
+## 15:40 session close in CLAUDE.md/SPEC, 2025 NSE holidays, verified 91-day T-bill rate, and `depth30` in event replay (11 Nov 2026)
+
+1. **`15:30` → `15:40` F&O session close updated in `CLAUDE.md` and `docs/SPEC.md`:**
+   - Approved by owner. Both files now specify trading-minute time to session close (`15:30` before 3 Aug 2026, `15:40` from 3 Aug 2026 per `NSE/FAOP/74467` in `config/rules/market_sessions.csv`).
+2. **2025 NSE trading holidays loaded (`config/rules/holidays.csv`):**
+   - Added all 14 weekday trading holidays from `NSE/CMTR/65587` (12 Dec 2024) for 2025 (`secondary`). 2025 IV rows now use the exact `TradingCalendar` clock (`approx=False`).
+3. **91-day T-bill rate verified against RBI Press Release `2026-2027/777` (`config/rules/risk_free_rate.csv`):**
+   - Confirmed the 29 Jul 2026 auction cut-off yield of `5.3402%` (cut-off price ₹98.6861, WAY `5.3266%`) from RBI auction records (`https://www.rbi.org.in`, status `secondary`).
+4. **30-level depth (`depth30`) wired into event replay (`engine/data/store.py`, `engine/backtest/event_replay.py`):**
+   - Added `Store.depth30(...)` and updated `recorded_events(...)` (`include_depth30=True` by default) to merge 30-level depth snapshots from `depth30` in `(recv_ns, seq)` order, superseding 5-level `quotes` depth for symbols covered by `depth30`. Covered by `test_recorded_depth30_supersedes_5_level_book_and_walks_deep_levels`.
+
+---
+
 ## Owner decisions on base risk numbers, sleeve budgets, disconnect kill switch & Git commit (11 Nov 2026)
 
 1. **Base risk numbers in `config/settings.yaml` APPROVED:**

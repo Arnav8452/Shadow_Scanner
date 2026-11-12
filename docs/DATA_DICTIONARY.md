@@ -87,6 +87,35 @@ One row per trade date and underlying:
 
 Rebuilt by `tasks.py iv-history`.
 
+### EOD flows — `data/raw/eod/{participant_vol,fo_ban,bulk,block}/<YYYY>/<date>.csv`
+
+- `participant_vol`: dated NSE file, same columns as `participant_oi` (contracts by FII/DII/Pro/Client).
+- `fo_ban`, `bulk`, `block`: NSE keeps only the current file, so `tasks.py eod` (no DATE) saves them each evening under the date written inside the file. For the ban list that is the trade date the ban applies to (the next session). A `.meta.json` holds the URL, fetch time and SHA-256.
+
+### Reference and event tables
+
+- `config/reference/nifty50_constituents.csv`:
+  - columns `index, symbol, company, industry, isin, weight_pct, weight_status, effective_from, effective_to, source_url, verified_on, status, notes`;
+  - membership from NSE (primary); weights `UNVERIFIED` until checked;
+  - queries before `effective_from` return no members (no back-filled membership).
+- `config/events/macro_calendar.csv`:
+  - columns `date, time_ist, category, title, symbol, index_weight_pct, duration_min, pre_blackout_min, post_blackout_min, source_url, verified_on, status, notes`;
+  - categories: `RBI_MPC`, `UNION_BUDGET`, `INDIA_MACRO`, `US_MACRO`, `CONSTITUENT_EARNINGS`, `ELECTION_EXIT_POLL`;
+  - `source_url` is required unless `UNVERIFIED`;
+  - the event window is `[time − pre, time + duration + post]`.
+
+### Mined reference logs (M1) — `data/private/mined/` (gitignored)
+
+Written by `tasks.py mine-log FILE=<pdf> LABEL=<label>`. File names come from LABEL, never from the PDF, and contain no names or account IDs.
+- `<label>_fills.csv`: one row per fill (`MinedTradeRow`).
+  - Contract and trade: date, entry and exit times, contract, side, qty, margin %, entry and exit prices.
+  - P&L: gross, net, `charges_inr` (gross − net), `stated_charges_inr` (the CHARGES column as printed).
+  - Excursions: `mfe_inr` and `mae_inr` (₹ for the whole quantity); `mfe_pts` and `mae_pts` (per unit).
+  - Orders: entry and exit order types; requested prices (`MKT` or a price).
+  - Flags, `breach_inr`, `qty_mismatch`, `is_live`.
+  - `account_anon`: a hash of the 4-digit account suffix.
+- `<label>.md`: reconciliation and the §9.3–9.4 diagnostics.
+
 ### Other M2 files
 
 - `data/raw/instruments/<broker>/<YYYY-MM-DD>/<segment>.csv.gz` + `.meta.json` — the broker contract file as downloaded, with `fetched_at` (known-at), URL and SHA-256.

@@ -199,3 +199,33 @@ class Store:
         if not self.has("recorder_events", day):
             return pa.table({})
         return self.query(f"SELECT * FROM {self.source_sql('recorder_events', day)} ORDER BY ts")
+
+    def depth30(
+        self,
+        day: date,
+        *,
+        as_of: datetime,
+        start: datetime | None = None,
+        symbols: Iterable[str] | None = None,
+        columns: str = "*",
+    ) -> pa.Table:
+        """30-level order-book snapshots recorded from Upstox ``full_d30``, ordered by (ts, seq)."""
+        if as_of.tzinfo is None:
+            raise ValueError("as_of must be timezone-aware")
+        if not self.has("depth30", day):
+            return pa.table({})
+        where = ["ts <= ?"]
+        params: list[Any] = [as_of]
+        if start is not None:
+            where.append("ts >= ?")
+            params.append(start)
+        if symbols is not None:
+            syms = list(symbols)
+            where.append(f"symbol IN ({', '.join('?' for _ in syms)})")
+            params += syms
+        sql = (
+            f"SELECT {columns} FROM {self.source_sql('depth30', day)} WHERE {' AND '.join(where)} "
+            "ORDER BY ts, seq"
+        )
+        return self.query(sql, params)
+

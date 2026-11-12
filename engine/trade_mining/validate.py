@@ -45,7 +45,8 @@ class ValidationReport:
 
     @property
     def passed(self) -> bool:
-        return not self.row_mismatches and not self.daily_net_mismatches
+        """A report with no parsed trades never passes (it usually means the layout changed)."""
+        return self.total_rows > 0 and not self.row_mismatches and not self.daily_net_mismatches
 
 
 def validate_parsed_report(

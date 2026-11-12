@@ -24,11 +24,12 @@ from engine.shadow.live import (
     WatchSpec,
     load_shadow_live_config,
     oi_walls,
+    eod_previous_day_levels,
     previous_day_levels,
     select_watchlist,
 )
 from engine.shadow.scanner import ShadowOrderBookScanner
-from tests.data.conftest import DAY, WEEKLY, opt_symbol
+from tests.data.conftest import DAY, MONTHLY, WEEKLY, build_master, ins, opt_symbol
 
 SESSION = MarketSession("NSE", "fo", DAY, time(9, 15), time(15, 40), time(9, 0), time(9, 8), True)
 CFG = ShadowLiveConfig(
@@ -214,3 +215,131 @@ def test_alerts_once_per_signal_and_labelled(
     assert len(alerts) == 2 and all(a.startswith("HYPOTHESIS") for a in alerts)
     assert runner.stats.evaluations == 8
     assert runner.stats.signals == 3
+
+
+def _write_eod(raw: Path, prev: date) -> None:
+    import io
+    import zipfile
+
+    idx = raw / "eod" / "indices" / "2026" / f"{prev.isoformat()}.csv"
+    idx.parent.mkdir(parents=True)
+    idx.write_text(
+        "Index Name,Index Date,Open Index Value,High Index Value,Low Index Value,"
+        "Closing Index Value\n"
+        f"Nifty 50,{prev:%d-%m-%Y},25000,25100.5,24900.25,25050\n"
+        f"India VIX,{prev:%d-%m-%Y},15,16.5,14.5,15.75\n",
+        encoding="utf-8",
+    )
+    header = "TradDt,TckrSymb,FinInstrmTp,XpryDt,StrkPric,OptnTp,OpnPric,HghPric,LwPric,ClsPric"
+    lines = [
+        header,
+        f"{prev},NIFTY,IDF,{MONTHLY},,,25100,25200,25000,25150",
+        f"{prev},NIFTY,IDO,{WEEKLY},25000.00,CE,100,120,80,110",
+        f"{prev},NIFTY,IDO,{WEEKLY},25000.00,PE,90,95,60,70",
+        f"{prev},NIFTY,IDO,{WEEKLY},25050.00,CE,0,0,0,95",  # untraded: no levels
+    ]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("fo.csv", "\n".join(lines))
+    fo = raw / "eod" / "fo" / "2026" / f"{prev.isoformat()}.csv.zip"
+    fo.parent.mkdir(parents=True)
+    fo.write_bytes(buf.getvalue())
+
+
+def test_previous_day_levels_from_nse_eod_files(tmp_path: Path) -> None:
+    prev = date(2026, 11, 10)
+    _write_eod(tmp_path, prev)
+    master = build_master(range(25000, 25100, 50))
+    bse = ins("BSE:SENSEX-INDEX", Kind.INDEX, underlying="SENSEX", exchange="BSE")
+    lv = eod_previous_day_levels(tmp_path, prev, [*master.all(), bse])
+    assert lv["NSE:NIFTY50-INDEX"] == (25100.5, 24900.25, 25050.0)
+    assert lv["NSE:INDIAVIX-INDEX"] == (16.5, 14.5, 15.75)
+    assert lv["NSE:NIFTY26NOVFUT"] == (25200.0, 25000.0, 25150.0)
+    assert lv[opt_symbol(WEEKLY, 25000, Kind.CALL)] == (120.0, 80.0, 110.0)
+    assert lv[opt_symbol(WEEKLY, 25000, Kind.PUT)] == (95.0, 60.0, 70.0)
+    assert opt_symbol(WEEKLY, 25050, Kind.CALL) not in lv  # zero high/low means untraded
+    assert opt_symbol(MONTHLY, 25000, Kind.CALL) not in lv  # different expiry
+    assert "BSE:SENSEX-INDEX" not in lv  # BSE is not in NSE files
+
+
+def test_eod_levels_never_downloaded_before_publication(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        calls.append(url)
+        raise OSError("offline")
+
+    prev = date(2026, 11, 10)
+    early = datetime(2026, 11, 10, 18, 0, tzinfo=IST)
+    assert eod_previous_day_levels(tmp_path, prev, [], now=early, fetcher=fetcher) == {}
+    assert calls == []
+    late = datetime(2026, 11, 11, 8, 0, tzinfo=IST)
+    assert eod_previous_day_levels(tmp_path, prev, [], now=late, fetcher=fetcher) == {}
+    assert len(calls) == 2  # fo and indices attempted, failures tolerated
+
+
+def test_pinned_contracts_join_the_feed_within_the_cap(
+    master: InstrumentMaster, rs: RecorderSettings, repo_root: Path, tmp_path: Path
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 11, 10, 0, 0, tzinfo=IST))
+    feed = SimFeed(master, clock, spots={"NIFTY": 25010.0}, max_symbols=50, depth_levels=30)
+    settings = load_settings(root=repo_root, environ={})
+    runner = ShadowLiveRunner(
+        CFG, rs, scanner=ShadowOrderBookScanner(settings.shadow_scanner, max_lots=1),
+        master=master, adapter=feed, clock=clock, session=SESSION,
+        depth_writer=DatasetWriter(tmp_path, "depth30", DEPTH30_SCHEMA), store=Store(tmp_path),
+        report_path=tmp_path / "d.html", ledger_file=tmp_path / "l.jsonl", feed_label="SIM",
+    )  # fmt: skip
+    far0 = opt_symbol(WEEKLY, 25600, Kind.PUT)
+    runner.pin("condor", [far0])  # a restored strategy leg, pinned before the spot is known
+    runner.start()
+    feed.pump()
+    runner.step(0)
+    assert len(runner.subscribed) == 12  # auto strikes still added once the spot arrives
+    assert far0 in runner.subscribed
+    far = [opt_symbol(WEEKLY, 25600, Kind.PUT), opt_symbol(WEEKLY, 24400, Kind.PUT)]
+    got = runner.pin("condor", [*far, "NOT-A-SYMBOL"])
+    assert got == far
+    assert all(s in runner.subscribed and s in feed.symbols for s in far)
+    assert len(runner.subscribed) == 12  # the farthest auto options made room
+    assert "NSE:NIFTY50-INDEX" in runner.subscribed  # the core is never displaced
+    # Another owner's pins are kept; the limit counts everyone's pins.
+    assert runner.pin("page", [opt_symbol(WEEKLY, 25700, Kind.CALL)], limit=3) == [
+        opt_symbol(WEEKLY, 25700, Kind.CALL)
+    ]
+    assert runner.pin("page", [opt_symbol(WEEKLY, 25750, Kind.CALL)] * 2, limit=2) == []
+    runner.pin("condor", [])
+    assert not any(s in runner.subscribed for s in far)
+    runner.finish()
+
+
+def test_silent_feed_is_restarted_in_market_hours_only(
+    master: InstrumentMaster, rs: RecorderSettings, repo_root: Path, tmp_path: Path
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 11, 10, 0, 0, tzinfo=IST))
+    feed = SimFeed(master, clock, spots={"NIFTY": 25010.0}, max_symbols=50, depth_levels=30)
+    settings = load_settings(root=repo_root, environ={})
+    runner = ShadowLiveRunner(
+        CFG, rs, scanner=ShadowOrderBookScanner(settings.shadow_scanner, max_lots=1),
+        master=master, adapter=feed, clock=clock, session=SESSION,
+        depth_writer=DatasetWriter(tmp_path, "depth30", DEPTH30_SCHEMA), store=Store(tmp_path),
+        report_path=tmp_path / "d.html", ledger_file=tmp_path / "l.jsonl", feed_label="SIM",
+    )  # fmt: skip
+    restarts: list[int] = []
+    feed.restart = lambda: restarts.append(1)  # type: ignore[method-assign]
+    runner.start()
+    feed.pump()
+    runner.step(0)
+    clock.advance(59)
+    runner.step(0)
+    assert not restarts
+    clock.advance(2)  # 61 s without a message (the sim only sends when pumped)
+    runner.step(0)
+    assert restarts == [1] and runner.watchdog_restarts == 1
+    clock.advance(30)
+    runner.step(0)
+    assert restarts == [1]  # waits a full period before trying again
+    clock.advance(6 * 3600)  # after the close a quiet feed is normal
+    runner.step(0)
+    assert restarts == [1]
+    runner.finish()
