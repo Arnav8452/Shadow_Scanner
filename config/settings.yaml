@@ -40,6 +40,12 @@ shadow_scanner:          # Version 1 ("Shadow Order Book") & Order-Flow Confluen
   stop_pool_band_min_pct: 0.15    # Stop-hunt sweep zone lower bound (%)
   stop_pool_band_max_pct: 0.40    # Stop-hunt sweep zone upper bound (%)
   sl_tick_buffer: 2               # Ticks behind structural wall / sweep extreme for SL
+  option_min_premium: 5           # options below this mid are not scored (HYPOTHESIS)
+  option_max_spread_pct: 10       # ...nor with a spread wider than this % of mid
+  option_min_ask: 0.25            # ...nor at the tick floor
+  min_location_pts: 5             # without a structural level the score is capped...
+  location_gate_cap: 60           # ...here (below the 65 watchlist line)
+  book_disagreement_factor: 0.5   # book pillar x0.5 when touch and top-5 imbalance disagree
   min_rr_t1: 1.5                  # Minimum Risk:Reward for Target 1
   min_rr_t2: 2.5                  # Minimum Risk:Reward for Target 2
   kelly_fraction: 0.25            # Quarter-Kelly multiplier
@@ -121,11 +127,18 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     underlyings: [NIFTY, SENSEX]
     morning_end: "13:30"
     first_entry: "13:45"
-    last_entry: "15:15"
+    last_entry: "14:30"           # SPEC 15:15 -> 14:30: settlement averages 15:00-15:30
     compression_pct: 0.45
     vol_mult: 1.8
     stop_pct: 30
-  user_pins_max: 3                # contracts the page may add to the 50-key live feed
+  user_pins_max: 3
+  readings_until: "15:15"         # no new readings/setups after this (normal days)
+  readings_until_expiry_day: "14:45"  # ...or after this for an index expiring today
+  reading_min_abs_delta: 0.15     # options outside 0.15-0.85 |delta| carry no reading
+  reading_max_abs_delta: 0.85
+  reading_min_time_value_pct: 5   # options with < 5% time value are settlement-locked
+  expiry_day_last_entry: "14:30"  # long options expiring today: no entries after this
+  expiry_day_exit: "14:50"        # ...and closed at this time                # contracts the page may add to the 50-key live feed
   manual_default_stop_pct: 25     # Track C ticket default; editable on the page
   key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
   journal_dir: data/state          # paper_bot.jsonl, paper_manual.jsonl

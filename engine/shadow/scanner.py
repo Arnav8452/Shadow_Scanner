@@ -155,6 +155,18 @@ def oi_window(
     return earlier, latest
 
 
+def book_disagrees(bids: Any, asks: Any, obi_l5: float) -> bool:
+    """True when the touch leans one way (micro-price vs mid) and the top-5 imbalance the other:
+    a passive wall a level or two away, not pressure at the touch (12 Nov 2026 review)."""
+    if not bids or not asks:
+        return False
+    (bp, bq, *_), (ap, aq, *_) = bids[0], asks[0]
+    if bq + aq <= 0 or ap <= bp:
+        return False
+    lean = (ap * bq + bp * aq) / (bq + aq) - (bp + ap) / 2
+    return abs(lean) > 1e-9 and abs(obi_l5) > 0.1 and (lean > 0) != (obi_l5 > 0)
+
+
 def _round_tick(price: float, tick: float) -> float:
     t = max(tick, 0.01)
     return round(round(price / t) * t, 2)
@@ -392,6 +404,8 @@ class ShadowOrderBookScanner:
         st = self.states.get(symbol)
         if st is None or st.ltp <= 0 or not st.bids or not st.asks:
             return None
+        if self.ineligible_reason(st) is not None:
+            return None
         ts = now or datetime.now(IST)
 
         book: BookMicrostructureSnapshot = analyze_book_microstructure(st.bids, st.asks)
@@ -442,8 +456,11 @@ class ShadowOrderBookScanner:
             direction = "LONG"
             struct_eval = sweep_long
 
-        # Check 3:00 PM - 3:40 PM IST Closing Auction Session (CAS) Institutional VWAP Reversal
-        in_cas_window = time(15, 0) <= ts.timetz().replace(tzinfo=None) <= time(15, 40)
+        # Check 3:00 PM - 3:40 PM IST Closing Auction Session (CAS) Institutional VWAP Reversal.
+        # NSE's closing auction is a cash-market session: index options and futures have none.
+        in_cas_window = bool(st.is_equity) and (
+            time(15, 0) <= ts.timetz().replace(tzinfo=None) <= time(15, 40)
+        )
         cas_bonus_pts = 0.0
         wave = SignalWave.STOP_HUNT_RECLAIM
 
@@ -479,6 +496,8 @@ class ShadowOrderBookScanner:
 
         # Pillar 3 (0-25 pts): Deep-Book OBI & L6-L25 Air-Pocket Vacuum
         p3_pts = mech.obi_air_pocket_score_pts
+        if book_disagrees(st.bids, st.asks, book.obi_l5):
+            p3_pts *= self.config.book_disagreement_factor
 
         # Pillar 4 (0-20 pts): Cross-Asset Derivative OI Buildup + GEX + Delivery + Breadth
         oi_buildup = self._evaluate_futures_oi(
@@ -507,6 +526,9 @@ class ShadowOrderBookScanner:
             cross_asset_derivative_pts=round(min(20.0, p4_pts), 2),
         )
         score = breakdown.total_score
+        location_gated = breakdown.structural_location_pts < self.config.min_location_pts
+        if location_gated:
+            score = min(score, self.config.location_gate_cap)
 
         if mech.anti_spoof.is_spoof_pull:
             grade = SignalGrade.NOISE
@@ -567,7 +589,8 @@ class ShadowOrderBookScanner:
             else book.underfoot_air_pocket_ratio
         )
         rationale = (
-            f"[{grade.value} {score:.1f}/100] {wave.value} ({direction}): "
+            ("[location gate: no structural level] " if location_gated else "")
+            + f"[{grade.value} {score:.1f}/100] {wave.value} ({direction}): "
             f"{struct_eval.description} | {mech.rationale} | {oi_buildup.interpretation}"
         )
 
@@ -615,6 +638,24 @@ class ShadowOrderBookScanner:
             self.watchlist_signals[symbol] = sig
 
         return sig
+
+    def ineligible_reason(self, st: InstrumentMicrostructureState) -> str | None:
+        """Why an option can not carry a reading (None if it can): no two-sided book, the
+        tick floor, a premium too small to trade, or a spread too wide for its price."""
+        if not st.is_option:
+            return None
+        if not st.bids or not st.asks or st.bids[0][0] <= 0:
+            return "no bid"
+        bid, ask = st.bids[0][0], st.asks[0][0]
+        c = self.config
+        if ask <= c.option_min_ask:
+            return "tick floor"
+        mid = (bid + ask) / 2
+        if mid < c.option_min_premium:
+            return "premium too small"
+        if (ask - bid) / mid * 100 > c.option_max_spread_pct:
+            return "spread too wide"
+        return None
 
     def _evaluate_futures_oi(
         self, st: InstrumentMicrostructureState, *, is_stop_hunt: bool

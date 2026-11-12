@@ -51,6 +51,9 @@ def build_cockpit(
     def is_option(sym: str) -> bool:
         return master.get(sym).kind.is_option if sym in master else False
 
+    def expiry_of(sym: str) -> date | None:
+        return master.get(sym).expiry if sym in master else None
+
     from engine.data.events.calendar_file import blackout_status, load_calendar
 
     events = load_calendar(ccfg.events_file)
@@ -78,6 +81,9 @@ def build_cockpit(
             is_option=is_option,
             journal=journal_dir / f"paper_{name}.jsonl",
             entry_block=event_block,
+            expiry_of=expiry_of,
+            expiry_day_last_entry=ccfg.expiry_day_last_entry,
+            expiry_day_exit=ccfg.expiry_day_exit,
         )
         restored = acct.load_journal(day)
         if restored:
@@ -151,6 +157,9 @@ def build_cockpit(
             is_option=is_option,
             journal=journal_dir / f"paper_{name}.jsonl",
             entry_block=event_block,
+            expiry_of=expiry_of,
+            expiry_day_last_entry=ccfg.expiry_day_last_entry,
+            expiry_day_exit=ccfg.expiry_day_exit,
         )
         acct.load_journal(day)
         setattr(core, f"{name}_acct", acct)

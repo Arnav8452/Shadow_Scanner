@@ -605,6 +605,8 @@ class ShadowLiveRunner:
         if sig is not None:
             self.last_eval[ev.symbol] = sig
             self._on_signal(sig)
+        else:  # not scored (e.g. a dead option): do not keep showing its old reading
+            self.last_eval.pop(ev.symbol, None)
 
     def _record_depth(self, d: Depth) -> None:
         ins = self.master.get(d.symbol) if d.symbol in self.master else None

@@ -47,6 +47,8 @@ class DebitConfig:
     square_off: str = "15:20"
     max_entries_per_day: int = 2
     book_wait_s: float = 60.0
+    expiry_day_exit: str = "14:50"
+    expiry_day_last_entry: str = "14:30"
 
 
 @dataclass
@@ -104,6 +106,8 @@ class DebitSpreadStrategy:
         if grid is None:
             return f"debit spread: no option chain for {und}"
         expiry, strikes = grid
+        if expiry == now.astimezone(IST).date() and hhmm >= c.expiry_day_last_entry:
+            return None
         atm_i = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
         far_i = atm_i + c.width_steps if bullish else atm_i - c.width_steps
         if not 0 <= far_i < len(strikes):
@@ -172,8 +176,11 @@ class DebitSpreadStrategy:
 
     def exit_reason(self, pos: Any, now: datetime, books: Mapping[str, Book]) -> str | None:
         c = self.cfg
-        if now.astimezone(IST).strftime("%H:%M") >= c.square_off:
+        hhmm = now.astimezone(IST).strftime("%H:%M")
+        if hhmm >= c.square_off:
             return "square-off"
+        if pos.expiry == now.astimezone(IST).date() and hhmm >= c.expiry_day_exit:
+            return f"expiry-day exit {c.expiry_day_exit}"
         ctc = cost_to_close(pos, books)
         if ctc is None:
             return None
@@ -210,7 +217,7 @@ class GammaConfig:
     underlyings: tuple[str, ...] = ("NIFTY", "SENSEX")
     morning_end: str = "13:30"
     first_entry: str = "13:45"
-    last_entry: str = "15:15"
+    last_entry: str = "14:30"  # SPEC said 15:15; settlement averaging from 15:00 (12 Nov review)
     compression_pct: float = 0.45
     vol_mult: float = 1.8
     stop_pct: float = 30.0
@@ -227,6 +234,20 @@ class _Bar:
     close: float
     vol: float = 0.0
     pv: float = 0.0  # futures price x volume, for VWAP
+
+
+def absorption_trap(bar: _Bar, avg_vol: float, up: bool) -> str | None:
+    """Effort without result: heavy volume but a small body, or a long wick against the break
+    (passive orders absorbing it). HYPOTHESIS thresholds from the 12 Nov review notes."""
+    rng = max(bar.high - bar.low, 1e-9)
+    body = abs(bar.close - bar.open)
+    rvol = bar.vol / avg_vol if avg_vol else 0.0
+    if rvol >= 2.5 and body / rng < 0.35:
+        return f"absorption: {rvol:.1f}x volume but the body is {body / rng:.0%} of the range"
+    wick = (bar.high - max(bar.open, bar.close)) if up else (min(bar.open, bar.close) - bar.low)
+    if rvol >= 2.0 and wick / rng > 0.55:
+        return f"absorption: rejection wick {wick / rng:.0%} of the range against the break"
+    return None
 
 
 @dataclass
@@ -323,6 +344,10 @@ class GammaBreakoutStrategy:
             return None
         if not avg or bar.vol < c.vol_mult * avg:
             d.why = f"breakout bar volume {bar.vol:,.0f} < {c.vol_mult}x average {avg:,.0f}"
+            return None
+        trap = absorption_trap(bar, avg, up)
+        if trap:
+            d.why = trap
             return None
         kind = "CE" if up else "PE"
         atm = (

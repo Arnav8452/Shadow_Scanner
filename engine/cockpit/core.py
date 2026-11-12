@@ -159,6 +159,9 @@ class CockpitCore:
         self.debit_acct: Any = None  # SpreadAccount for debit spreads
         self.debit: Any = None  # DebitSpreadStrategy (made in attach)
         self.gamma: Any = None  # GammaBreakoutStrategy (made in attach)
+        from engine.cockpit.zones import ZoneTracker
+
+        self.zones = ZoneTracker(cfg.zones)
         self.feed_frozen = False  # no fresh quotes in market hours: entries and exits wait
         self.feed_age_s: float | None = None
 
@@ -254,11 +257,25 @@ class CockpitCore:
         assert self.runner is not None
         return any(
             self.master.get(s).expiry == day
-            for s in self.runner.subscribed
+            for s in getattr(self.runner, "subscribed", ())
             if s in self.master
             and self.master.get(s).underlying == und
             and self.master.get(s).kind.is_option
         )
+
+    def _zone_samples(self, now: datetime) -> None:
+        if not self.cfg.zones.enabled or self.runner is None:
+            return
+        for und in getattr(self.runner, "spot_symbol", {}):
+            st = self._front_future(und)
+            if st is None or not st.ltp:
+                continue
+            b = st.bids[0] if st.bids else (0.0, 0, 0)
+            a = st.asks[0] if st.asks else (0.0, 0, 0)
+            self.zones.on_sample(
+                und, now, ltp=st.ltp, cum_volume=float(st.cum_volume or 0),
+                bid=b[0], ask=a[0], bid_qty=float(b[1]), ask_qty=float(a[1]),
+            )  # fmt: skip
 
     def _front_future(self, und: str) -> Any:
         assert self.runner is not None
@@ -313,6 +330,14 @@ class CockpitCore:
                                  f"score {sig.confidence_score:.0f}", sig.created_at)  # fmt: skip
             return
         und, bullish, vehicle = view
+        why = self.reading_excluded(sig, und)
+        if why:
+            self.event(
+                "signal",
+                f"{sig.grade.value} {self.label(sig.symbol)} not used: {why}",
+                sig.created_at,
+            )
+            return
         self.event(
             "signal",
             f"{sig.grade.value} {self.label(sig.symbol)}: {und} {'UP' if bullish else 'DOWN'} "
@@ -358,6 +383,32 @@ class CockpitCore:
                     f"{self.cfg.setups.hold_s:.0f} s",
                     sig.created_at,
                 )
+
+    def reading_excluded(self, sig: ShadowSignal, und: str) -> str | None:
+        """Why a confirmed reading does not count (None if it does): too late in the day (or
+        in an expiring index's last stretch), or an option with no convexity left."""
+        c = self.cfg
+        hhmm = sig.created_at.astimezone(IST).strftime("%H:%M")
+        if hhmm >= c.readings_until:
+            return f"after {c.readings_until}"
+        expiring = self.runner is not None and self._expiry_today(
+            und, sig.created_at.astimezone(IST).date()
+        )
+        if expiring and hhmm >= c.readings_until_expiry_day:
+            return f"{und} expires today: readings stop at {c.readings_until_expiry_day}"
+        g = self.analytics.detail.get(sig.symbol) if self.analytics is not None else None
+        if g and g.get("settling"):
+            return "expiring now: the price is settlement-locked"
+        if g:
+            d = abs(float(g.get("delta") or 0.0))
+            if not c.reading_min_abs_delta <= d <= c.reading_max_abs_delta:
+                return (
+                    f"|delta| {d:.2f} outside {c.reading_min_abs_delta}-{c.reading_max_abs_delta}"
+                )
+            tv, intr = float(g.get("time_value") or 0.0), float(g.get("intrinsic") or 0.0)
+            if tv + intr > 0 and tv / (tv + intr) * 100 < c.reading_min_time_value_pct:
+                return "almost no time value left (settlement-locked)"
+        return None
 
     def _on_setup_confirmed(self, st: Any, now: datetime) -> None:
         """A confirmed setup: event, signal study, and the 5.2 directional entry."""
@@ -482,6 +533,7 @@ class CockpitCore:
         if self.runner is None:
             return
         now = from_ns(now_ns)
+        self._zone_samples(now)
         self._drain_commands(now)
         self._follow_track_a(now)
         if now_ns >= self._next_analytics and self.analytics is not None:
@@ -509,8 +561,12 @@ class CockpitCore:
                         if text:
                             self.event("gamma", text, now)
                 if self.setups is not None:
-                    for st in self.setups.update(now, spots):
-                        self._on_setup_confirmed(st, now)
+                    if now >= self.runner.session.close_dt:
+                        for text in self.setups.close_all(now, "market closed"):
+                            self.event("setup", text, now)
+                    else:
+                        for st in self.setups.update(now, spots):
+                            self._on_setup_confirmed(st, now)
                 self._condor_step(now, books, spots, wall)
             if self.study is not None:
                 self.study.update(now, spots, books)
@@ -598,6 +654,15 @@ class CockpitCore:
                 ctx["corr"] = d.get("realized_corr")
             t = self._trend(und, now)
             ctx["setups_up"], ctx["setups_down"] = t.get("up", 0), t.get("down", 0)
+            ctx.update(self._regime(und, now))
+            fut = self._front_future(und)
+            if fut is not None and fut.ltp:
+                zv = self.zones.zones(und, fut.ltp)
+                ctx["zone"] = (
+                    "floor below (sellers trapped)" if zv["floors"] and not zv["ceilings"]
+                    else "ceiling above (buyers trapped)" if zv["ceilings"] and not zv["floors"]
+                    else "both" if zv["floors"] else "none"
+                )  # fmt: skip
             if self.calendar_events:
                 from engine.data.events.calendar_file import blackout_status
 
@@ -606,6 +671,26 @@ class CockpitCore:
         except Exception as exc:  # context is for research; never block a trade on it
             ctx["context_error"] = type(exc).__name__
         return ctx
+
+    def _regime(self, und: str, now: datetime) -> dict[str, Any]:
+        """Day-regime features (12 Nov review): expiry day, opening gap, how trending the day
+        is so far (efficiency = |close - open| / (high - low)), range and VIX change."""
+        assert self.runner is not None
+        r = self.runner
+        out: dict[str, Any] = {"expiry_day": self._expiry_today(und, now.astimezone(IST).date())}
+        st = r.scanner.states.get(r.spot_symbol.get(und, ""))
+        if st is not None and st.ltp and st.session_open:
+            if st.prev_close:
+                out["gap_pct"] = round((st.session_open / st.prev_close - 1) * 100, 2)
+            rng = st.session_high - st.session_low
+            if rng > 0:
+                out["efficiency"] = round(abs(st.ltp - st.session_open) / rng, 2)
+                out["range_pct"] = round(rng / st.session_open * 100, 2)
+        for sym, vst in r.scanner.states.items():
+            if "VIX" in sym.upper() and vst.ltp and vst.session_open:
+                out["vix_chg"] = round(vst.ltp - vst.session_open, 2)
+                break
+        return out
 
     def _trend(self, und: str, now: datetime) -> dict[str, Any]:
         if self.setups is None:
@@ -1015,6 +1100,36 @@ class CockpitCore:
             )
         return rows
 
+    def _oi_read(self, ins: Any, st: Any, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Price change vs OI change for an option: buying, writing, covering or unwinding.
+        OI change is against the previous session's NSE bhavcopy when known, else since the
+        engine first saw the contract today."""
+        prev = None
+        if self.analytics is not None and ins.expiry is not None and ins.strike is not None:
+            prev = (self.analytics.prev_oi.get(ins.underlying) or {}).get(
+                (ins.expiry.isoformat(), float(ins.strike), ins.kind.value)
+            )
+        doi = (st.oi_now - prev) if prev is not None and st.oi_now else row.get("doi")
+        chg = row.get("chg_pct")
+        if not doi or chg is None or chg == 0:
+            return None
+        if chg > 0:
+            label = "buying (long build-up)" if doi > 0 else "short covering"
+        else:
+            label = "writing (short build-up)" if doi > 0 else "long unwinding"
+        put = ins.kind is Kind.PUT
+        index_view = None
+        if label.startswith("writing"):
+            index_view = "UP" if put else "DOWN"  # writers sell puts when they expect no fall
+        elif label == "short covering":
+            index_view = "DOWN" if put else "UP"
+        return {
+            "label": label,
+            "oi_chg": doi,
+            "baseline": "previous session" if prev is not None else "since engine start",
+            "index_view": index_view,
+        }
+
     def _score_1m(self, sym: str, score: float | None, wall: float) -> float | None:
         """Average of the per-second scores over the last minute (what the page shows)."""
         h = self._score_hist.setdefault(sym, deque(maxlen=60))
@@ -1076,6 +1191,8 @@ class CockpitCore:
             )
             if self.analytics is not None and sym in self.analytics.detail:
                 row["greeks"] = self.analytics.detail[sym]
+            if ins is not None and ins.kind.is_option:
+                row["oi_read"] = self._oi_read(ins, st, row)
             last = r.last_eval.get(sym)
             row["score_1m"] = self._score_1m(
                 sym, last.confidence_score if last is not None else None, wall
@@ -1188,6 +1305,12 @@ class CockpitCore:
             }
         if self.gamma is not None:
             snap["gamma"] = self.gamma.view()
+        prices = {}
+        for und in getattr(r, "spot_symbol", {}):
+            fut = self._front_future(und)
+            if fut is not None and fut.ltp:
+                prices[und] = fut.ltp
+        snap["zones"] = self.zones.view(prices)
         snap["portfolio"] = self.portfolio(snap)
         if self.analytics is not None:
             snap["chains"] = self.analytics.chains_view()  # the gateway sends these on request

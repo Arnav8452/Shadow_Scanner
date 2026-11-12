@@ -91,6 +91,9 @@ class PaperAccount:
         is_option: Callable[[str], bool],
         journal: Path | None,
         entry_block: Callable[[datetime], str | None] | None = None,
+        expiry_of: Callable[[str], date | None] | None = None,
+        expiry_day_last_entry: str = "14:30",
+        expiry_day_exit: str = "14:50",
     ) -> None:
         self.name = name
         self.book = book
@@ -103,6 +106,10 @@ class PaperAccount:
         self.journal = journal
         # Extra entry rule outside the risk gate, e.g. a macro-event window (returns the reason).
         self.entry_block = entry_block
+        # Long options expiring today: settlement averaging takes over in the last half hour.
+        self.expiry_of = expiry_of
+        self.expiry_day_last_entry = expiry_day_last_entry
+        self.expiry_day_exit = expiry_day_exit
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: dict[str, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
@@ -168,6 +175,13 @@ class PaperAccount:
             why = self.entry_block(now)
             if why:
                 return self._refuse(symbol, now, why, signal_id)
+        if self._expires_today(symbol, now) and (
+            now.astimezone(IST).strftime("%H:%M") >= self.expiry_day_last_entry
+        ):
+            return self._refuse(
+                symbol, now, f"expires today: no new entries after {self.expiry_day_last_entry}",
+                signal_id,
+            )  # fmt: skip
         lot = max(1, self.lot_size_of(symbol))
         qty = lots * lot
         ask = book.asks[0][0]
@@ -314,6 +328,12 @@ class PaperAccount:
                     )
             if now >= self.square_off_at:
                 ok, text = self.close(symbol, book, now=now, reason="square-off")
+            elif self._expires_today(symbol, now) and (
+                now.astimezone(IST).strftime("%H:%M") >= self.expiry_day_exit
+            ):
+                ok, text = self.close(
+                    symbol, book, now=now, reason=f"expiry-day exit {self.expiry_day_exit}"
+                )
             elif pos.target_price is not None and bid >= pos.target_price:
                 ok, text = self.close(symbol, book, now=now, reason="target on premium")
             elif bid <= pos.stop_price:
@@ -335,6 +355,12 @@ class PaperAccount:
             )
             out.append(text if ok else f"{symbol}: {text}")
         return out
+
+    def _expires_today(self, symbol: str, now: datetime) -> bool:
+        if self.expiry_of is None:
+            return False
+        exp = self.expiry_of(symbol)
+        return exp is not None and exp == now.astimezone(IST).date()
 
     # ------------------------------------------------------------------ view
 

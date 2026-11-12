@@ -11,6 +11,7 @@ from typing import Any
 from engine.cockpit.condor import CondorConfig
 from engine.cockpit.setups import SetupConfig
 from engine.cockpit.strategies import DebitConfig, GammaConfig
+from engine.cockpit.zones import ZoneConfig
 from engine.core.config import Settings
 
 
@@ -53,7 +54,19 @@ class CockpitConfig:
     condor: CondorConfig = CondorConfig()  # noqa: RUF009 (frozen, immutable default)
     debit: DebitConfig = DebitConfig()  # noqa: RUF009 (frozen, immutable default)
     gamma: GammaConfig = GammaConfig()  # noqa: RUF009 (frozen, immutable default)
+    zones: ZoneConfig = ZoneConfig()  # noqa: RUF009 (frozen, immutable default)
     user_pins_max: int = 3
+    # Readings (12 Nov 2026 review, HYPOTHESIS): when they stop counting, and which options
+    # can carry one. Expiry-day index settlement averages the last 30 minutes (15:00-15:30;
+    # UNVERIFIED against the NSE/BSE methodology text), so 0DTE moves after ~14:45 barely move it.
+    readings_until: str = "15:15"
+    readings_until_expiry_day: str = "14:45"
+    reading_min_abs_delta: float = 0.15
+    reading_max_abs_delta: float = 0.85
+    reading_min_time_value_pct: float = 5.0
+    # Long options expiring today: no entries after this, and closed at expiry_day_exit.
+    expiry_day_last_entry: str = "14:30"
+    expiry_day_exit: str = "14:50"
     # execution.disconnect_kill_after_s (APPROVED): no fresh quote for this long in market hours
     # freezes new paper entries and pauses exits (never flatten on stale prices).
     feed_stale_s: float = 10.0
@@ -138,6 +151,8 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         stop_pct_of_debit=float(d_raw.get("stop_pct_of_debit", 50)),
         square_off=str(d_raw.get("square_off", "15:20")),
         max_entries_per_day=int(d_raw.get("max_entries_per_day", 2)),
+        expiry_day_exit=str(raw.get("expiry_day_exit", "14:50")),
+        expiry_day_last_entry=str(raw.get("expiry_day_last_entry", "14:30")),
     )
     g_raw: Any = raw.get("gamma", {}) or {}
     gamma = GammaConfig(
@@ -145,10 +160,21 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         underlyings=tuple(str(u) for u in g_raw.get("underlyings", ("NIFTY", "SENSEX"))),
         morning_end=str(g_raw.get("morning_end", "13:30")),
         first_entry=str(g_raw.get("first_entry", "13:45")),
-        last_entry=str(g_raw.get("last_entry", "15:15")),
+        last_entry=str(g_raw.get("last_entry", "14:30")),
         compression_pct=float(g_raw.get("compression_pct", 0.45)),
         vol_mult=float(g_raw.get("vol_mult", 1.8)),
         stop_pct=float(g_raw.get("stop_pct", 30)),
+    )
+    z_raw: Any = raw.get("zones", {}) or {}
+    zones = ZoneConfig(
+        enabled=bool(z_raw.get("enabled", True)),
+        window_min=float(z_raw.get("window_min", 30)),
+        min_battle_min=float(z_raw.get("min_battle_min", 8)),
+        iceberg_ratio=float(z_raw.get("iceberg_ratio", 12)),
+        zone_pts=tuple(
+            (str(k), float(v))
+            for k, v in (z_raw.get("zone_pts") or {"NIFTY": 10, "SENSEX": 30}).items()
+        ),
     )
     if condor.stop_mult <= 1.0:
         raise ValueError("cockpit.condor.stop_mult must be above 1 (x credit)")
@@ -180,7 +206,15 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         condor=condor,
         debit=debit,
         gamma=gamma,
+        zones=zones,
         user_pins_max=int(raw.get("user_pins_max", 3)),
+        readings_until=str(raw.get("readings_until", "15:15")),
+        readings_until_expiry_day=str(raw.get("readings_until_expiry_day", "14:45")),
+        reading_min_abs_delta=float(raw.get("reading_min_abs_delta", 0.15)),
+        reading_max_abs_delta=float(raw.get("reading_max_abs_delta", 0.85)),
+        reading_min_time_value_pct=float(raw.get("reading_min_time_value_pct", 5.0)),
+        expiry_day_last_entry=str(raw.get("expiry_day_last_entry", "14:30")),
+        expiry_day_exit=str(raw.get("expiry_day_exit", "14:50")),
         feed_stale_s=float(
             (settings.raw.get("execution") or {}).get("disconnect_kill_after_s", 10)
         ),

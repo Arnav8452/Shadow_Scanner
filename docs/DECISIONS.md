@@ -4,6 +4,56 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Review of the Sensex expiry close and the owner's notes in `new/` (12 Nov 2026, night)
+
+The owner left six notes (fix, fix2, rules, breaking_retail, ride_wave, and a "quant specification") and nine screenshots of the page from 15:28 to 15:39 on the Sensex expiry. The screenshots confirm the bugs below. Each item in the notes was checked against our code and SPEC before deciding.
+
+**Built** (thresholds are HYPOTHESES in `settings.yaml`):
+- **Dead options are not scored** (scanner): no bid, ask at the tick floor (≤ ₹0.25), mid under ₹5, or spread over 10% of mid. On 12 Nov, contracts at 0.05 × 0.10 scored 61–65 on margin-cleanup flow. The runner also drops a contract's last reading when it stops being scored.
+- **The closing-auction bonus is for stocks only.** The scanner gave a 22-point location bonus from 15:00 to any contract; NSE's closing auction is a cash-market session. This is why the expiring 82000 PE was labelled "cas 3pm vwap reversal" at 15:30. This one was found in our code during the review; the notes didn't mention it.
+- **Location gate:** with less than 5 location points (no structural level, or levels missing after a mid-day start), the score is capped at 60, below the 65 watchlist line. On 12 Nov the 82000 PE reached 73–75 with location 0/25.
+- **Book-shape consistency:** the book pillar is halved when the touch leans one way (micro-price vs mid) and the top-5 imbalance the other. On 12 Nov a passive 32-lakh bid one level below a 40-lot touch drove OBI to +0.47.
+- **Readings stop counting:**
+  - after 15:15;
+  - after 14:45 for an index whose options expire today;
+  - for options with |delta| outside 0.15–0.85 or under 5% time value;
+  - for contracts that are "settling" (expiring, in their last minutes; the page now says so instead of showing a 3.4% IV from the clock floor).
+- **Open setups close at the bell.** On 12 Nov a setup formed at 15:28:25 and "confirmed" at 15:30:15 on the closing print.
+- **Expiry-day rules for long options expiring today:**
+  - no entries after 14:30, and a forced exit at 14:50 (paper accounts and debit spreads);
+  - the §5.10 gamma window now ends at 14:30 instead of SPEC's 15:15.
+
+  The reason: index settlement averages the last 30 minutes (15:00–15:30), so later moves barely change it. That methodology is UNVERIFIED against NSE/BSE primary text, so verify it before relying on this rule live.
+- **§5.10 absorption veto:** no entry when the breakout bar has heavy volume but a small body, or a long rejection wick ("effort without result").
+- **Futures absorption zones** (`engine/cockpit/zones.py`, from `ride_wave.md`):
+  - Over 30 minutes on each index's front future, a zone qualifies when aggressive volume traded there is at least 12× the largest size ever shown at the touch, over at least 8 minutes.
+  - A floor (sellers trapped above it) or a ceiling (buyers trapped below it) is flagged once price leaves the zone.
+  - It is context only: shown under Setups and stored with each trade. The side is read from ~0.1–0.2 s samples, coarser than true tick data.
+- **Option OI read** (`fix2.md`): each option row shows buying / writing / short covering / long unwinding, from price change against OI change vs the previous session's bhavcopy where known. Put writing reads as index-up.
+- **Day-regime features** (`rules.md`), stored with every trade and split in Research: expiry day, opening gap, efficiency (|close − open| / range so far: chop vs trend), range, and VIX change since the open.
+
+**Not built, and why:**
+- The **"quant specification"** is written as a replacement CLAUDE.md. It assumes ₹1 lakh capital (approved: ₹2 lakh), allows 8–35-minute scalps and 2-lot sizing by confidence, and adds MCX crude/natural gas and futures structures. These conflict with:
+  - the owner's no-scalping direction;
+  - CLAUDE.md rule 5 (one lot until 20–30 live trades);
+  - the project's scope (NSE/BSE index F&O; MCX would need its own feed, rules and cost rows).
+
+  Its useful ideas are kept as candidates below.
+- **3-minute "impulse vs charges" gates, the 180-second scratch rule, and the 5-pillar breakthrough score** (`rules.md`): all are scalping tools.
+- **Stop-cluster projection** (where retail 25–30% stops sit): untested folklore. Possible research later, not a signal.
+- **Model-price stops** (`breaking_retail.md`): a paper fill at the bid is what a real stop would get. Changing the stop rule is a strategy change to test later, not a realism fix.
+- **Heavyweight 3-minute cash CVD:** the engine has no tick data for the stocks.
+- **Selling the expiry pin** (`fix2.md`): a hedged short into 0DTE settlement. Interesting, but it needs a study of recorded expiries first.
+- **Routing naked buys to spreads when IVP > 80:** this would end the naked-vs-spread A/B test on the same signals. Entry IV percentile is stored with every trade, so Research answers it with data instead.
+
+**Candidates for later:**
+- Calendar spreads on weekly-vs-monthly IV backwardation (the chain now has IV for 2–3 expiries).
+- An RV/IV filter for the condor.
+- A time stop for naked buys (exit if below breakeven after N minutes) as a 5.2 variant.
+- A "second-mouse" retest entry.
+
+---
+
 ## A portfolio of paper strategies (12 Nov 2026, evening)
 
 The owner asked for more option strategies the signals can drive, to be tested on paper and built into a portfolio for later bots. They also asked to bring back the score-driven paper trades.

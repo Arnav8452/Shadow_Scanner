@@ -244,6 +244,10 @@ class LiveAnalytics:
                 )  # fmt: skip
             except Exception:
                 continue
+            if ins.expiry == now.astimezone(IST).date() and clk.trading_minutes <= 16:
+                # The clock floors time at the last minutes: IV and greeks would be fiction.
+                out[sym] = {"settling": True, "days": 0}
+                continue
             f = strip.get("forward") if strip.get("expiry") == ins.expiry.isoformat() else None
             f = float(f or spot * math.exp(r * clk.t_cal))
             mid = 0.5 * (st.bids[0][0] + st.asks[0][0])

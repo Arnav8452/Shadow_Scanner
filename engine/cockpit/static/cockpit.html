@@ -317,7 +317,7 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
         <span class="tag hyp" title="The score is an unvalidated prior. Shown: the average of the last minute's per-second scores, so it moves slowly. Hover a bar for the latest raw score.">score = HYPOTHESIS, 1-min average</span>
         <span class="muted small" id="sort-note"></span>
       </div>
-      <div class="scroll" id="scan-scroll"><table><thead><tr><th>Contract</th><th class="n">LTP</th><th class="n">Chg %</th><th class="n">Bid × Ask</th><th class="n" title="Open interest (contracts × lot)">OI</th><th class="n" title="Change in OI since the engine first saw it today">ΔOI</th><th class="n" title="Implied volatility, our Black-76 on the synthetic forward">IV</th><th class="n" title="Delta">Δ</th><th title="Average order-flow score over the last minute">Score (1 min)</th><th title="What the reading says about the index (a bid-heavy put reads DOWN)">Reads</th><th>Pattern</th></tr></thead><tbody id="scan-body"></tbody></table></div>
+      <div class="scroll" id="scan-scroll"><table><thead><tr><th>Contract</th><th class="n">LTP</th><th class="n">Chg %</th><th class="n">Bid × Ask</th><th class="n" title="Open interest (contracts × lot)">OI</th><th class="n" title="Change in OI since the engine first saw it today">ΔOI</th><th class="n" title="Implied volatility, our Black-76 on the synthetic forward">IV</th><th class="n" title="Delta">Δ</th><th title="Average order-flow score over the last minute">Score (1 min)</th><th title="What the reading says about the index (a bid-heavy put reads DOWN)">Reads</th><th>Pattern</th><th title="Option price change vs OI change: buying, writing, short covering or unwinding (OI vs the previous session where known). Writing puts = writers expect no fall.">OI read</th></tr></thead><tbody id="scan-body"></tbody></table></div>
     </section>
     <div class="hsplit" id="split-scan" title="Drag to resize the scanner (double-click to reset)"></div>
     <section class="panel" id="right">
@@ -520,7 +520,13 @@ function renderSetups() {
   $("setup-rules").textContent = `a reading starts a setup · confirmed when the index moves ${r.confirm_move_pct}% its way and holds ${r.hold_s} s within ${r.window_min} min · fails at −${r.fail_move_pct}% or an opposite reading`;
   const live = st.live.map((s) => setupRow(s, false)).join("");
   const done = st.done.slice(0, 8).map((s) => setupRow(s, true)).join("");
-  setHtml("setups-body", (live || `<div class="empty" style="padding:8px 10px">No setup forming. Order-flow readings (score 75+, held 5 s) start one; nothing trades on a reading alone.</div>`) + (done ? `<h4>Earlier today</h4>${done}` : ""));
+  const zv = snap.zones && snap.zones.by_underlying ? Object.entries(snap.zones.by_underlying).map(([u, z]) => {
+    const f = z.floors.map((x) => `<span class="up" title="aggressive selling ${x.ratio}x the largest bid shown, over ${x.minutes} min; sellers trapped above it">floor ${num(x.low, 0)}–${num(x.high, 0)} (${x.ratio}×)</span>`);
+    const c = z.ceilings.map((x) => `<span class="down" title="aggressive buying ${x.ratio}x the largest offer shown, over ${x.minutes} min; buyers trapped below it">ceiling ${num(x.low, 0)}–${num(x.high, 0)} (${x.ratio}×)</span>`);
+    return `<b>${esc(u)}</b> ${[...f, ...c].join(" · ") || '<span class="muted">no trapped zone</span>'}`;
+  }).join(" &nbsp;|&nbsp; ") : "";
+  const zline = zv ? `<div class="small" style="padding:4px 10px;border-bottom:1px solid var(--line)" title="${esc((snap.zones || {}).rules || "")}"><span class="muted">Futures absorption zones (30 min, context only):</span> ${zv}</div>` : "";
+  setHtml("setups-body", zline + (live || `<div class="empty" style="padding:8px 10px">No setup forming. Order-flow readings (score 75+, held 5 s) start one; nothing trades on a reading alone.</div>`) + (done ? `<h4>Earlier today</h4>${done}` : ""));
 }
 
 // ---------------------------------------------------------------- scanner
@@ -555,9 +561,9 @@ function renderScanner() {
     const bar = avg == null ? "" : `<div class="bar" title="${esc(tip)}"><i class="${avg >= 75 ? "act" : avg >= 65 ? "hot" : ""}" style="width:${Math.min(100, avg)}%"></i><b>${num(avg, 0)}</b></div>`;
     const reads = avg >= 65 && r.reads ? `<span class="${r.reads === "UP" ? "up" : "down"}">${esc(r.underlying)} ${r.reads === "UP" ? "↑" : "↓"}</span>` : "";
     const pin = r.pinned ? ' <span class="tag" title="Added to the live feed on demand">+feed</span>' : "";
-    return `<tr class="${klass}" data-s="${esc(r.symbol)}"><td>${esc(r.label)}${pin}</td><td class="n ${lc}">${num(r.ltp)}</td><td class="n ${cls(r.chg_pct)}">${r.chg_pct == null ? "—" : sgn(r.chg_pct)}</td><td class="n muted">${num(r.bid)} × ${num(r.ask)}</td><td class="n">${big(r.oi)}</td><td class="n ${cls(r.doi)}">${r.doi == null ? "—" : (r.doi > 0 ? "+" : "") + big(r.doi)}</td><td class="n">${g.iv == null ? "—" : num(g.iv, 1)}</td><td class="n">${g.delta == null ? "—" : num(g.delta, 2)}</td><td>${bar}</td><td>${reads}</td><td class="muted small">${s && avg >= 65 ? esc(s.wave.replace(/_/g, " ").toLowerCase()) : ""}</td></tr>`;
+    return `<tr class="${klass}" data-s="${esc(r.symbol)}"><td>${esc(r.label)}${pin}</td><td class="n ${lc}">${num(r.ltp)}</td><td class="n ${cls(r.chg_pct)}">${r.chg_pct == null ? "—" : sgn(r.chg_pct)}</td><td class="n muted">${num(r.bid)} × ${num(r.ask)}</td><td class="n">${big(r.oi)}</td><td class="n ${cls(r.doi)}">${r.doi == null ? "—" : (r.doi > 0 ? "+" : "") + big(r.doi)}</td><td class="n">${g.iv == null ? "—" : num(g.iv, 1)}</td><td class="n">${g.delta == null ? "—" : num(g.delta, 2)}</td><td>${bar}</td><td>${reads}</td><td class="muted small">${s && avg >= 65 ? esc(s.wave.replace(/_/g, " ").toLowerCase()) : ""}</td><td class="small ${r.oi_read && r.oi_read.index_view === "UP" ? "up" : r.oi_read && r.oi_read.index_view === "DOWN" ? "down" : "muted"}" title="${r.oi_read ? esc(`OI ${r.oi_read.oi_chg > 0 ? "+" : ""}${r.oi_read.oi_chg} since ${r.oi_read.baseline}`) : ""}">${r.oi_read ? esc(r.oi_read.label) : ""}</td></tr>`;
   }).join("");
-  setHtml("scan-body", html || `<tr><td colspan="11" class="empty">No contracts yet.</td></tr>`);
+  setHtml("scan-body", html || `<tr><td colspan="12" class="empty">No contracts yet.</td></tr>`);
 }
 $("scan-scroll").addEventListener("mouseenter", () => { hovering = true; });
 $("scan-scroll").addEventListener("mouseleave", () => { hovering = false; });
@@ -670,7 +676,7 @@ const PILLARS = [
 ];
 function analyticsView(r) {
   const g = r.greeks; const s = r.sig;
-  const greeks = g ? `<h4>Option (Black-76 on our forward, from this contract's mid)</h4><div class="dsum">
+  const greeks = g && g.settling ? `<div class="decision no"><b>Settling</b> · expires today and is in its last minutes: the price tracks the settlement average, so IV and greeks would be fiction and readings are ignored.</div>` : g ? `<h4>Option (Black-76 on our forward, from this contract's mid)</h4><div class="dsum">
       ${kvd("Implied vol", num(g.iv) + "%")}${kvd("Delta", num(g.delta, 3), "", "Change in premium per 1-point move in the index")}${kvd("Gamma", num(g.gamma, 5), "", "Change in delta per 1-point move")}
       ${kvd("Theta / lot / day", inr(g.theta_lot), "down", "Time decay of one lot per calendar day")}${kvd("Vega / lot / vol pt", inr(g.vega_lot), "", "Premium change of one lot per 1 point of IV")}${kvd("Days to expiry", `${g.days} (${num(g.trading_minutes, 0)} trading min)`)}
       ${kvd("Intrinsic", num(g.intrinsic))}${kvd("Time value", num(g.time_value))}${kvd("Strike vs forward", sgn(g.moneyness_pct) + "%")}

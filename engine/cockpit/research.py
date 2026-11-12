@@ -195,7 +195,14 @@ CONTEXT_FEATURES: tuple[tuple[str, str, Any], ...] = (
     ("breadth_pct", "Heavyweight breadth %", ((-25, "< −25"), (25, "−25–25"), (101, "> 25"))),
     ("corr", "Heavyweight correlation", ((0.3, "<0.3"), (0.6, "0.3–0.6"), (2, "0.6+"))),
     ("event_window", "Inside event window", None),
-)
+    ("expiry_day", "Expiry day of that index", None),
+    ("gap_pct", "Opening gap %", ((-0.8, "< −0.8"), (-0.2, "−0.8–−0.2"), (0.2, "flat"),
+                                  (0.8, "0.2–0.8"), (99, "> 0.8"))),
+    ("efficiency", "Day so far: trend vs chop", ((0.3, "chop < 0.3"), (0.7, "0.3–0.7"),
+                                                   (9, "trend > 0.7"))),
+    ("vix_chg", "VIX change since open", ((-0.5, "falling"), (0.5, "flat"), (99, "rising"))),
+    ("zone", "Futures absorption zone", None),
+)  # fmt: skip
 
 
 def _bucket_of(value: Any, spec: Any) -> str | None:

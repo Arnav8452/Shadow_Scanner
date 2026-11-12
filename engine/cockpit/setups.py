@@ -222,6 +222,20 @@ class SetupTracker:
         self.setups = [s for s in self.setups if s.state in (FORMING, CONFIRMED)]
         return confirmed
 
+    def close_all(self, now: datetime, why: str) -> list[str]:
+        """End every open setup (the session is over: no confirmation after the close)."""
+        out = []
+        for s in list(self.setups):
+            if s.state == FORMING:
+                self._end(s, FAILED, now, why)
+            elif s.state == CONFIRMED:
+                self._end(s, ENDED, now, why)
+            else:
+                continue
+            out.append(f"{s.underlying} {s.direction} setup {s.state.lower()}: {why}")
+        self.setups = []
+        return out
+
     # ------------------------------------------------------------------ queries
 
     def trend(self, underlying: str, now: datetime, lookback_min: float) -> dict[str, Any]:
