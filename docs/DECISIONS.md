@@ -4,6 +4,49 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Every strategy in the owner's notes, on paper (12 Nov 2026, late night)
+
+**Owner decisions, superseding parts of the entry below:**
+- **Scalping is allowed as an exception** in the strategies the notes specify, and only through the charges rule. Gate 1 requires the expected 3-minute option move to be at least 3.5× the charges breakeven (2.5× for the 5-pillar score). Gate 2 is the breakeven ratchet: the stop moves to breakeven at 2× breakeven points, then trails, with a 180-s scratch exit.
+- **Multiple lots are allowed in paper** while capital and the approved loss limits hold (`cockpit.paper_max_lots: 2`; every other limit unchanged). CLAUDE.md rule 5 (one lot per strategy until 20–30 live trades) still governs live trading, which is disabled.
+- **₹1 lakh sizing in the notes** is within the approved ₹2 lakh capital.
+
+**Built** (`engine/cockpit/`, paper only, every threshold a HYPOTHESIS in code or config):
+- **Shared pieces:**
+  - `tape.py`: per-index minute tape. It holds:
+    - index and futures bars, with aggressive buys and sells split by the quote rule;
+    - CVD and its z-score, relative volume, ATR, VWAP and whipsaws;
+    - the 30-min opening range and realized vol;
+    - the ATM straddle and its VWAP and sigma;
+    - ATM, call, put and next-expiry IV, and 25-delta skew;
+    - per-strike OI history, 15-minute bars with Bollinger width, the 60-min box;
+    - option VWAP, 9:20 price and EMA-9.
+  - `gates.py`: charges breakeven from config/rules (not the notes' hard-coded rates), Gate 1 impulse, Gate 2 ratchet, model price, the absorption filter, off-cycle entry times, and a heavyweight alignment check (a proxy using day returns; there is no stock tick data).
+  - `plays_base.py`: strategy base with long-option exits (ratchet, time stop, 15-candle rule, EMA-9 trail, delta exit, index-conditioned stop), spread exits, and rule 4: with IV percentile ≥ 80, a naked-buy signal becomes a debit spread on its own account.
+- **Long-option strategies** (`plays_long.py`): put-panic breakdown (S1), OI-unwinding ignition with the second-mouse retest (S2), 0DTE afternoon gamma (S3, 2 lots), the 5-pillar breakthrough scalper with writer stop-cluster projection (rules.md), spoof rug-pull / eaten-wall fade (spoofing notes), and the absorption-zone wave rider (ride_wave.md).
+- **Multi-leg strategies** (`plays_spread.py`): the straddle-VWAP iron fly with post-flush entry (A), OI-velocity credit spreads (B), the term-structure calendar (C, overnight), the compression + skew debit spread (D, up to 2 days), the expiry pin seller (fix2.md), the hedged synthetic future, the married future, and MCX minis.
+  - **MCX minis are coded but dormant:** there is no MCX feed, instrument master or MCX cost rows. CTT 0.01% must be verified before adding rows.
+  - **The married future is bullish only:** its mirror needs a short future, which the defined-risk leg sequencer does not allow.
+- **Spoofing** (`engine/shadow/spoof.py`, from the pasted module):
+  - walls ≥ 3× the side's median, tracked by price;
+  - a phantom cancel ratio separates pulled walls (spoof rug-pull, ≥ 0.75) from eaten ones (≤ 0.20 with 70% traded);
+  - the book pillar is ×0.25 when levels 2–5 and the touch disagree hard;
+  - wall events set the pattern and direction for 30 s (+15 location points).
+- **Accounts and stops:**
+  - `SpreadAccount` gained futures legs, multi-lot gate checks, and a stop-based planned loss for the gate.
+  - Long-option stops on every paper account need the model price to agree (breaking_retail.md); the page shows when a stop is held as a likely quote air-pocket.
+- **fix.md thresholds now applied:** spread ≤ 5% of mid, Sensex minimum premium ₹15, location ≥ 8 to grade, expiry-day exit 14:45.
+- **Page:** every strategy is a row in Overview with a detail view (decision, rules, positions, closed trades; the 5-pillar scores and stop clusters for the breakthrough scalper). Research picks up every paper journal automatically.
+- **Bug found by the tests:** a tape's first sample of the day wiped any chain OI recorded before it.
+- **Checked end to end:** the engine ran on the simulated feed with all 15 strategies and 0 cockpit errors.
+
+**Not yet possible:**
+- MCX (no data or verified costs).
+- The calendar and compression strategies need history first: 10–20 sessions of term-spread and width history, recorded at each close. The calendar also needs a 14+ day expiry in the recorder's chain, and the recorder currently keeps the nearest 2–3.
+- Heavyweight CVD uses day returns as a proxy.
+
+---
+
 ## Review of the Sensex expiry close and the owner's notes in `new/` (12 Nov 2026, night)
 
 The owner left six notes (fix, fix2, rules, breaking_retail, ride_wave, and a "quant specification") and nine screenshots of the page from 15:28 to 15:39 on the Sensex expiry. The screenshots confirm the bugs below. Each item in the notes was checked against our code and SPEC before deciding.

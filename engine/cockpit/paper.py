@@ -94,6 +94,7 @@ class PaperAccount:
         expiry_of: Callable[[str], date | None] | None = None,
         expiry_day_last_entry: str = "14:30",
         expiry_day_exit: str = "14:50",
+        stop_confirm: Callable[[str, float, float], bool] | None = None,
     ) -> None:
         self.name = name
         self.book = book
@@ -110,6 +111,9 @@ class PaperAccount:
         self.expiry_of = expiry_of
         self.expiry_day_last_entry = expiry_day_last_entry
         self.expiry_day_exit = expiry_day_exit
+        # breaking_retail.md: a stop fires only if the option's model price (index + smoothed
+        # IV) also says the stop is reached, so a quote air-pocket alone does not stop us out.
+        self.stop_confirm = stop_confirm
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: dict[str, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
@@ -336,7 +340,9 @@ class PaperAccount:
                 )
             elif pos.target_price is not None and bid >= pos.target_price:
                 ok, text = self.close(symbol, book, now=now, reason="target on premium")
-            elif bid <= pos.stop_price:
+            elif bid <= pos.stop_price and (
+                self.stop_confirm is None or self.stop_confirm(symbol, bid, pos.stop_price)
+            ):
                 why = "trailing stop" if pos.stop_price > pos.avg_price else "stop on premium"
                 ok, text = self.close(symbol, book, now=now, reason=why)
             else:

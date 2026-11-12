@@ -159,7 +159,15 @@ class CockpitCore:
         self.debit_acct: Any = None  # SpreadAccount for debit spreads
         self.debit: Any = None  # DebitSpreadStrategy (made in attach)
         self.gamma: Any = None  # GammaBreakoutStrategy (made in attach)
+        from engine.cockpit.tape import IndexTape, OptionTape
         from engine.cockpit.zones import ZoneTracker
+
+        self.plays: list[Any] = []  # playbook strategies (build_cockpit)
+        self.tapes: dict[str, IndexTape] = {}
+        self.otapes: dict[str, OptionTape] = {}
+        self.otape_watch: set[str] = set()
+        self._chain_rev_seen = -1
+        self._iv_hist: dict[str, deque[tuple[float, float]]] = {}
 
         self.zones = ZoneTracker(cfg.zones)
         self.feed_frozen = False  # no fresh quotes in market hours: entries and exits wait
@@ -262,6 +270,138 @@ class CockpitCore:
             and self.master.get(s).underlying == und
             and self.master.get(s).kind.is_option
         )
+
+    def _plays_step(self, now: datetime) -> None:
+        if not self.plays:
+            return
+        from engine.cockpit.plays_base import Market
+
+        m = Market(self, now)
+        for p in self.plays:
+            try:
+                for text in p.step(now, m):
+                    if text:
+                        self.event(p.key, str(text), now)
+            except Exception as exc:  # one strategy's bug must not stop the others
+                self.event("system", f"{p.key}: {type(exc).__name__}: {exc}", now)
+
+    def _tape_samples(self, now: datetime) -> None:
+        """Feed the minute tapes (index, front future, ATM straddle, IVs, skew, chain OI)."""
+        if self.runner is None or not self.plays:
+            return
+        from engine.cockpit.tape import IndexTape, OptionTape
+
+        a = self.analytics
+        states = self.runner.scanner.states
+        for und in getattr(self.runner, "spot_symbol", {}):
+            spot = self.runner.spots().get(und, 0.0)
+            if not spot:
+                continue
+            t = self.tapes.setdefault(und, IndexTape(und))
+            ce = self.atm_option(und, Kind.CALL)
+            pe = self.atm_option(und, Kind.PUT)
+            straddle = cum = None
+            ivs: dict[str, float] = {}
+            if ce and pe and ce in states and pe in states:
+                cs, ps = states[ce], states[pe]
+                if cs.ltp and ps.ltp:
+                    straddle = float(cs.ltp) + float(ps.ltp)
+                    cum = float(cs.cum_volume or 0) + float(ps.cum_volume or 0)
+                    if ce in self.master:
+                        t.atm_strike = float(self.master.get(ce).strike or 0) or None
+                if a is not None:
+                    ivs["ce_atm"] = float((a.detail.get(ce) or {}).get("iv") or 0)
+                    ivs["pe_atm"] = float((a.detail.get(pe) or {}).get("iv") or 0)
+            if a is not None:
+                ivs["atm"] = float(a.strip.get(und, {}).get("atm_iv_pct") or 0)
+                rows = (a.chain.get(und) or {}).get("rows") or []
+                c25 = min(
+                    rows,
+                    key=lambda r: abs(((r.get("ce") or {}).get("delta") or 9) - 0.25),
+                    default=None,
+                )
+                p25 = min(
+                    rows,
+                    key=lambda r: abs(((r.get("pe") or {}).get("delta") or 9) + 0.25),
+                    default=None,
+                )
+                civ = ((c25 or {}).get("ce") or {}).get("iv")
+                piv = ((p25 or {}).get("pe") or {}).get("iv")
+                if civ and piv:
+                    ivs["skew25"] = float(piv) - float(civ)
+                tables = a.chains.get(und) or {}
+                if len(tables) >= 2:
+                    nxt = tables[sorted(tables)[1]]
+                    nrows = nxt.get("rows") or []
+                    f = float(nxt.get("forward") or 0)
+                    if nrows and f:
+                        r0 = min(nrows, key=lambda r: abs(float(r["k"]) - f))
+                        v = [
+                            x
+                            for x in (
+                                (r0.get("ce") or {}).get("iv"),
+                                (r0.get("pe") or {}).get("iv"),
+                            )
+                            if x
+                        ]
+                        if v:
+                            ivs["next_atm"] = sum(v) / len(v)
+            t.on_sample(now, spot=spot, fut=self._front_future(und), straddle=straddle,
+                        straddle_cum_vol=cum, ivs=ivs)  # fmt: skip
+            for sym in (ce, pe):
+                if sym:
+                    self.otape_watch.add(sym)
+        if a is not None and getattr(a, "chain_rev", 0) != self._chain_rev_seen:
+            self._chain_rev_seen = a.chain_rev
+            for und, ch in a.chain.items():
+                if ch and ch.get("rows"):
+                    self.tapes.setdefault(und, IndexTape(und)).on_chain(now, ch["rows"])
+        for sym in list(self.otape_watch):
+            st = states.get(sym)
+            if st is not None and st.ltp:
+                self.otapes.setdefault(sym, OptionTape()).on_sample(
+                    now, float(st.ltp), float(st.cum_volume or 0)
+                )
+            if a is not None and sym in a.detail and a.detail[sym].get("iv"):
+                h = self._iv_hist.setdefault(sym, deque(maxlen=600))
+                h.append((now.timestamp(), float(a.detail[sym]["iv"])))
+
+    def stop_confirm(self, sym: str, bid: float, stop: float) -> bool:
+        """breaking_retail.md: confirm a long-option stop with the model price (Black-76 on
+        the forward and the option's 5-minute average IV). True when the model also says the
+        stop is reached (within 4%), or when the model can not be computed (fail safe)."""
+        from engine.analytics.expiry_clock import expiry_clock
+        from engine.cockpit.gates import model_price
+
+        a = self.analytics
+        if a is None or sym not in self.master or self.runner is None:
+            return True
+        ins = self.master.get(sym)
+        h = [v for t, v in self._iv_hist.get(sym, ()) if t >= self._now_ts() - 300]
+        strip = a.strip.get(ins.underlying, {})
+        f = strip.get("forward") or strip.get("spot")
+        if not h or not f or ins.expiry is None or ins.strike is None:
+            return True
+        try:
+            now = from_ns(self.runner.clock.now_ns())
+            clk = expiry_clock(
+                now, ins.expiry, book=a.book, calendar=a.calendar, exchange=ins.exchange
+            )
+            r, _ = a._rate(now)
+            theo = model_price(float(f), float(ins.strike), clk.t_var, sum(h) / len(h) / 100,
+                               is_call=ins.kind is Kind.CALL, t_cal=clk.t_cal, r=r)  # fmt: skip
+        except Exception:
+            return True
+        if theo is None:
+            return True
+        ok = theo <= stop * 1.04
+        if not ok:
+            self.event("system", f"stop on {self.label(sym)} held: bid {bid:.2f} but model "
+                                 f"{theo:.2f} (quote air-pocket?)")  # fmt: skip
+        return ok
+
+    def _now_ts(self) -> float:
+        return from_ns(self.runner.clock.now_ns()).timestamp() if self.runner else time.time()
 
     def _zone_samples(self, now: datetime) -> None:
         if not self.cfg.zones.enabled or self.runner is None:
@@ -444,6 +584,9 @@ class CockpitCore:
             )
             if text:
                 self.event("debit", text, now)
+        for p in self.plays:
+            if hasattr(p, "on_setup") and p.enabled:
+                p.on_setup(st.underlying, st.bullish, st.id)
 
     def signal_view(self, sig: ShadowSignal) -> tuple[str, bool, str | None] | None:
         """(underlying, bullish?, ATM long option expressing it) for a signal on any contract."""
@@ -534,6 +677,7 @@ class CockpitCore:
             return
         now = from_ns(now_ns)
         self._zone_samples(now)
+        self._tape_samples(now)
         self._drain_commands(now)
         self._follow_track_a(now)
         if now_ns >= self._next_analytics and self.analytics is not None:
@@ -568,6 +712,7 @@ class CockpitCore:
                         for st in self.setups.update(now, spots):
                             self._on_setup_confirmed(st, now)
                 self._condor_step(now, books, spots, wall)
+                self._plays_step(now)
             if self.study is not None:
                 self.study.update(now, spots, books)
             self.publish(now)
@@ -738,7 +883,8 @@ class CockpitCore:
             self.event("condor", cs.decision, now)
 
     def long_accounts(self) -> list[PaperAccount]:
-        return [a for a in (self.bot, self.manual, self.score_acct, self.gamma_acct) if a]
+        base = [a for a in (self.bot, self.manual, self.score_acct, self.gamma_acct) if a]
+        return base + [p.account for p in self.plays if hasattr(p, "managed")]
 
     def finish(self, now: datetime) -> None:
         books = self.books() if self.runner is not None else {}
@@ -749,6 +895,13 @@ class CockpitCore:
             for pos in list(self.debit_acct.positions):
                 _, text = self.debit_acct.close(pos, books, now, "session end")
                 self.event("debit", text, now)
+        for p in self.plays:
+            if hasattr(p, "record_close"):
+                p.record_close(now)
+            if hasattr(p, "trades") and not getattr(p, "overnight", False):
+                for pos in list(p.account.positions):
+                    _, text = p.account.close(pos, books, now, "session end")
+                    self.event(p.key, text, now)
         if self.runner is not None:
             self._follow_track_a(now)
             if self.study is not None:
@@ -1077,6 +1230,24 @@ class CockpitCore:
                      "expiry days 13:45–15:15 after a quiet morning"),
             long_row("manual", "Manual", "—", True, "your own tickets"),
         ]  # fmt: skip
+        for v in snap.get("plays", []):
+            a = v.get("account") or {}
+            closed = a.get("closed", [])
+            rows.append(
+                {
+                    "key": "play:" + v["key"],
+                    "title": v["title"],
+                    "ref": v["ref"],
+                    "enabled": v["enabled"],
+                    "rules": v.get("decision", ""),
+                    "day_net": a.get("day_net"),
+                    "realized": a.get("realized_net"),
+                    "open": len(a.get("positions", [])),
+                    "trades": a.get("trades_today", 0),
+                    "wins": sum(1 for t in closed if (t.get("net") or 0) > 0),
+                    "losses": sum(1 for t in closed if (t.get("net") or 0) < 0),
+                }
+            )
         for key, title, ref, enabled, block in (
             ("condor", "Condor / credit spreads", "5.1", cfg.condor.enabled, snap.get("condor")),
             ("debit", "Debit spreads on confirmed setups", "5.2 variant", cfg.debit.enabled,
@@ -1311,6 +1482,17 @@ class CockpitCore:
             if fut is not None and fut.ltp:
                 prices[und] = fut.ltp
         snap["zones"] = self.zones.view(prices)
+        play_views = []
+        bks = self.books()
+        for p in self.plays:
+            v = p.view()
+            acct = p.account
+            if hasattr(p, "managed"):
+                v["account"] = self._with_greeks(acct.view(bks, now), now)
+            else:
+                v["account"] = acct.view(bks, now, None)
+            play_views.append(v)
+        snap["plays"] = play_views
         snap["portfolio"] = self.portfolio(snap)
         if self.analytics is not None:
             snap["chains"] = self.analytics.chains_view()  # the gateway sends these on request

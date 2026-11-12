@@ -66,7 +66,13 @@ class CockpitConfig:
     reading_min_time_value_pct: float = 5.0
     # Long options expiring today: no entries after this, and closed at expiry_day_exit.
     expiry_day_last_entry: str = "14:30"
-    expiry_day_exit: str = "14:50"
+    expiry_day_exit: str = "14:45"  # breaking_retail.md: hard 14:45 exit on 0DTE longs
+    # Owner (12 Nov 2026): paper strategies may use more than one lot while capital and the
+    # approved loss limits are not breached. Live trading keeps risk.max_lots_per_strategy.
+    paper_max_lots: int = 2
+    # Playbook strategies from the owner's notes (engine/cockpit/plays_*.py): key -> on/off.
+    plays: tuple[tuple[str, bool], ...] = ()
+    model_price_stops: bool = True
     # execution.disconnect_kill_after_s (APPROVED): no fresh quote for this long in market hours
     # freezes new paper entries and pauses exits (never flatten on stale prices).
     feed_stale_s: float = 10.0
@@ -151,7 +157,7 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         stop_pct_of_debit=float(d_raw.get("stop_pct_of_debit", 50)),
         square_off=str(d_raw.get("square_off", "15:20")),
         max_entries_per_day=int(d_raw.get("max_entries_per_day", 2)),
-        expiry_day_exit=str(raw.get("expiry_day_exit", "14:50")),
+        expiry_day_exit=str(raw.get("expiry_day_exit", "14:45")),
         expiry_day_last_entry=str(raw.get("expiry_day_last_entry", "14:30")),
     )
     g_raw: Any = raw.get("gamma", {}) or {}
@@ -214,7 +220,10 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         reading_max_abs_delta=float(raw.get("reading_max_abs_delta", 0.85)),
         reading_min_time_value_pct=float(raw.get("reading_min_time_value_pct", 5.0)),
         expiry_day_last_entry=str(raw.get("expiry_day_last_entry", "14:30")),
-        expiry_day_exit=str(raw.get("expiry_day_exit", "14:50")),
+        expiry_day_exit=str(raw.get("expiry_day_exit", "14:45")),
+        paper_max_lots=int(raw.get("paper_max_lots", 2)),
+        plays=tuple((str(k), bool(v)) for k, v in (raw.get("plays") or {}).items()),
+        model_price_stops=bool(raw.get("model_price_stops", True)),
         feed_stale_s=float(
             (settings.raw.get("execution") or {}).get("disconnect_kill_after_s", 10)
         ),

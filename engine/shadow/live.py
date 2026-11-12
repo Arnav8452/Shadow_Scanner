@@ -536,6 +536,7 @@ class ShadowLiveRunner:
             prev_close=close,
             is_option=ins.kind.is_option,
             is_equity=ins.kind is Kind.EQUITY,
+            underlying=ins.underlying,
             delivery_bias=(
                 DeliveryBias(item.bias)
                 if item and self.cfg.delivery_watch.bias_in_score

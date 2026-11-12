@@ -16,6 +16,14 @@ from typing import Any
 
 BANDS = ((75.0, 80.0, "75–80"), (80.0, 90.0, "80–90"), (90.0, 101.0, "90+"))
 ACCOUNTS = ("bot", "score", "debit", "gamma", "condor", "manual")
+
+
+def _accounts(journal_dir: Path) -> list[str]:
+    """Every paper account with a journal (the fixed ones first, then the playbook's)."""
+    found = sorted(p.stem.removeprefix("paper_") for p in journal_dir.glob("paper_*.jsonl"))
+    return list(dict.fromkeys([*ACCOUNTS, *found]))
+
+
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9_\-]{1,60}\.md$")
 _DATED = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -234,7 +242,7 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
     context feature recorded at entry. Many cells are looked at: treat a gap as a lead to test,
     not an edge, until t ≈ 3 over 20–30 sessions."""
     trades: list[dict[str, Any]] = []
-    for name in ACCOUNTS:
+    for name in _accounts(journal_dir):
         for r in _jsonl(journal_dir / f"paper_{name}.jsonl"):
             if r.get("type") != "close" or not isinstance(r.get("context"), dict):
                 continue
@@ -313,7 +321,7 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
 
 def paper_history(journal_dir: Path) -> dict[str, Any]:
     days: dict[str, dict[str, dict[str, float]]] = defaultdict(dict)
-    for name in ACCOUNTS:
+    for name in _accounts(journal_dir):
         for r in _jsonl(journal_dir / f"paper_{name}.jsonl"):
             if r.get("type") != "close":
                 continue

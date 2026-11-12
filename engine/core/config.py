@@ -78,14 +78,20 @@ class ShadowScannerConfig:
     # Eligibility (HYPOTHESIS, owner review 12 Nov 2026): options that cannot carry a reading.
     # Dead expiry-day contracts at 0.05 x 0.10 scored 61-65 on margin-cleanup flow.
     option_min_premium: float = 5.0  # mid below this: not scored
-    option_max_spread_pct: float = 10.0  # (ask - bid) / mid above this: not scored
+    # Per underlying (fix.md: Sensex 15, Nifty 5): (name, minimum mid) pairs.
+    option_min_premium_by_underlying: tuple[tuple[str, float], ...] = (("SENSEX", 15.0),)
+    option_max_spread_pct: float = 5.0  # (ask - bid) / mid above this: not scored
     option_min_ask: float = 0.25  # ask at or below this (tick floor): not scored
     # Location gate: without a structural level the other pillars alone can not make a grade.
-    min_location_pts: float = 5.0
+    min_location_pts: float = 8.0
     location_gate_cap: float = 60.0
     # Book shape: when the touch (micro-price lean) and the top-5 imbalance disagree, a passive
     # wall below/above the touch is doing the work; scale the book pillar by this.
     book_disagreement_factor: float = 0.5
+    # Spoof/wall tracker (engine/shadow/spoof.py): a wall event counts this long, and gives
+    # its pattern this many location points (a wall at a price is a structural event).
+    spoof_event_s: float = 30.0
+    spoof_location_pts: float = 15.0
     # Paper ledger (forward test). Times are IST; brokerage plan rows live in brokerage.csv.
     paper_no_new_entries_after: time = time(15, 0)
     paper_square_off_at: time = time(15, 20)
@@ -270,11 +276,17 @@ def _build_shadow_scanner(raw: Mapping[str, Any], root: Path) -> ShadowScannerCo
             _positive(sc.get("kelly_rolling_window", 100), "shadow_scanner.kelly_rolling_window")
         ),
         option_min_premium=float(sc.get("option_min_premium", 5.0)),
-        option_max_spread_pct=float(sc.get("option_max_spread_pct", 10.0)),
+        option_min_premium_by_underlying=tuple(
+            (str(k), float(v))
+            for k, v in (sc.get("option_min_premium_by_underlying") or {"SENSEX": 15}).items()
+        ),
+        option_max_spread_pct=float(sc.get("option_max_spread_pct", 5.0)),
         option_min_ask=float(sc.get("option_min_ask", 0.25)),
-        min_location_pts=float(sc.get("min_location_pts", 5.0)),
+        min_location_pts=float(sc.get("min_location_pts", 8.0)),
         location_gate_cap=float(sc.get("location_gate_cap", 60.0)),
         book_disagreement_factor=float(sc.get("book_disagreement_factor", 0.5)),
+        spoof_event_s=float(sc.get("spoof_event_s", 30.0)),
+        spoof_location_pts=float(sc.get("spoof_location_pts", 15.0)),
         paper_no_new_entries_after=_hhmm_time(
             sc.get("paper_no_new_entries_after", "15:00"),
             "shadow_scanner.paper_no_new_entries_after",

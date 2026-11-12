@@ -59,6 +59,7 @@ from engine.shadow.models import (
     SignalGrade,
     SignalWave,
 )
+from engine.shadow.spoof import SpoofTracker
 
 
 @dataclass
@@ -81,6 +82,7 @@ class InstrumentMicrostructureState:
     is_option: bool | None = None
     # Cash-market stock (instrument master Kind.EQUITY): costed as intraday cash equity.
     is_equity: bool | None = None
+    underlying: str = ""  # for per-underlying rules (e.g. a higher minimum premium on Sensex)
 
     # Live intraday state
     ltp: float = 0.0
@@ -290,6 +292,7 @@ class ShadowOrderBookScanner:
         cost_broker: str | None = None,
     ) -> None:
         self.config = config or ShadowScannerConfig()
+        self._spoof: dict[str, SpoofTracker] = {}
         self.capital_inr = capital_inr
         self.max_lots = max(1, max_lots)  # CLAUDE.md rule 5: one lot until 20-30 live trades
         self._book = book
@@ -407,6 +410,10 @@ class ShadowOrderBookScanner:
         if self.ineligible_reason(st) is not None:
             return None
         ts = now or datetime.now(IST)
+        spoof = self._spoof_for(symbol).on_depth(
+            ts=ts.timestamp(), ltp=st.ltp, cum_volume=float(st.cum_volume or 0),
+            bids=st.bids, asks=st.asks, tick=st.tick_size,
+        )  # fmt: skip
 
         book: BookMicrostructureSnapshot = analyze_book_microstructure(st.bids, st.asks)
         vwap_bands = compute_vwap_bands(list(st.prices), list(st.volumes))
@@ -484,8 +491,22 @@ class ShadowOrderBookScanner:
         ):
             wave = SignalWave.VWAP_DELIVERY_RECLAIM
 
+        # A pulled (spoofed) or eaten wall near price in the last spoof_event_s seconds sets the
+        # pattern and direction: pulled bid wall -> SHORT, eaten ask wall -> LONG, etc.
+        ev = self._spoof_for(symbol).last_event
+        spoof_pts = 0.0
+        if ev is not None and ts.timestamp() - float(ev["ts"]) <= self.config.spoof_event_s:
+            direction = str(ev["direction"])
+            struct_eval = sweep_long if direction == "LONG" else sweep_short
+            wave = (
+                SignalWave.SPOOF_RUG_PULL
+                if ev["pattern"] == "spoof rug-pull"
+                else SignalWave.EATEN_WALL_SQUEEZE
+            )
+            spoof_pts = self.config.spoof_location_pts
+
         # Pillar 1 (0-25 pts): Structural Location
-        p1_pts = max(struct_eval.structural_score_pts, cas_bonus_pts)
+        p1_pts = max(struct_eval.structural_score_pts, cas_bonus_pts, spoof_pts)
         if wave is SignalWave.WALL_BREAKOUT_SQUEEZE and at_res_break:
             p1_pts = max(p1_pts, 22.0)
         if wave is SignalWave.VWAP_DELIVERY_RECLAIM:
@@ -496,7 +517,9 @@ class ShadowOrderBookScanner:
 
         # Pillar 3 (0-25 pts): Deep-Book OBI & L6-L25 Air-Pocket Vacuum
         p3_pts = mech.obi_air_pocket_score_pts
-        if book_disagrees(st.bids, st.asks, book.obi_l5):
+        if spoof["book_multiplier"] < 1.0:  # deep wall opposes the touch: suspect bait
+            p3_pts *= spoof["book_multiplier"]
+        elif book_disagrees(st.bids, st.asks, book.obi_l5):
             p3_pts *= self.config.book_disagreement_factor
 
         # Pillar 4 (0-20 pts): Cross-Asset Derivative OI Buildup + GEX + Delivery + Breadth
@@ -651,11 +674,22 @@ class ShadowOrderBookScanner:
         if ask <= c.option_min_ask:
             return "tick floor"
         mid = (bid + ask) / 2
-        if mid < c.option_min_premium:
+        floor = dict(c.option_min_premium_by_underlying).get(st.underlying, c.option_min_premium)
+        if mid < floor:
             return "premium too small"
         if (ask - bid) / mid * 100 > c.option_max_spread_pct:
             return "spread too wide"
         return None
+
+    def _spoof_for(self, symbol: str) -> SpoofTracker:
+        t = self._spoof.get(symbol)
+        if t is None:
+            t = self._spoof[symbol] = SpoofTracker()
+        return t
+
+    def spoof_view(self, symbol: str) -> dict[str, Any] | None:
+        t = self._spoof.get(symbol)
+        return t.last_event if t is not None else None
 
     def _evaluate_futures_oi(
         self, st: InstrumentMicrostructureState, *, is_stop_hunt: bool

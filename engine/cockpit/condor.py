@@ -213,13 +213,13 @@ class SpreadAccount:
             last_loss_at=losses[-1].closed_at if losses else None,
         )
 
-    def gate(self, max_loss_inr: float, now: datetime) -> tuple[bool, str]:
+    def gate(self, max_loss_inr: float, now: datetime, lots: int = 1) -> tuple[bool, str]:
         g = check_pre_trade_risk_gate(
             self.limits,
             self.risk_state(),
             proposed_trade_max_loss_inr=max_loss_inr,
             proposed_margin_inr=max_loss_inr,
-            proposed_lots=1,
+            proposed_lots=lots,
             strategy_kind="defined_risk_spread",
             now=now,
             session_open=self.session_open,
@@ -232,7 +232,15 @@ class SpreadAccount:
     # ------------------------------------------------------------------ orders
 
     def _fill(
-        self, symbol: str, side: str, qty: int, book: Book, now: datetime, *, exit_: bool
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        book: Book,
+        now: datetime,
+        *,
+        exit_: bool,
+        kind: str = "CE",
     ) -> tuple[int, float, float, str]:
         """(filled qty, average price, charges, reason) for one leg against its book."""
         ladder = book.asks if side == "BUY" else book.bids
@@ -255,7 +263,7 @@ class SpreadAccount:
             asks=book.asks,
             now=now,
             trade_date=now.astimezone(IST).date(),
-            segment="options",
+            segment="futures" if kind == "FUT" else "options",
             is_exit=exit_,
         )
         if res.order.state not in (OrderState.FILLED, OrderState.PARTIAL):
@@ -280,11 +288,22 @@ class SpreadAccount:
         spot: float,
         reason: str,
         context: Mapping[str, Any] | None = None,
+        lots: int = 1,
+        max_loss_inr: float | None = None,
     ) -> tuple[bool, str]:
+        """``max_loss_inr`` overrides the structure's worst case for the risk gate when a hard
+        (spot-conditioned) stop defines the planned loss, e.g. a synthetic future."""
         qty = legs[0].qty
         # Defined risk only: refuse any short without a same-type wing (raises otherwise).
         intents = [
-            SpreadLegIntent(lg.symbol, lg.side, lg.qty, 1.0, lg.side == "BUY", option_type=lg.kind)
+            SpreadLegIntent(
+                lg.symbol,
+                lg.side,
+                lg.qty,
+                1.0,
+                lg.side == "BUY",
+                option_type=lg.kind if lg.kind in ("CE", "PE") else None,
+            )
             for lg in legs
         ]
         sequence_entry_legs(intents)
@@ -299,14 +318,16 @@ class SpreadAccount:
         est_credit = sum(books[s.symbol].bids[0][0] for s in shorts) - sum(
             books[w.symbol].asks[0][0] for w in wings
         )
-        max_loss = worst_case(est_credit, width_pts) * qty
-        ok, why = self.gate(max_loss, now)
+        max_loss = worst_case(est_credit, width_pts) * qty if max_loss_inr is None else max_loss_inr
+        ok, why = self.gate(max_loss, now, lots)
         if not ok:
             return self._refuse(structure, now, why)
         filled: list[Leg] = []
         # Stage 1: wings.
         for w in wings:
-            q, px, ch, why = self._fill(w.symbol, "BUY", qty, books[w.symbol], now, exit_=False)
+            q, px, ch, why = self._fill(
+                w.symbol, "BUY", qty, books[w.symbol], now, exit_=False, kind=w.kind
+            )
             if q < qty:
                 self._unwind(filled + ([_part(w, q, px, ch)] if q else []), books, now)
                 return self._refuse(structure, now, f"wing {w.strike:g} {w.kind} not filled: {why}")
@@ -314,7 +335,9 @@ class SpreadAccount:
             filled.append(w)
         # Stage 2: shorts, only now that their wings are held.
         for s in shorts:
-            q, px, ch, why = self._fill(s.symbol, "SELL", qty, books[s.symbol], now, exit_=False)
+            q, px, ch, why = self._fill(
+                s.symbol, "SELL", qty, books[s.symbol], now, exit_=False, kind=s.kind
+            )
             if q < qty:
                 self._unwind(filled + ([_part(s, q, px, ch)] if q else []), books, now)
                 return self._refuse(
@@ -333,7 +356,9 @@ class SpreadAccount:
             qty=qty,
             credit_pts=round(credit, 2),
             width_pts=width_pts,
-            max_loss_inr=round(worst_case(credit, width_pts) * qty, 2),
+            max_loss_inr=round(
+                worst_case(credit, width_pts) * qty if max_loss_inr is None else max_loss_inr, 2
+            ),
             opened_at=now,
             spot0=spot,
             reason=reason,
@@ -354,7 +379,7 @@ class SpreadAccount:
             back = "BUY" if lg.side == "SELL" else "SELL"
             b = books.get(lg.symbol)
             if b is not None and lg.qty > 0:
-                self._fill(lg.symbol, back, lg.qty, b, now, exit_=True)
+                self._fill(lg.symbol, back, lg.qty, b, now, exit_=True, kind=lg.kind)
 
     def close(
         self, pos: SpreadPosition, books: Mapping[str, Book], now: datetime, reason: str
@@ -368,7 +393,7 @@ class SpreadAccount:
             if b is None:
                 return False, f"no book for {lg.strike:g} {lg.kind}; still open"
             back = "BUY" if lg.side == "SELL" else "SELL"
-            q, px, ch, why = self._fill(lg.symbol, back, lg.qty, b, now, exit_=True)
+            q, px, ch, why = self._fill(lg.symbol, back, lg.qty, b, now, exit_=True, kind=lg.kind)
             if q < lg.qty:
                 return False, f"{lg.strike:g} {lg.kind} exit not filled ({why}); still open"
             lg.open, lg.exit_px, lg.exit_charges = False, round(px, 4), ch
@@ -491,7 +516,7 @@ class SpreadAccount:
                     lv = b.asks if lg.side == "SELL" else b.bids
                     px = lv[0][0] if lv else 0.0
                     exit_ch += fno_charges(
-                        self.book, day, segment="options",
+                        self.book, day, segment="futures" if lg.kind == "FUT" else "options",
                         side="buy" if lg.side == "SELL" else "sell",
                         turnover_inr=px * lg.qty, broker=self.broker_name,
                     ).total  # fmt: skip

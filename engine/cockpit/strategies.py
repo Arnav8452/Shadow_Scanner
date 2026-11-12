@@ -47,7 +47,7 @@ class DebitConfig:
     square_off: str = "15:20"
     max_entries_per_day: int = 2
     book_wait_s: float = 60.0
-    expiry_day_exit: str = "14:50"
+    expiry_day_exit: str = "14:45"
     expiry_day_last_entry: str = "14:30"
 
 

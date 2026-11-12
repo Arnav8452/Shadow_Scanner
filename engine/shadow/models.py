@@ -19,6 +19,8 @@ class SignalWave(StrEnum):
     CAS_3PM_VWAP_REVERSAL = (
         "CAS_3PM_VWAP_REVERSAL"  # 15:00-15:40 Closing Auction Institutional Reversal
     )
+    SPOOF_RUG_PULL = "SPOOF_RUG_PULL"  # a displayed wall pulled without trades near price
+    EATEN_WALL_SQUEEZE = "EATEN_WALL_SQUEEZE"  # a wall traded away: the side that ate it wins
 
 
 class ShadowSignalStatus(StrEnum):

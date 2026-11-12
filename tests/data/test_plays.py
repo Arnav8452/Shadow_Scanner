@@ -1,0 +1,448 @@
+"""Playbook strategies from the owner's notes (new/, 12 Nov 2026): tape, gates, spoofing and
+each strategy's trigger, driven through a scripted market."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from engine.cockpit.condor import SpreadAccount
+from engine.cockpit.gates import (
+    BreakevenRatchet,
+    breakeven,
+    expected_impulse,
+    heavyweights_aligned,
+    impulse_ok,
+    off_cycle,
+)
+from engine.cockpit.paper import Book
+from engine.cockpit.plays_base import HighIvRouter, Market, SpreadPlay, SpreadTrade, spread_exit
+from engine.cockpit.plays_long import (
+    BreakthroughPlay,
+    OiIgnitionPlay,
+    PutPanicPlay,
+    ZeroDtePlay,
+    ZoneRiderPlay,
+    divergence,
+)
+from engine.cockpit.plays_spread import (
+    ExpiryPinPlay,
+    IronFlyPlay,
+    MarriedFuturePlay,
+    McxMiniPlay,
+    OiCreditPlay,
+    SyntheticFuturePlay,
+)
+from engine.cockpit.tape import IndexTape, OptionTape
+from engine.core.config import load_settings
+from engine.core.rules import IST, RuleBook
+from engine.data.reference.instrument_master import Kind
+from engine.shadow.spoof import SpoofTracker
+from tests.data.conftest import WEEKLY, build_master, opt_symbol
+from tests.data.test_cockpit import _account
+
+D = datetime(2026, 11, 11, 9, 15, tzinfo=IST)
+
+
+def bk(bid: float, ask: float, qty: int = 2000) -> Book:
+    return Book(
+        tuple((round(bid - i * 0.05, 2), qty, 5) for i in range(5) if bid - i * 0.05 > 0),
+        tuple((round(ask + i * 0.05, 2), qty, 5) for i in range(5)),
+    )
+
+
+def fut_state(ltp: float, cum: float, bid: float | None = None, ask: float | None = None) -> Any:
+    b = ltp - 0.05 if bid is None else bid
+    a = ltp + 0.05 if ask is None else ask
+    return SimpleNamespace(ltp=ltp, cum_volume=cum, bids=((b, 650, 1),), asks=((a, 650, 1),),
+                           oi_now=0, symbol="NSE:NIFTY26NOVFUT")
+
+
+# ---------------------------------------------------------------- tape
+
+
+def test_tape_bars_cvd_vwap_and_opening_range() -> None:
+    t = IndexTape("NIFTY")
+    cum = 0.0
+    for i in range(40):
+        now = D + timedelta(minutes=i, seconds=30)
+        cum += 1000
+        px = 25000 + i
+        t.on_sample(now, spot=px, fut=fut_state(px + 20, cum, ask=px + 20))  # trades at the ask
+    assert len(t.bars) == 40 and t.cvd() > 0
+    hi, lo = t.opening_range(30) or (0, 0)
+    assert lo == 25000 and hi == 25029
+    assert t.vwap() == pytest.approx(25039.5, abs=1)
+    assert t.atr() == pytest.approx(1.0, abs=0.01)
+    assert t.bars_n(15)[0].close == 25014
+    assert t.realized_vol(30) is not None
+
+
+def test_tape_oi_change_and_straddle_stats() -> None:
+    t = IndexTape("NIFTY")
+    rows = lambda oi: [{"k": 25000.0, "ce": {"oi": oi}, "pe": {"oi": 500}}]  # noqa: E731
+    t.on_chain(D, rows(1000))
+    t.on_chain(D + timedelta(minutes=6), rows(950))
+    assert t.oi_change_pct(25000.0, "CE", 6) == pytest.approx(-5.0)
+    for i in range(8):
+        t.on_sample(D + timedelta(minutes=i), spot=25000, straddle=200.0 - i, straddle_cum_vol=100.0 * (i + 1))
+    vwap, sd, last = t.straddle_stats() or (0, 0, 0)
+    assert last == 194.0 and vwap > last and sd > 0
+
+
+def test_option_tape_vwap_and_ema() -> None:
+    o = OptionTape()
+    for i in range(12):
+        o.on_sample(D.replace(hour=9, minute=20) + timedelta(minutes=i), 100.0 + i, 100.0 * (i + 1))
+    assert o.open_920 == 100.0 and o.vwap() is not None and o.ema(9) is not None
+
+
+# ---------------------------------------------------------------- gates
+
+
+def test_breakeven_impulse_and_ratchet(repo_root: Path) -> None:
+    book = RuleBook.load(repo_root / "config" / "rules")
+    be, pts = breakeven(book, "upstox_plus", date(2026, 11, 11), 150.0, 65)
+    assert 151.0 < be < 154.0 and pts == pytest.approx(be - 150.0)
+    assert expected_impulse(10.0, 0.5, 0.001) == pytest.approx(10 * 3**0.5 * 0.5 + 0.5 * 0.001 * 300, rel=1e-6)
+    assert impulse_ok(10.0, 0.5, 0.001, pts, 3.5)[0] is (expected_impulse(10.0, 0.5, 0.001) >= 3.5 * pts)
+    assert impulse_ok(None, 0.5, 0.001, pts, 3.5) == (False, 0.0)
+    r = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    assert r.stop == pytest.approx(150 - min(18.0, 1200 / 65), abs=0.01)
+    assert r.on_bid(150 + 2 * pts + 0.05, D + timedelta(seconds=10)) is None
+    assert r.state == "BREAKEVEN_LOCKED" and r.stop == be
+    r2 = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    assert "scratch" in str(r2.on_bid(150.5, D + timedelta(seconds=181)))
+
+
+def test_off_cycle_and_heavyweights() -> None:
+    assert not off_cycle(D.replace(hour=9, minute=20, second=10))
+    assert off_cycle(D.replace(hour=9, minute=21, second=10))
+    six = {"HDFCBANK": 1.0, "RELIANCE": 0.5, "ICICIBANK": 0.2, "INFY": 0.1, "LT": -0.3, "TCS": -0.1}
+    assert heavyweights_aligned(six, True) is True and heavyweights_aligned(six, False) is False
+    assert heavyweights_aligned({}, True) is None
+
+
+# ---------------------------------------------------------------- spoof tracker
+
+
+def test_spoof_rug_pull_and_eaten_wall() -> None:
+    sp = SpoofTracker()
+    base_bids = [(88.75, 400), (88.70, 3_297_000), (88.65, 400), (88.60, 400), (88.55, 400)]
+    asks = [(89.00, 420), (89.05, 400), (89.10, 400), (89.15, 400), (89.20, 400)]
+    sp.on_depth(ts=0, ltp=88.80, cum_volume=1000, bids=base_bids, asks=asks, tick=0.05)
+    pulled = [(88.75, 400), (88.65, 400), (88.60, 400), (88.55, 400), (88.50, 400)]
+    out = sp.on_depth(ts=1, ltp=88.75, cum_volume=1010, bids=pulled, asks=asks, tick=0.05)
+    assert out["events"] and out["events"][0]["pattern"] == "spoof rug-pull"
+    assert out["events"][0]["direction"] == "SHORT"
+    eat = SpoofTracker()
+    a2 = [(150.0, 50_000), (150.05, 500), (150.10, 500), (150.15, 500), (150.2, 500)]
+    b2 = [(149.95, 500), (149.9, 500), (149.85, 500), (149.8, 500), (149.75, 500)]
+    eat.on_depth(ts=0, ltp=149.95, cum_volume=0.0, bids=b2, asks=a2, tick=0.05)
+    eat.on_depth(ts=1, ltp=150.0, cum_volume=1.0, bids=b2, asks=a2, tick=0.05)
+    gone = [(150.05, 500), (150.10, 500), (150.15, 500), (150.2, 500), (150.25, 500)]
+    out2 = eat.on_depth(ts=2, ltp=150.0, cum_volume=48_000.0, bids=b2, asks=gone, tick=0.05)
+    assert out2["events"] and out2["events"][0]["pattern"] == "eaten wall squeeze"
+    assert out2["events"][0]["direction"] == "LONG"
+    bait = SpoofTracker().on_depth(ts=0, ltp=88.8, cum_volume=0, bids=base_bids,
+                                   asks=[(89.0, 4000)] + asks[1:], tick=0.05)
+    assert bait["bait"] == "FAKE_BID_BAIT" and bait["book_multiplier"] == 0.25
+
+
+# ---------------------------------------------------------------- scripted market
+
+
+class FakeMarket(Market):
+    def __init__(self, now: datetime, master: Any) -> None:
+        self.now = now
+        self._books = {}
+        self.tapes: dict[str, IndexTape] = {}
+        self.otapes: dict[str, OptionTape] = {}
+        self.spots = {"NIFTY": 25000.0}
+        self.futs: dict[str, Any] = {}
+        self.rows: list[dict[str, Any]] = []
+        self.tbl: dict[str, Any] = {}
+        self.greeks: dict[str, dict[str, Any]] = {}
+        self.ivp_val: float | None = 50.0
+        self.zone_view: dict[str, Any] = {}
+        self.exp_today = False
+        self.pinned: dict[str, list[str]] = {}
+        self.core = SimpleNamespace(
+            master=master, label=lambda s: s, option_symbol=self._opt, runner=SimpleNamespace(
+                spot_symbol={"NIFTY": "NSE:NIFTY50-INDEX"}, subscribed=[],
+                scanner=SimpleNamespace(states={}), spots=lambda: self.spots),
+        )
+
+    def _opt(self, und: str, exp: Any, k: float, kind: str) -> str:
+        return opt_symbol(WEEKLY, int(k), Kind.CALL if kind == "CE" else Kind.PUT)
+
+    def underlyings(self) -> list[str]:
+        return ["NIFTY"]
+
+    def spot(self, und: str) -> float:
+        return self.spots.get(und, 0.0)
+
+    def fut(self, und: str) -> Any:
+        return self.futs.get(und)
+
+    def books(self) -> dict[str, Book]:
+        return self._books
+
+    def tape(self, und: str) -> IndexTape:
+        return self.tapes.setdefault(und, IndexTape(und))
+
+    def otape(self, sym: str) -> OptionTape:
+        return self.otapes.setdefault(sym, OptionTape())
+
+    def strip(self, und: str) -> dict[str, Any]:
+        return {"atm_iv_pct": 15.0, "forward": self.spots[und], "iv_percentile": self.ivp_val}
+
+    def chain_rows(self, und: str) -> list[dict[str, Any]]:
+        return self.rows
+
+    def tables(self, und: str) -> dict[str, Any]:
+        return self.tbl
+
+    def detail(self, sym: str) -> dict[str, Any]:
+        return self.greeks.get(sym, {"delta": 0.55, "gamma": 0.003, "iv": 15.0})
+
+    def ivp(self, und: str) -> float | None:
+        return self.ivp_val
+
+    def expiry_today(self, und: str) -> bool:
+        return self.exp_today
+
+    def lot(self, sym: str) -> int:
+        return 65
+
+    def zones(self, und: str) -> dict[str, Any]:
+        return self.zone_view
+
+    def day_returns(self) -> dict[str, float] | None:
+        return None
+
+    def context(self, und: str) -> dict[str, Any]:
+        return {"underlying": und}
+
+    def event_block(self) -> str | None:
+        return None
+
+    def breakeven(self, entry: float, qty: int) -> tuple[float, float]:
+        return entry + 2.0, 2.0
+
+    def pin(self, owner: str, syms: list[str]) -> None:
+        self.pinned[owner] = syms
+
+
+def chain(spot: float = 25000.0, oi_ce: int = 1000, oi_pe: int = 1000) -> list[dict[str, Any]]:
+    rows = []
+    for k in range(24300, 25751, 50):
+        d = abs(k - spot)
+        cd = max(0.02, min(0.98, 0.5 - (k - spot) / 1200))
+        rows.append({
+            "k": float(k),
+            "ce": {"sym": opt_symbol(WEEKLY, k, Kind.CALL), "delta": round(cd, 3), "iv": 15.0,
+                   "oi": oi_ce * (5 if k == 25100 else 1), "bid": max(0.5, 100 - d / 5), "ask": max(0.6, 100.5 - d / 5),
+                   "ltp": max(0.5, 100 - d / 5)},
+            "pe": {"sym": opt_symbol(WEEKLY, k, Kind.PUT), "delta": round(cd - 1, 3), "iv": 15.0,
+                   "oi": oi_pe * (5 if k == 24900 else 1), "bid": max(0.5, 100 - d / 5), "ask": max(0.6, 100.5 - d / 5),
+                   "ltp": max(0.5, 100 - d / 5)},
+        })
+    return rows
+
+
+@pytest.fixture
+def mkt() -> FakeMarket:
+    m = FakeMarket(D.replace(hour=11), build_master(range(24300, 25800, 50)))
+    m.rows = chain()
+    for r in m.rows:
+        for key in ("ce", "pe"):
+            m._books[r[key]["sym"]] = bk(r[key]["bid"], r[key]["ask"])
+    return m
+
+
+def _spread(repo_root: Path, tmp_path: Path, name: str) -> SpreadAccount:
+    settings = load_settings(root=repo_root, environ={})
+    return SpreadAccount(name, book=RuleBook.load(repo_root / "config" / "rules"),
+                         limits=settings.risk, broker_name="upstox_plus", session_open=D,
+                         journal=tmp_path / f"paper_{name}.jsonl")
+
+
+def feed_trend(m: FakeMarket, minutes: int, start_px: float, step: float, vol: float,
+               at_ask: bool = True, start: datetime | None = None) -> datetime:
+    t = m.tape("NIFTY")
+    now = start or D
+    px = start_px
+    cum = t.last_cum or 0.0
+    for i in range(minutes):
+        cum += vol * (1 + 0.1 * (i % 3))  # a little variation, as real volume has
+        px += step
+        m.spots["NIFTY"] = px
+        f = fut_state(px + 20, cum, ask=px + 20 if at_ask else None, bid=None if at_ask else px + 20)
+        m.futs["NIFTY"] = f
+        t.on_sample(now, spot=px - step, fut=None)  # the bar opens where the last one closed
+        t.on_sample(now + timedelta(seconds=40), spot=px, fut=f)
+        now += timedelta(minutes=1)
+    return now
+
+
+# ---------------------------------------------------------------- long plays
+
+
+def test_put_panic_enters_on_breakdown_with_cvd_and_iv(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = PutPanicPlay("put_panic", "Put panic", "S1", _account(repo_root, tmp_path, "pp"))
+    t = mkt.tape("NIFTY")
+    now = feed_trend(mkt, 35, 25000, 0.5, 1000)  # quiet 30-min range
+    for i in range(5):  # 3-minute put IV rise
+        t.iv.setdefault("pe_atm", []).append((now - timedelta(minutes=5 - i), 14.0 + i * 0.3))
+    # A selling burst through the range low.
+    now = feed_trend(mkt, 3, mkt.spots["NIFTY"], -15, 30_000, at_ask=False, start=now)
+    mkt.now = now.replace(second=50)
+    mkt.greeks = {s: {"delta": -0.57, "gamma": 0.004} for s in mkt._books}
+    mkt.tbl = {WEEKLY.isoformat(): {"rows": mkt.rows}}  # 6 days to expiry: >= 2 needed
+    assert p.look(mkt.now, mkt) == []  # a 15-pt drop does not clear 3.5x charges breakeven
+    assert "charges gate" in p.decision
+    p2 = PutPanicPlay("put_panic", "Put panic", "S1", _account(repo_root, tmp_path / "b", "pp"))
+    mkt.tapes.clear()
+    t = mkt.tape("NIFTY")
+    now = feed_trend(mkt, 35, 25000, 0.5, 1000)
+    for i in range(5):
+        t.iv.setdefault("pe_atm", []).append((now - timedelta(minutes=5 - i), 14.0 + i * 0.3))
+    # One big selling minute through the range low; the strategy checks as soon as it closes.
+    now = feed_trend(mkt, 2, mkt.spots["NIFTY"], -100, 30_000, at_ask=False, start=now)
+    mkt.now = now.replace(second=50)
+    out = p2.look(mkt.now, mkt)
+    p = p2
+    assert out and out[0].startswith("bought"), (out, p.decision)
+    mg = next(iter(p.managed.values()))
+    assert mg.ratchet is not None and mg.time_stop == (12, 10) and not mg.bullish
+
+
+def test_breakthrough_scores_and_two_lots_above_80(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = BreakthroughPlay("bt", "Breakthrough", "rules.md", _account(repo_root, tmp_path, "bt"))
+    feed_trend(mkt, 25, 25000, 3, 1000)
+    sym = mkt.by_delta("NIFTY", "CE", 0.55)
+    assert sym is not None
+    s = p.score(mkt, "NIFTY", sym[0], True)
+    assert s is not None and 0 <= s["score"] <= 100 and set(s["sub"]) == {"book", "volume", "oi", "gamma", "iv"}
+    assert "sl_25" in s and "passes_charges_gate" in s
+
+
+def test_zero_dte_needs_expiry_day_and_a_pinned_midday(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = ZeroDtePlay("z", "0DTE", "S3", _account(repo_root, tmp_path, "z"))
+    mkt.now = D.replace(hour=13, minute=40)
+    assert p.look(mkt.now, mkt) == []  # not an expiry day: nothing
+    mkt.exp_today = True
+    p.bands["NIFTY"] = {"inside": False, "band": (24900, 25100), "done": False}
+    p.look(mkt.now, mkt)
+    assert "left the straddle band" in p.decision
+
+
+def test_oi_ignition_arms_the_retest(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = OiIgnitionPlay("oi", "OI ignition", "S2", _account(repo_root, tmp_path, "oi"))
+    t = mkt.tape("NIFTY")
+    mkt.rows = chain(oi_ce=1000)
+    t.on_chain(D.replace(hour=10, minute=40), mkt.rows)
+    now = feed_trend(mkt, 23, 25060, 1, 1000, start=D.replace(hour=10, minute=36))
+    t.on_chain(now - timedelta(minutes=1), chain(oi_ce=900))  # call OI at 25100 falls 10%
+    mkt.rows = chain(oi_ce=900)
+    now = feed_trend(mkt, 3, mkt.spots["NIFTY"], 12, 5000, start=now)  # through 25100 on volume
+    mkt.now = now
+    p.look(now, mkt)
+    assert "NIFTY" in p.armed, p.decision  # waits 1-3 min for the second-mouse retest
+
+
+def test_zone_rider_and_divergence(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = ZoneRiderPlay("zr", "Zone rider", "ride_wave", _account(repo_root, tmp_path, "zr"))
+    now = feed_trend(mkt, 10, 25000, 1, 1000, start=D.replace(hour=10))
+    mkt.futs["NIFTY"] = fut_state(25230.0, 99_999)
+    mkt.zone_view = {"floors": [{"low": 25200.0, "high": 25210.0, "ratio": 15.0, "stop_below": 25195.0,
+                                 "trapped_volume": 10_000, "minutes": 12}], "ceilings": []}
+    mkt.tbl = {WEEKLY.isoformat(): {"rows": mkt.rows}}
+    mkt.now = now
+    out = p.look(now, mkt)
+    assert out and out[0].startswith("bought"), (out, p.decision)
+    assert next(iter(p.managed.values())).spot_stop is not None
+    assert divergence(IndexTape("X")) is None
+
+
+# ---------------------------------------------------------------- spread plays
+
+
+def test_oi_credit_bull_put_when_call_writers_cover(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = OiCreditPlay("oc", "OI credit", "B", _spread(repo_root, tmp_path, "oc"))
+    t = mkt.tape("NIFTY")
+    t.on_chain(D.replace(hour=10, minute=50), chain(oi_ce=1000))
+    t.on_chain(D.replace(hour=11, minute=0), chain(oi_ce=900))
+    now = feed_trend(mkt, 25, 25080, 0, 1000, start=D.replace(hour=10, minute=35))
+    now = feed_trend(mkt, 2, 25085, 0, 60_000, start=now)  # a buying burst: CVD z high
+    mkt.now = now
+    p.look(now, mkt)
+    assert p.pending is not None and p.pending["structure"] == "BULL_PUT", p.decision
+    assert [lg.side for lg in p.pending["legs"]] == ["BUY", "SELL"]
+
+
+def test_iron_fly_waits_for_flush_and_rv_iv(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = IronFlyPlay("if", "Iron fly", "A", _spread(repo_root, tmp_path, "if"), post_flush=False,
+                    days={"NIFTY": (0, 1, 2, 3, 4)})
+    t = mkt.tape("NIFTY")
+    now = D
+    for i in range(40):
+        t.on_sample(now, spot=25000 + (i % 2) * 0.5, fut=fut_state(25020, 1000.0 * (i + 1)),
+                    straddle=200.0 - (i * 0.5 if i > 30 else 0), straddle_cum_vol=1000.0 * (i + 1))
+        now += timedelta(minutes=1)
+    mkt.now = now
+    p.look(now, mkt)
+    assert p.pending is not None and p.pending["structure"] == "IRON_FLY", p.decision
+    assert sorted(lg.side for lg in p.pending["legs"]) == ["BUY", "BUY", "SELL", "SELL"]
+
+
+def test_expiry_pin_needs_writing_unwinding_and_a_spike(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = ExpiryPinPlay("ep", "Pin", "fix2", _spread(repo_root, tmp_path, "ep"))
+    mkt.exp_today = True
+    t = mkt.tape("NIFTY")
+    t.on_chain(D.replace(hour=13, minute=35), chain(oi_ce=1000, oi_pe=1000))
+    later = chain(oi_ce=700, oi_pe=1500)
+    t.on_chain(D.replace(hour=14, minute=10), later)
+    mkt.rows = later
+    mkt.now = D.replace(hour=13, minute=45)
+    p.look(mkt.now, mkt)  # records the 13:45 prices
+    sym = opt_symbol(WEEKLY, 24950, Kind.PUT)
+    mkt._books[sym] = bk(200.0, 200.5)  # the put spikes
+    mkt.now = D.replace(hour=14, minute=10)
+    p.look(mkt.now, mkt)
+    assert p.pending is not None, p.decision
+    assert [lg.side for lg in p.pending["legs"]] == ["BUY", "SELL"]
+
+
+def test_synthetic_future_uses_the_stop_for_planned_loss(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    p = SyntheticFuturePlay("syn", "Synthetic", "F1", _spread(repo_root, tmp_path, "syn"))
+    p.on_setup("NIFTY", True, "S1")
+    p.look(mkt.now, mkt)
+    assert p.pending is not None
+    legs = p.pending["legs"]
+    assert [lg.side for lg in legs] == ["BUY", "BUY", "SELL"] and legs[0].kind == "PE"
+    assert p.pending["max_loss"] == pytest.approx(25000 * 0.005 * 65)
+
+
+def test_married_future_and_mcx_dormant(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    mf = MarriedFuturePlay("mf", "Married", "F2", _spread(repo_root, tmp_path, "mf"))
+    assert mf.look(mkt.now, mkt) is None  # no history yet: nothing
+    mc = McxMiniPlay("mcx", "MCX", "F3", _spread(repo_root, tmp_path, "mcx"))
+    mc.look(mkt.now, mkt)
+    assert mc.decision.startswith("dormant")
+
+
+def test_spread_exit_rules_and_high_iv_router(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    pos = SimpleNamespace(credit_pts=50.0, width_pts=200.0, legs=[], opened_at=D, expiry=WEEKLY)
+    tr = SpreadTrade("x", "NIFTY", D, target_pct=50, stop_mult=2.0, square_off="15:20")
+    assert spread_exit(pos, tr, {}, D.replace(hour=15, minute=21), 25000) == "square-off 15:20"
+    hiv = SpreadPlay("hiv", "HIV", "rule 4", _spread(repo_root, tmp_path, "hiv"))
+    r = HighIvRouter(hiv)
+    text = r.route(mkt, "NIFTY", True, "test")
+    assert "debit spread" in text and hiv.pending is not None
+    assert hiv.pending["structure"] == "BULL_CALL"
