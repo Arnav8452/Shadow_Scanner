@@ -5,3 +5,5 @@ equity_delivery,buy,0.015,pct_of_value,2020-07-01,,https://zerodha.com/charges,2
 options,sell,0,pct_of_premium,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."
 futures,sell,0,pct_of_price,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."
 equity_delivery,sell,0,pct_of_value,2020-07-01,,https://zerodha.com/charges,2026-11-09,secondary,"Stamp duty is buy side only."
+equity_intraday,buy,0.003,pct_of_value,2020-07-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Rs 300 per crore on the buy side (Indian Stamp Act regime from 1 Jul 2020)."
+equity_intraday,sell,0,pct_of_value,2020-07-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Stamp duty is buy side only."

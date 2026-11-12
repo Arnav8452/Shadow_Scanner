@@ -172,6 +172,8 @@ table.scr td.flags { white-space: normal; max-width: 420px; font-size: 11.5px; }
 .flag.ban { border-color: #7a3337; color: var(--down); } .flag.act { border-color: #2a6b49; color: var(--up); }
 #desk.hide { display: none; }
 .rbody { padding: 8px 10px; }
+.st-live { color: var(--down); } .st-paper { color: var(--up); } .st-research { color: var(--accent); } .st-not { color: var(--faint); }
+iframe.report { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 pre.report { white-space: pre-wrap; font: 12px/1.45 var(--mono); max-height: 520px; overflow: auto; margin: 0; }
 #toast { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 10; max-width: 460px; }
 #toast div { background: var(--panel2); border: 1px solid var(--line); border-left: 4px solid var(--up); padding: 8px 10px; border-radius: 6px; }
@@ -362,6 +364,7 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
 </div>
 <div id="research">
   <div class="rsbar"><span class="muted small">Columns</span><div class="seg" id="rs-cols"><button data-c="1">1</button><button data-c="2" class="on">2</button><button data-c="3">3</button></div><span class="muted small">Drag a panel's bottom-right corner to change its height · double-click a panel title to make it full width · sizes are remembered</span><button id="rs-reset" type="button">Reset layout</button></div>
+  <section class="panel" data-rs="rs-strat"><div class="hd"><h2>Strategies (SPEC §5 and Addendum A)</h2></div><div class="rbody" id="rs-strat"></div></section>
   <section class="panel" data-rs="rs0"><div class="hd"><h2>Signal study: does the reading predict the index?</h2><button id="rs-refresh">Refresh all</button></div><div class="rbody" id="rs-study"></div></section>
   <section class="panel" data-rs="rs0b"><div class="hd"><h2>Study by setup, hour, index</h2></div><div class="rbody" id="rs-study2"></div></section>
   <section class="panel wide" data-rs="rs-ctx"><div class="hd"><h2>Which conditions did the results come from?</h2><select id="ctx-h" title="Horizon for the signal study"><option value="15m">signals at 15 min</option><option value="30m" selected>signals at 30 min</option><option value="60m">signals at 60 min</option><option value="close">signals at close</option></select></div><div class="rbody" id="rs-ctx"></div></section>
@@ -370,6 +373,9 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
   <section class="panel" data-rs="rs3"><div class="hd"><h2>Paper accounts by day</h2></div><div class="rbody" id="rs-paper"></div></section>
   <section class="panel" data-rs="rs4"><div class="hd"><h2>Nifty ATM IV (EOD) and India VIX</h2></div><div class="rbody" id="rs-iv"></div></section>
   <section class="panel" data-rs="rs5"><div class="hd"><h2>Flows and reference (EOD)</h2></div><div class="rbody" id="rs-flows"></div></section>
+  <section class="panel" data-rs="rs-equity"><div class="hd"><h2>Delivery-spike stocks: results and holdings</h2></div><div class="rbody" id="rs-equity"></div></section>
+  <section class="panel" data-rs="rs-swing"><div class="hd"><h2>Swing: nightly candidates and paper account (SPEC §5.6, §5.8)</h2><select id="sw-day" title="Night"></select></div><div class="rbody" id="rs-swing"></div></section>
+  <section class="panel" data-rs="rs-earb"><div class="hd"><h2>Event arbitrage (Addendum A)</h2><select id="ea-day" title="Saved report"></select></div><div class="rbody" id="rs-earb"></div></section>
   <section class="panel" data-rs="rs6"><div class="hd"><h2>Recorder QC</h2></div><div class="rbody" id="rs-qc"></div></section>
   <section class="panel" data-rs="rs7"><div class="hd"><h2>Trade-mining reports (private)</h2></div><div class="rbody" id="rs-mining"></div></section>
 </div>
@@ -1003,9 +1009,55 @@ async function loadContext() {
   } catch (err) { $("rs-ctx").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
 }
 $("ctx-h").onchange = loadContext;
+// ---- strategies, swing, event arbitrage (read-only views of files the night jobs write)
+function strategiesView(d) {
+  const sc = (s) => s === "not built" ? "st-not" : "st-" + s;
+  const counts = Object.entries(d.counts).map(([k, v]) => `<span class="${sc(k)}">${esc(k)} ${v}</span>`).join(" · ");
+  return `<div class="muted small">${counts}. ${esc(d.note)}</div><table><thead><tr><th>§</th><th>Strategy</th><th>Status</th><th>Where</th><th>Note</th><th>Last output</th></tr></thead><tbody>${d.rows.map((r) => `<tr><td class="mono">${esc(r.ref)}</td><td>${esc(r.name)}</td><td class="${sc(r.status)}">${esc(r.status)}</td><td class="small mono">${esc(r.where)}</td><td class="small">${esc(r.note)}</td><td class="small mono">${r.last_output ? esc(r.last_output) : "—"}</td></tr>`).join("")}</tbody></table>`;
+}
+function swingView(d) {
+  if (d.empty) return `<div class="empty">${esc(d.empty)}</div>`;
+  const sel = $("sw-day");
+  if (sel.dataset.filled !== d.days.join()) { sel.innerHTML = d.days.slice().reverse().map((x) => `<option>${esc(x)}</option>`).join(""); sel.dataset.filled = d.days.join(); }
+  sel.value = d.day;
+  const a = d.account || {}, plans = d.plans || [], s = a.summary || {};
+  const head = `<div class="muted small">Night of ${esc(d.day)} (known ${esc(d.known_at)}); ban list for ${esc(d.ban_trade_date || "—")}. ${esc(d.note)}</div>`;
+  const cand = plans.length ? `<h4>Candidates (${plans.length})</h4><table><thead><tr><th>Stock</th><th>Setup</th><th class="n">Level</th><th class="n">Close</th><th class="n">Vol ×</th><th class="n">IV rank</th><th>Vehicle</th><th class="n">Qty</th><th class="n">Entry est</th><th class="n">Stop</th><th class="n">Risk</th><th>Why</th><th>Queued</th></tr></thead><tbody>${plans.map((p) => `<tr><td>${esc(p.symbol)} <span class="${p.direction === "LONG" ? "up" : "down"}">${esc(p.direction)}</span></td><td class="small">${esc(p.setup)}${p.coil ? " · coil" : ""}</td><td class="n">${num(p.level)}</td><td class="n">${num(p.close)}</td><td class="n">${num(p.volume_mult, 1)}</td><td class="n">${p.iv_rank == null ? "—" : num(p.iv_rank, 0)}</td><td>${esc(p.vehicle)}${p.contract ? `<div class="small mono">${esc(p.contract)}</div>` : ""}</td><td class="n">${p.qty ?? "—"}</td><td class="n">${num(p.est_entry)}</td><td class="n">${num(p.stop)}</td><td class="n">${p.risk_inr == null ? "—" : inr(p.risk_inr)}</td><td class="small">${esc(p.reason || "")}<div class="muted">${esc(p.rationale || "")}</div></td><td class="small ${p.queued ? "up" : "muted"}">${p.queued == null ? "—" : esc(p.queue_note || "")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No setups that night.</div>`;
+  const tr = d.trend ? `<h4>Trend sleeve (NIFTYBEES)</h4><div class="small">${esc(d.trend.signal)}${d.trend.queue_note ? " · " + esc(d.trend.queue_note) : ""}</div>` : "";
+  const acct = `<h4>Swing paper account</h4><div class="small mono">equity ${inr(a.equity)} · cash ${inr(a.cash)} · open risk ${inr(a.open_risk)} · exposure ${inr(a.exposure)}${a.kill_until ? ` · <span class="down">kill switch until ${esc(a.kill_until)}</span>` : ""} · closed ${s.trades ?? 0} (cash ${s.cash_trades ?? 0}, options ${s.option_trades ?? 0}) net <span class="${cls(s.net)}">${inr(s.net)}</span></div>`;
+  const pos = (a.positions || []).length ? `<table><thead><tr><th>Open</th><th class="n">Qty</th><th class="n">Entry</th><th class="n">Mark (bid)</th><th class="n">Stop</th><th class="n">Line</th><th class="n">Sessions</th><th class="n">Unrealised</th><th>Exit queued</th></tr></thead><tbody>${a.positions.map((p) => `<tr><td>${esc(p.key)} <span class="tag">${esc(p.strategy)}</span><div class="muted small">${esc(p.instrument)} since ${esc(p.entry_day)}</div></td><td class="n">${p.qty}</td><td class="n">${num(p.entry)}</td><td class="n">${num(p.mark)}</td><td class="n">${num(p.stop)}</td><td class="n">${p.line ? num(p.line) : "—"}</td><td class="n">${p.sessions}</td><td class="n ${cls(p.unrealised)}">${inr(p.unrealised)}</td><td class="small">${esc(p.exit_queued || "")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No open swing positions.</div>`;
+  const pend = (a.pending || []).length ? `<h4>Queued for the next open</h4><table><thead><tr><th>Order</th><th class="n">Qty</th><th class="n">Est</th><th class="n">Stop %</th><th>Reason</th></tr></thead><tbody>${a.pending.map((o) => `<tr><td>${esc(o.key)} <span class="tag">${esc(o.strategy)}</span> <span class="muted small">${esc(o.instrument)}</span></td><td class="n">${o.qty}</td><td class="n">${num(o.est_price)}</td><td class="n">${num(o.stop_pct, 1)}</td><td class="small">${esc(o.reason)}</td></tr>`).join("")}</tbody></table>` : "";
+  const closed = (a.closed || []).length ? `<h4>Closed (latest 30)</h4><table><thead><tr><th>Trade</th><th class="n">Qty</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Charges</th><th class="n">Net</th><th>Why</th></tr></thead><tbody>${a.closed.slice().reverse().map((c) => `<tr><td>${esc(c.key)} <span class="tag">${esc(c.strategy)}</span><div class="muted small">${esc(c.entry_day)}→${esc(c.exit_day)}</div></td><td class="n">${c.qty}</td><td class="n">${num(c.entry_price)}</td><td class="n">${num(c.exit_price)}</td><td class="n">${inr(c.charges)}</td><td class="n ${cls(c.net)}">${inr(c.net)}</td><td class="small">${esc(c.reason)}</td></tr>`).join("")}</tbody></table>` : "";
+  return head + cand + tr + acct + pend + pos + closed + `<div class="muted small">${esc(a.note || "")}</div>`;
+}
+function earbView(d) {
+  const sel = $("ea-day");
+  sel.innerHTML = `<option value="">screen now</option>` + d.reports.slice().reverse().map((x) => `<option>${esc(x)}</option>`).join("");
+  const vc = (v) => v === "GREEN" ? "up" : v === "RED" ? "down" : "warn";
+  const lc = (l) => l === "RED" ? "down" : l === "AMBER" ? "warn" : "muted";
+  const rows = d.rows.length ? `<table><thead><tr><th>Event</th><th>Verdict</th><th>Last buy day</th><th class="n">Shares</th><th class="n">Cushion (pessimistic)</th><th>Flags</th></tr></thead><tbody>${d.rows.map((r) => `<tr><td>${esc(r.symbol)} <span class="muted small">${esc(r.type)}</span><div class="small">${r.filing_url ? `<a href="${esc(r.filing_url)}" target="_blank" rel="noopener">${esc(r.company)}</a>` : esc(r.company)} · announced ${esc(r.announced_on)}</div></td><td class="${vc(r.verdict)}">${esc(r.verdict)}</td><td>${esc(r.last_buy_day || "—")}</td><td class="n">${r.shares ?? "—"}</td><td class="n">${r.cushion_pct == null ? "—" : num(r.cushion_pct, 1) + "%"}${r.pessimistic ? `<div class="muted small">${esc(r.pessimistic)}</div>` : ""}</td><td class="small">${r.flags.map((f) => `<div class="${lc(f.level)}">${esc(f.text)}</div>`).join("")}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No curated events in config/event_arb/events.yaml.</div>`;
+  const cands = d.candidates.length ? `<h4>Announcements to curate (last 60 days)</h4><table><thead><tr><th>Published</th><th>Company</th><th>Kind</th><th>Subject</th></tr></thead><tbody>${d.candidates.map((a) => `<tr><td class="small mono">${esc(a.published)}</td><td><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.company)}</a></td><td class="small">${esc(a.kind)}</td><td class="small">${esc(a.subject)}${a.note ? ` <span class="warn">${esc(a.note)}</span>` : ""}</td></tr>`).join("")}</tbody></table>` : "";
+  const unv = d.unverified.length ? `<div class="small warn">Unverified inputs: ${d.unverified.map(esc).join(", ")}</div>` : "";
+  return `<div class="muted small">Screen as of ${esc(d.as_of)}. ${esc(d.note)}</div>${unv}${rows}${cands}`;
+}
+async function loadSwing(day = "") { return swingView(await api("swing", day ? "?day=" + encodeURIComponent(day) : "")); }
+$("sw-day").onchange = async (e) => { try { $("rs-swing").innerHTML = await loadSwing(e.target.value); } catch (err) { $("rs-swing").innerHTML = `<div class="empty">${esc(err.message)}</div>`; } };
+$("ea-day").onchange = async (e) => {
+  const name = e.target.value;
+  try {
+    if (!name) { $("rs-earb").innerHTML = earbView(await api("event_arb")); return; }
+    const d = await api("event_arb_report", "?name=" + encodeURIComponent(name));
+    const f = document.createElement("iframe"); f.className = "report"; f.setAttribute("sandbox", ""); f.srcdoc = d.html;
+    $("rs-earb").innerHTML = `<div class="muted small">Saved report ${esc(d.name)} (tasks.py event-arb), shown in a sandboxed frame.</div>`;
+    $("rs-earb").appendChild(f);
+  } catch (err) { $("rs-earb").innerHTML = `<div class="empty">${esc(err.message)}</div>`; }
+};
 async function loadResearch() {
   loadContext();
   const safe = async (id, fn) => { try { $(id).innerHTML = await fn(); } catch (err) { $(id).innerHTML = `<div class="empty">${esc(err.message)}</div>`; } };
+  safe("rs-strat", async () => strategiesView(await api("strategies")));
+  safe("rs-swing", async () => loadSwing($("sw-day").value));
+  safe("rs-earb", async () => earbView(await api("event_arb")));
   safe("rs-study", async () => { const d = await api("study"); return `<div class="muted small">${d.days} session(s) ${d.first_day ? esc(d.first_day) + " → " + esc(d.last_day) : ""}. Cell = share of signals where the index moved the signal's way (n = signals, t = t-stat of the mean move); second line = average ATM-option result per trade after all charges. ${esc(d.note)}</div>` + studyTable(d.bands, "Score band", d.horizons) + `<h4>All</h4>` + studyTable(d.total, "", d.horizons); });
   safe("rs-study2", async () => { const d = await api("study"); return `<h4>Index and direction</h4>${studyTable(d.by_underlying, "Index", d.horizons)}<h4>Setup</h4>${studyTable(d.by_wave, "Setup", d.horizons)}<h4>Hour</h4>${studyTable(d.by_hour, "Hour", d.horizons)}`; });
   safe("rs-ledger", async () => { const d = await api("ledger"); return `<div class="muted small">Old Track A: fixed micro stop/target exits on the signal contract (the scalp design, retired 12 Nov 2026). Kept for comparison only. ${d.days} session(s) ${d.first_day ? esc(d.first_day) + " → " + esc(d.last_day) : ""}. ${esc(d.note)}</div>` + bucketTable(d.bands, "Score band") + `<h4>All</h4>` + bucketTable([{ key: "all", ...d.total }], ""); });
@@ -1018,6 +1070,16 @@ async function loadResearch() {
     const ban = d.fo_ban ? `<h4>F&amp;O ban for ${esc(d.fo_ban.trade_date)}</h4><div>${d.fo_ban.symbols.length ? d.fo_ban.symbols.map(esc).join(", ") : "none"}</div>` : "";
     const deals = d.deals && d.deals.length ? `<h4>Largest bulk / block deals</h4><table><thead><tr><th>Day</th><th>Type</th><th>Symbol</th><th>Client</th><th>Side</th><th class="n">₹ cr</th><th class="n">Price</th></tr></thead><tbody>${d.deals.map((x) => `<tr><td>${esc(x.day)}</td><td>${esc(x.kind)}</td><td>${esc(x.symbol)}</td><td class="small">${esc(x.client)}</td><td class="${x.side === "BUY" ? "up" : "down"}">${esc(x.side)}</td><td class="n">${num(x.value_cr)}</td><td class="n">${num(x.price)}</td></tr>`).join("")}</tbody></table>` : "";
     return `<div class="muted small">${esc(d.note)}</div>` + part(d.participant_oi, "Participant open interest") + part(d.participant_vol, "Participant volume") + ban + deals || `<div class="empty">No EOD flow files yet (tasks.py eod).</div>`;
+  });
+  safe("rs-equity", async () => {
+    const d = await api("equity");
+    if (d.empty) return `<div class="empty">${esc(d.empty)}</div>`;
+    const pc = (v) => v == null ? "—" : `<span class="${cls(v)}">${v > 0 ? "+" : ""}${num(v, 1)}%</span>`;
+    const chg = (v) => v == null ? "" : ` <span class="small ${cls(v)}">(${v > 0 ? "+" : ""}${num(v, 2)})</span>`;
+    const hold = (h, k) => !h || h[k] == null ? "—" : `${num(h[k], 2)}%${chg(h[k + "_chg"])}`;
+    const head = `<div class="muted small">Watchlist from ${esc(d.trade_date)} (${d.sessions_used} sessions)${d.excluded_for_ban && d.excluded_for_ban.length ? ` · excluded for the F&amp;O ban on ${esc(d.ban_trade_date)}: ${d.excluded_for_ban.map(esc).join(", ")}` : ""}. ${esc(d.note)}</div>`;
+    if (!d.rows.length) return head + `<div class="empty">No delivery-spike stocks in the latest watchlist.</div>`;
+    return head + `<table><thead><tr><th>Stock</th><th>Bias</th><th class="n">Deliv ×</th><th class="n">Deliv %</th><th class="n">Day</th><th>Quarter to</th><th class="n">Revenue</th><th class="n">YoY</th><th class="n">PAT</th><th class="n">YoY</th><th class="n">EBITDA mgn</th><th class="n">Promoter</th><th class="n">FII</th><th class="n">DII</th><th>Filed</th></tr></thead><tbody>${d.rows.map((x) => { const r = x.results, h = x.holding; return `<tr><td>${esc(x.symbol)}</td><td class="small ${x.bias === "LONG_ACCUMULATION" ? "up" : "down"}">${esc(x.bias)}</td><td class="n">${num(x.delivery_x, 2)}</td><td class="n">${num(x.delivery_pct, 1)}</td><td class="n">${pc(x.ret_pct)}</td><td>${r ? esc(r.period_end) + (r.consolidated ? "" : " <span class=\"small muted\">standalone</span>") + (r.not_parsed ? ` <span class="small down">not parsed (${esc(r.schema)})</span>` : "") : "—"}</td><td class="n">${r ? num(r.revenue_cr, 0) : "—"}</td><td class="n">${r ? pc(r.revenue_yoy_pct) : "—"}</td><td class="n">${r ? num(r.pat_cr, 0) : "—"}</td><td class="n">${r ? pc(r.pat_yoy_pct) : "—"}</td><td class="n">${r && r.ebitda_margin_pct != null ? num(r.ebitda_margin_pct, 1) + "%" : "—"}</td><td class="n">${hold(h, "promoter_pct")}</td><td class="n">${hold(h, "fii_pct")}</td><td class="n">${hold(h, "dii_pct")}</td><td class="small">${r ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener">${esc(r.known_at)}</a>` : "no filing parsed"}</td></tr>`; }).join("")}</tbody></table><div class="muted small">Holding change is versus the previous quarter's pattern (percentage points). Banks: revenue = interest earned; insurers: net premium; EBITDA only for non-financial companies.</div>`;
   });
   safe("rs-qc", async () => { const d = await api("qc"); if (!d.reports.length) return `<div class="empty">No QC reports yet (written after each recorded session).</div>`; return `<table><thead><tr><th>Day</th><th>Verdict</th><th class="n">Rows</th><th class="n">Max gap s</th><th>Problems</th></tr></thead><tbody>${d.reports.map((r) => `<tr><td>${esc(r.day)}</td><td class="${r.passed ? "up" : "down"}">${r.passed ? "PASS" : "FAIL"}</td><td class="n">${num(r.rows, 0)}</td><td class="n">${num(r.max_gap_s, 1)}</td><td class="small">${esc((r.problems || []).join("; "))}</td></tr>`).join("")}</tbody></table>`; });
   safe("rs-mining", async () => { const d = await api("mining"); if (!d.reports.length) return `<div class="empty">No mined reports (tasks.py mine-log).</div>`; return `<div class="seg" id="mine-list">${d.reports.map((n) => `<button data-m="${esc(n)}">${esc(n)}</button>`).join("")}</div><pre class="report" id="mine-text"></pre>`; });

@@ -46,7 +46,7 @@ from engine.analytics.technicals import (
     compute_vwap_bands,
     evaluate_stop_pool_sweep,
 )
-from engine.backtest.costs import fno_charges
+from engine.backtest.costs import equity_intraday_charges, fno_charges
 from engine.core.config import REPO_ROOT, ShadowScannerConfig
 from engine.core.rules import IST, RuleBook
 from engine.data.adapters.base import Depth, Level, Quote
@@ -79,6 +79,8 @@ class InstrumentMicrostructureState:
     # From the instrument master. Broker keys such as Upstox "NSE_FO|54749" do not show the
     # contract type, so the symbol pattern is only a fallback when this is unknown.
     is_option: bool | None = None
+    # Cash-market stock (instrument master Kind.EQUITY): costed as intraday cash equity.
+    is_equity: bool | None = None
 
     # Live intraday state
     ltp: float = 0.0
@@ -647,6 +649,14 @@ class ShadowOrderBookScanner:
             return st.is_option
         return bool(_OPTION_SYMBOL_RE.search(symbol.upper()))
 
+    def cost_segment(self, symbol: str) -> str:
+        """Cost table segment: ``options``, ``futures`` or ``equity_intraday`` (Track A trades
+        are squared off the same day, so a stock is costed as an intraday cash trade)."""
+        st = self.states.get(symbol)
+        if st is not None and st.is_equity:
+            return "equity_intraday"
+        return "options" if self.is_option(symbol) else "futures"
+
     def is_tradable(self, sig: ShadowSignal) -> bool:
         """A SHORT on an option means selling it unhedged (CLAUDE.md rule 1): never tradable."""
         return not (sig.direction == "SHORT" and self.is_option(sig.symbol))
@@ -840,12 +850,22 @@ class ShadowOrderBookScanner:
         """Full statutory + broker charges from config/rules (no hardcoded rates)."""
         if self._book is None:
             self._book = RuleBook.load(REPO_ROOT / "config" / "rules")
-        segment: Any = "options" if self.is_option(symbol) else "futures"
+        segment: Any = self.cost_segment(symbol)
         buy_turnover, sell_turnover = (
             (entry_turnover, exit_turnover) if is_long else (exit_turnover, entry_turnover)
         )
         total = 0.0
         for side, turnover in (("buy", buy_turnover), ("sell", sell_turnover)):
+            if segment == "equity_intraday":
+                total += equity_intraday_charges(
+                    self._book,
+                    on,
+                    side=side,  # type: ignore[arg-type]
+                    value_inr=turnover,
+                    broker=self.cost_broker,
+                    allow_unverified=True,
+                ).total
+                continue
             total += fno_charges(
                 self._book,
                 on,

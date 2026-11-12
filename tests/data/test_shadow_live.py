@@ -54,7 +54,8 @@ def test_repo_config_fits_full_d30_limit(repo_root: Path) -> None:
     worst = (
         2 + 1 + sum(w.futures_months + 2 * (2 * w.option_strikes_each_side + 1) for w in cfg.watch)
     )
-    assert worst <= 50
+    stocks = cfg.delivery_watch.max_symbols if cfg.delivery_watch.enabled else 0
+    assert worst + stocks <= 50  # the delivery-spike stock group shares the full_d30 socket
 
 
 def test_watchlist_core_first_then_nearest_strikes(

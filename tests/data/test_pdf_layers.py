@@ -73,8 +73,11 @@ def test_constituent_table_is_point_in_time(repo_root: Path) -> None:
     rows = load_constituent_table(repo_root / "config" / "reference" / "nifty50_constituents.csv")
     assert len([r for r in rows if r.index == "NIFTY"]) == 50
     top = heavyweights(rows, "NIFTY", date(2026, 11, 12), 8)
-    assert [r.symbol for r in top][:3] == ["HDFCBANK", "RELIANCE", "ICICIBANK"]
-    assert not any(r.weight_verified for r in top)  # weights carried over without a source
+    assert set([r.symbol for r in top][:3]) == {"HDFCBANK", "RELIANCE", "ICICIBANK"}
+    # Weights are derived (free-float estimate) for all 50; only factsheet-checked ones (empty
+    # weight_status) count as verified.
+    assert all(r.weight_pct is not None for r in rows if r.index == "NIFTY")
+    assert all(r.weight_verified == (r.weight_status == "") for r in rows if r.index == "NIFTY")
     assert heavyweights(rows, "NIFTY", date(2026, 1, 1), 8) == []  # no history before load
     assert broker_key(top[0], "upstox") == "NSE_EQ|INE040A01034"
     assert broker_key(top[0], "fyers") == "NSE:HDFCBANK-EQ"

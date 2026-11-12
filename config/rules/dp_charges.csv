@@ -1,2 +1,4 @@
 broker,depository,value,unit,effective_from,effective_to,source_url,verified_on,status,notes
 zerodha,CDSL,15.34,inr_per_scrip_per_debit_day_incl_gst,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"₹3.5 CDSL + ₹9.5 Zerodha + ₹2.34 GST; already includes GST. Charged per scrip per day shares leave demat (sale or tender debit). Start date not researched."
+upstox,CDSL,23.6,inr_per_scrip_per_debit_day_incl_gst,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Rs 20 per scrip per day on sell (CDSL 3.5 + Upstox 16.5) + 18% GST. Women's accounts pay Rs 3.25 + 16.75 (same total). Start date not researched."
+upstox_plus,CDSL,23.6,inr_per_scrip_per_debit_day_incl_gst,2026-11-11,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Plus page lists no different DP charge; standard Upstox DP assumed."

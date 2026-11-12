@@ -107,6 +107,46 @@ def equity_delivery_charges(
     return ChargeBreakdown(brokerage, stt, exch, sebi, stamp, gst, dp, tuple(sorted(lk.unverified)))
 
 
+def equity_intraday_charges(
+    book: RuleBook,
+    on: date,
+    *,
+    side: Side,
+    value_inr: float,
+    broker: str = "zerodha",
+    exchange: str = "NSE",
+    allow_unverified: bool = False,
+) -> ChargeBreakdown:
+    """Charges for one executed intraday (MIS, squared off the same day) cash order.
+
+    Brokerage is the lower of a percentage and a per-order cap; STT is sell side only, stamp
+    duty buy side only; no DP charge (nothing leaves the demat account).
+    """
+    if value_inr < 0:
+        raise ValueError("value_inr must be >= 0")
+    lk = _Lookups(book, on, allow_unverified)
+    pct = value_inr / 100.0
+    seg = "equity_intraday"
+    rate = lk.one("brokerage", broker=broker, segment=seg, component="pct_of_turnover")
+    cap = lk.one("brokerage", broker=broker, segment="equity_intraday", component="cap_per_order")
+    brokerage = min(cap, rate * pct)
+    stt = lk.one("stt", segment="equity_intraday", leg=side) * pct
+    exch = lk.total("exchange_charges", exchange=exchange, segment="equity_intraday") * pct
+    sebi = lk.one("sebi_fee", segment="equity") * value_inr / CRORE
+    stamp = lk.one("stamp_duty", segment="equity_intraday", side=side) * pct
+    gst = lk.one("gst", base="brokerage_exchange_sebi") / 100.0 * (brokerage + exch + sebi)
+    return ChargeBreakdown(
+        round(brokerage, 2),
+        round(stt, 2),
+        round(exch, 2),
+        round(sebi, 2),
+        round(stamp, 2),
+        round(gst, 2),
+        0.0,
+        tuple(sorted(lk.unverified)),
+    )
+
+
 def fno_charges(
     book: RuleBook,
     on: date,

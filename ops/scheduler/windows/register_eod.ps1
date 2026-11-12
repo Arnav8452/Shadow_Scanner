@@ -1,6 +1,7 @@
 # Registers a Windows Task Scheduler job that downloads NSE end-of-day files (bhavcopies,
 # delivery, participant OI, index closes incl. India VIX) every weekday evening and refreshes
-# the IV history. NOT run automatically — the owner runs it once:
+# the IV history, then the evening job (delivery watchlist, results dates, filings). NOT run
+# automatically — the owner runs it once:
 #
 #   powershell -ExecutionPolicy Bypass -File ops\scheduler\windows\register_eod.ps1
 #
@@ -20,7 +21,7 @@ if (-not (Test-Path $uv)) { throw "uv not found; install it with: pip install --
 
 New-Item -ItemType Directory -Force (Join-Path $Repo "logs") | Out-Null
 
-$cmd = "/c cd /d `"$Repo`" && `"$uv`" run python tasks.py eod >> logs\eod_task.log 2>&1 && `"$uv`" run python tasks.py iv-history >> logs\eod_task.log 2>&1"
+$cmd = "/c cd /d `"$Repo`" && `"$uv`" run python tasks.py eod >> logs\eod_task.log 2>&1 && `"$uv`" run python tasks.py iv-history >> logs\eod_task.log 2>&1 & `"$uv`" run python tasks.py evening >> logs\evening_task.log 2>&1"
 $action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument $cmd -WorkingDirectory $Repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $Time
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
@@ -28,6 +29,6 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
 
 Register-ScheduledTask -TaskName "QuantEngine-EOD" -Action $action -Trigger $trigger `
     -Settings $settings -Force `
-    -Description "NSE end-of-day downloads + IV history. Data only. Repo: $Repo" | Out-Null
+    -Description "NSE end-of-day downloads + IV history + evening job. Data only. Repo: $Repo" | Out-Null
 
 Write-Host "Registered QuantEngine-EOD on weekdays at $Time (repo $Repo)."

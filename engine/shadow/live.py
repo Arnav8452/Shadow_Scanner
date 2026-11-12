@@ -14,7 +14,11 @@ Inputs per instrument, and where they come from:
   open + 15 minutes, then frozen.
 * Call / put OI walls — the recorder's latest chain snapshot for the watched expiry, refreshed
   every minute (index and futures states only).
-* Delivery bias, breadth, dealer gamma — not available yet; left neutral so they add no points.
+* Delivery bias — optional ``delivery_watch`` group: F&O stocks with an EOD delivery spike,
+  picked by the evening job (``engine.data.eod.delivery_watch``) from NSE files of the previous
+  session(s). They take the slots after the core symbols, ahead of the farthest options, and
+  carry that session's high/low/close as previous-day levels.
+* Breadth, dealer gamma — not available yet; left neutral so they add no points.
 """
 
 from __future__ import annotations
@@ -32,10 +36,17 @@ from typing import Any
 
 from engine.core.calendar import CalendarCoverageError, TradingCalendar
 from engine.core.clock import NS_PER_S, Clock, MarketSession, SystemClock, from_ns, to_ns
-from engine.core.config import EngineVersion, Settings
+from engine.core.config import REPO_ROOT, EngineVersion, Settings
 from engine.core.env import load_dotenv
 from engine.core.rules import IST, RuleBook
 from engine.data.adapters.base import Depth, FeedAdapter, FeedEvent, FeedStatus, Quote, StatusKind
+from engine.data.eod.bhavcopy import DeliveryBias
+from engine.data.eod.delivery_watch import (
+    DeliveryWatchItem,
+    OptionLiquidity,
+    SpikeThresholds,
+    load_delivery_watchlist,
+)
 from engine.data.recorder.run import (
     RecorderSettings,
     RecorderSetupError,
@@ -73,6 +84,26 @@ class WatchSpec:
 
 
 @dataclass(frozen=True)
+class DeliveryWatchConfig:
+    """Optional watchlist group of delivery-spike stocks (evening job output)."""
+
+    enabled: bool = False
+    dir: Path = Path("data/state/delivery_watchlist")
+    max_symbols: int = 5
+    max_age_days: int = 5
+    biases: tuple[str, ...] = ("LONG_ACCUMULATION", "RETAIL_CHURN_FADE")
+    # full_d30 (30 levels, counts toward the 50-key cap) or full (5 levels). The 11 Nov probe got
+    # Reliance cash data in full_d30 (indices come back empty there); 30 levels unconfirmed.
+    feed_mode: str = "full_d30"
+    # HYPOTHESIS thresholds (untested; see engine/research/delivery_event_study.py).
+    spike: SpikeThresholds = field(default_factory=SpikeThresholds)
+    option_liquidity: OptionLiquidity = field(default_factory=OptionLiquidity)
+    # Until the event study supports it, spikes only choose what to watch: the bias is not
+    # given to the scanner (no delivery points, no VWAP_DELIVERY_RECLAIM). Owner decision.
+    bias_in_score: bool = False
+
+
+@dataclass(frozen=True)
 class ShadowLiveConfig:
     watch: tuple[WatchSpec, ...]
     max_symbols: int = 50  # Upstox Plus full_d30: 50 keys per connection
@@ -88,6 +119,34 @@ class ShadowLiveConfig:
     alert_grades: tuple[str, ...] = ("A_PLUS",)
     max_alerts_per_day: int = 10
     alert_cooldown_min: int = 15
+    delivery_watch: DeliveryWatchConfig = field(default_factory=DeliveryWatchConfig)
+
+
+def delivery_watch_config(raw: Any, root: Path) -> DeliveryWatchConfig:
+    if not isinstance(raw, Mapping):
+        return DeliveryWatchConfig()
+    biases = tuple(str(b) for b in raw.get("biases", DeliveryWatchConfig.biases))
+    for b in biases:
+        if b not in DeliveryBias.__members__ or b == "NEUTRAL":
+            raise RecorderSetupError(f"shadow_live.delivery_watch.biases: unknown bias {b!r}")
+    cfg = DeliveryWatchConfig(
+        enabled=bool(raw.get("enabled", False)),
+        dir=root / str(raw.get("dir", "data/state/delivery_watchlist")),
+        max_symbols=int(raw.get("max_symbols", 5)),
+        max_age_days=int(raw.get("max_age_days", 5)),
+        biases=biases,
+        feed_mode=str(raw.get("feed_mode", "full_d30")),
+        spike=SpikeThresholds(**{k: float(v) for k, v in (raw.get("spike") or {}).items()}),
+        option_liquidity=OptionLiquidity(
+            **{k: int(v) for k, v in (raw.get("option_liquidity") or {}).items()}
+        ),
+        bias_in_score=bool(raw.get("bias_in_score", False)),
+    )
+    if cfg.feed_mode not in ("full_d30", "full"):
+        raise RecorderSetupError("shadow_live.delivery_watch.feed_mode must be full_d30 or full")
+    if not 0 <= cfg.max_symbols <= 10:
+        raise RecorderSetupError("shadow_live.delivery_watch.max_symbols must be 0..10")
+    return cfg
 
 
 def load_shadow_live_config(settings: Settings) -> ShadowLiveConfig:
@@ -118,6 +177,7 @@ def load_shadow_live_config(settings: Settings) -> ShadowLiveConfig:
         alert_grades=tuple(str(g) for g in raw.get("alert_grades", ["A_PLUS"])),
         max_alerts_per_day=int(raw.get("max_alerts_per_day", 10)),
         alert_cooldown_min=int(raw.get("alert_cooldown_min", 15)),
+        delivery_watch=delivery_watch_config(raw.get("delivery_watch"), REPO_ROOT),
     )
     if not 1 <= cfg.max_symbols <= 50:
         raise RecorderSetupError("shadow_live.max_symbols must be 1..50 (Upstox full_d30 limit)")
@@ -134,10 +194,11 @@ def select_watchlist(
     *,
     now: datetime,
     spots: Mapping[str, float],
+    extra: Iterable[str] = (),
 ) -> list[str]:
-    """Spots, VIX, front futures, then options nearest ATM (both underlyings interleaved by
-    distance), cut at ``cfg.max_symbols``. Options need a spot price, so the first call returns
-    only the core symbols."""
+    """Spots, VIX, front futures, the optional ``extra`` group (delivery-spike stocks), then
+    options nearest ATM (both underlyings interleaved by distance), cut at ``cfg.max_symbols``.
+    Options need a spot price, so the first call returns only the core symbols."""
     on = now.date()
     spot_of = {u.name: u.spot_symbol for u in rs.universe.underlyings}
     core: list[str] = [spot_of[w.name] for w in cfg.watch if w.name in spot_of]
@@ -146,6 +207,7 @@ def select_watchlist(
     for w in cfg.watch:
         core += [f.symbol for f in master.futures(w.name, on)[: w.futures_months]]
     core = [s for s in dict.fromkeys(core) if s in master]
+    core += [s for s in extra if s in master and s not in core]
     ranked: list[tuple[int, str, float, str]] = []
     for w in cfg.watch:
         spot = spots.get(w.name)
@@ -168,6 +230,39 @@ def select_watchlist(
     ranked.sort()
     out = core + [r[3] for r in ranked]
     return list(dict.fromkeys(out))[: cfg.max_symbols]
+
+
+def resolve_equities(master: InstrumentMaster, symbols: Iterable[str]) -> dict[str, str]:
+    """NSE trading symbol -> broker key of its cash-market instrument (``NSE_EQ|<ISIN>`` on
+    Upstox, ``NSE:<SYM>-EQ`` on Fyers/sim). Symbols without one are left out."""
+    want = set(symbols)
+    out: dict[str, str] = {}
+    for ins in master.all():
+        if ins.kind is not Kind.EQUITY or ins.exchange != "NSE":
+            continue
+        for name in (ins.underlying, ins.description):
+            if name in want and name not in out:
+                out[name] = ins.symbol
+    return out
+
+
+def delivery_group(
+    cfg: DeliveryWatchConfig, master: InstrumentMaster, day: date
+) -> tuple[dict[str, DeliveryWatchItem], str]:
+    """``broker key -> item`` for today's delivery group, and a line for the log."""
+    if not cfg.enabled or cfg.max_symbols == 0:
+        return {}, "delivery watch off"
+    file_day, items = load_delivery_watchlist(cfg.dir, day, max_age_days=cfg.max_age_days)
+    if file_day is None:
+        return {}, "delivery watch: no watchlist file yet (tasks.py evening)"
+    items = [i for i in items if i.bias in cfg.biases][: cfg.max_symbols]
+    keys = resolve_equities(master, (i.symbol for i in items))
+    group = {keys[i.symbol]: i for i in items if i.symbol in keys}
+    missing = [i.symbol for i in items if i.symbol not in keys]
+    note = f"delivery watch {file_day}: {len(group)} stock(s)"
+    if missing:
+        note += f"; not in the instrument master: {', '.join(missing)}"
+    return group, note
 
 
 # --------------------------------------------------------------------------- daily inputs
@@ -330,8 +425,10 @@ class ShadowLiveRunner:
         alert: Callable[[str], None] | None = None,
         cockpit: Any | None = None,
         record_depth: bool = True,
+        delivery: Mapping[str, DeliveryWatchItem] | None = None,
     ) -> None:
         self.cfg = cfg
+        self.delivery = dict(delivery or {})
         self.rs = rs
         self.scanner = scanner
         self.master = master
@@ -427,7 +524,9 @@ class ShadowLiveRunner:
         return out
 
     def _state_for(self, ins: Instrument) -> InstrumentMicrostructureState:
-        hi, lo, close = self.prev_levels.get(ins.symbol, (0.0, 0.0, 0.0))
+        item = self.delivery.get(ins.symbol)
+        default = (item.prev_high, item.prev_low, item.prev_close) if item else (0.0, 0.0, 0.0)
+        hi, lo, close = self.prev_levels.get(ins.symbol, default)
         return InstrumentMicrostructureState(
             symbol=ins.symbol,
             tick_size=ins.tick_size or 0.05,
@@ -436,11 +535,22 @@ class ShadowLiveRunner:
             pdl=lo,
             prev_close=close,
             is_option=ins.kind.is_option,
+            is_equity=ins.kind is Kind.EQUITY,
+            delivery_bias=(
+                DeliveryBias(item.bias)
+                if item and self.cfg.delivery_watch.bias_in_score
+                else DeliveryBias.NEUTRAL
+            ),
         )
 
     def recenter(self, now_ns: int, reason: str) -> None:
         want = select_watchlist(
-            self.master, self.cfg, self.rs, now=from_ns(now_ns), spots=self.spots()
+            self.master,
+            self.cfg,
+            self.rs,
+            now=from_ns(now_ns),
+            spots=self.spots(),
+            extra=[*self.delivery],
         )
         pinned = self.pinned()
         if pinned:
@@ -726,8 +836,12 @@ def default_shadow_adapter(
 
         env: dict[str, str] = dict(os.environ)
         load_dotenv(root / ".env", env)
+        stocks_in_full = cfg.delivery_watch.feed_mode == "full"
         return UpstoxFeed(
-            token=upstox_token(env, day), mode=MODE_FULL_D30, max_symbols=cfg.max_symbols
+            token=upstox_token(env, day),
+            mode=MODE_FULL_D30,
+            max_symbols=cfg.max_symbols,
+            full_mode_prefixes=("NSE_EQ|",) if stocks_in_full else (),
         )
 
     return make
@@ -802,6 +916,8 @@ def run_shadow_day(
         capital_inr=settings.risk.capital_inr,
         max_lots=settings.risk.max_lots_per_strategy,
     )
+    delivery, delivery_note = delivery_group(cfg.delivery_watch, master, day)
+    log.info(delivery_note)
     adapter = adapter_factory(cfg, rs, master, clock)
     cockpit = None
     try:
@@ -842,6 +958,7 @@ def run_shadow_day(
         prev_levels=prev_levels,
         alert=alert,
         cockpit=cockpit,
+        delivery=delivery,
     )
     while not stop.is_set() and clock.now_ns() < to_ns(start):
         stop.wait(1.0)
@@ -862,5 +979,9 @@ def run_shadow_day(
         "ran",
         dashboard=report_path,
         stats=runner.stats.__dict__
-        | {"prev_day_levels": len(prev_levels), "prev_day_levels_from_eod": eod_filled},
+        | {
+            "prev_day_levels": len(prev_levels),
+            "prev_day_levels_from_eod": eod_filled,
+            "delivery_watch": sorted(i.symbol for i in delivery.values()),
+        },
     )

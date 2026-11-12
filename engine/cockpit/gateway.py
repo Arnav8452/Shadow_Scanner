@@ -140,6 +140,13 @@ class Gateway:
             ),
             "qc": lambda: research.qc_reports(self.root / "reports" / "qc"),
             "flows": lambda: research.flows(self.root / "data" / "raw"),
+            "equity": lambda: research.equity(self.root / "data"),
+            "swing": lambda: research.swing(self.root / "data", day=request.query.get("day", "")),
+            "event_arb": lambda: research.event_arb(self.root),
+            "event_arb_report": lambda: research.event_arb_report(
+                self.root, request.query.get("name", "")
+            ),
+            "strategies": lambda: research.strategies(self.root),
             "mining": lambda: research.mining_reports(mined),
             "mining_report": lambda: research.mining_report(mined, request.query.get("name", "")),
         }

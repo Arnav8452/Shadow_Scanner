@@ -1,7 +1,7 @@
 # Thin wrapper; on Windows without make use: uv run python tasks.py <target> [KEY=VALUE ...]
 PY := uv run python tasks.py
 
-.PHONY: test lint fmt rules instruments upstox-login upstox-probe fyers-login record shadow-live qc backtest paper mine-log self-review report event-arb
+.PHONY: test lint fmt rules instruments upstox-login upstox-probe fyers-login record shadow-live qc backtest paper mine-log self-review report event-arb evening fundamentals swing
 
 test:        ; $(PY) test
 lint:        ; $(PY) lint
@@ -20,3 +20,6 @@ mine-log:    ; uv run --extra mining python tasks.py mine-log FILE="$(FILE)" LAB
 self-review: ; $(PY) self-review
 report:      ; $(PY) report
 event-arb:   ; $(PY) event-arb DATE=$(DATE) SEND=$(SEND)
+evening:     ; $(PY) evening DATE=$(DATE)
+fundamentals: ; $(PY) fundamentals SYMBOLS=$(SYMBOLS)
+swing:       ; $(PY) swing DATE=$(DATE)

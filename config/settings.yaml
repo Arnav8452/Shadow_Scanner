@@ -253,6 +253,63 @@ shadow_live:             # V1 live shadow scanner (watch-only) on Upstox Plus fu
   watch:                     # 2 spots + VIX + 2 futures + 30 Nifty + 10 Sensex options = 45
     - {name: NIFTY, futures_months: 1, option_strikes_each_side: 7, expiry: current_weekly}
     - {name: SENSEX, futures_months: 1, option_strikes_each_side: 2, expiry: current_weekly}
+  delivery_watch:            # optional group: F&O stocks with an EOD delivery spike
+    enabled: true            # written by `tasks.py evening` (after ~19:30 IST); none = no stocks
+    dir: data/state/delivery_watchlist
+    max_symbols: 5           # 45 index keys above + 5 stocks = the 50-key full_d30 cap; stocks
+                             # come before the farthest options if the index list grows
+    max_age_days: 5          # ignore a watchlist older than this (calendar days)
+    biases: [LONG_ACCUMULATION, RETAIL_CHURN_FADE]   # priority order (feeds VWAP_DELIVERY_RECLAIM)
+    feed_mode: full_d30      # or `full` (5 levels) if `upstox-probe D30=1` shows NSE_EQ gets no
+                             # 30-level book; the 50-key cap still counts them (one socket)
+    bias_in_score: false     # owner: spikes pick what to WATCH, not what to trade, until the
+                             # event study (engine/research/delivery_event_study.py) supports it
+    spike:                   # HYPOTHESIS (untested): EOD delivery-spike classification
+      min_delivery_qty_mult: 2.0          # delivery qty vs its 20-session average
+      min_accumulation_return_pct: 1.0    # close-to-close move for accumulation/distribution
+      min_churn_spike_pct: 5.0            # up-move for a retail-churn day
+      max_churn_rel_delivery_ratio: 0.75  # delivery % below this x its 20-session average
+    option_liquidity:        # HYPOTHESIS: a stock joins the watchlist only if its options trade
+      strikes_each_side: 2   # near-ATM band (calls + puts summed)
+      min_contracts: 1000    # traded on the trade date, nearest expiry >= min_days_to_expiry
+      min_oi_contracts: 500  # open interest in contracts (NSE's file gives shares)
+      min_days_to_expiry: 5  # stock options settle physically (SPEC §6 E-2)
+
+swing:                     # SPEC §5.8 nightly swing scanner. HYPOTHESIS values, PAPER ONLY
+  lookback: 60               # sessions searched for multi-touch levels
+  min_touches: 2             # SPEC: touched >= 2-3 times
+  touch_tol_pct: 0.75        # pivots within this % are one level
+  clear_pct: 0.5             # "clearly" through the level
+  vol_mult: 1.5              # SPEC: 1.5-2x average volume
+  coil_filter: false         # SPEC: optional tight-range filter
+  iv_rank_low: 50            # IV rank <= this -> ATM option, else cash
+  min_option_days: 5         # SPEC: >= 5 trading days to expiry
+  option_premium_stop_pct: 25   # SPEC: line stop capped at 20-25% of premium
+  time_stop_sessions: 2      # SPEC
+  cash_stop_pct: 6           # SPEC: 5-7%
+  max_hold_sessions: 15
+  option_max_premium_pct: 2.5   # premium = max loss; = risk.per_trade_max_loss_pct.directional
+  cash_risk_pct: 2.5
+  max_cash_value_pct: 25     # one cash position <= 25% of capital
+  results_buffer_days: 10    # no long option when results fall inside this window
+  min_turnover_cr: 10        # average daily traded value, ₹ crore
+
+swing_paper:                 # EOD paper fills (no depth recorded for stocks): HYPOTHESIS spreads
+  cash_half_spread_pct: 0.05
+  option_half_spread_pct: 1.5
+
+trend:                       # SPEC §5.6 trend sleeve via NIFTYBEES (no futures below ~₹15L)
+  enabled: true              # PAPER ONLY; monthly 12-month momentum vs the 91-day T-bill
+  allocation_pct: 20         # HYPOTHESIS: owner to set
+  disaster_stop_pct: 10      # HYPOTHESIS: also the risk counted for the per-trade gate
+
+fundamentals:              # equity pillar from exchange filings (tasks.py evening / fundamentals)
+  index: NIFTY
+  constituents_file: config/reference/nifty50_constituents.csv
+  heavyweights_top_n: 10   # results/holdings refreshed for these + the delivery watchlist
+  periods: 5               # latest quarters kept per company (YoY needs 5)
+  pace_s: 1.0              # pause between NSE requests
+  board_meeting_days: 45   # look-ahead for results dates -> config/events/macro_calendar.csv
 
 paths:
   data: data

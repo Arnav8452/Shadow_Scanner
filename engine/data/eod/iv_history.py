@@ -75,13 +75,13 @@ def atm_iv_for_day(
     r: float,
     min_trading_days: int = 2,
     n_parity: int = 5,
+    instruments: tuple[str, ...] = ("IDO", "OPTIDX"),
 ) -> DailyIV | None:
+    """``instruments``: index options by default; ``("STO", "OPTSTK")`` for stock options."""
     opts = [
         x
         for x in rows
-        if x.symbol == underlying
-        and x.option_type in ("CE", "PE")
-        and x.instrument in ("IDO", "OPTIDX")
+        if x.symbol == underlying and x.option_type in ("CE", "PE") and x.instrument in instruments
     ]
     if not opts:
         return None

@@ -85,6 +85,12 @@ If the laptop **sleeps**, everything pauses: keep it awake and plugged in during
 - First time only: `uv run python tasks.py eod-backfill FROM=2025-11-01 TO=<today>` (about 10 minutes; F&O bhavcopies are ~1.3 MB a day).
 - The nightly `eod` also catches up on missing files from the last 7 days (`CATCHUP_DAYS=`) and adds that day to the screener's summaries.
 - Screener first time only: `uv run python tasks.py screener-history` (about 15 minutes; one summary per session in `data/state/screener/`).
+- [ ] Evening job (same scheduled task, after the IV history; by hand `uv run python tasks.py evening`, log `logs/evening_task.log`):
+  - delivery files for the last 21 sessions, then the **delivery-spike watchlist** for tomorrow's shadow scanner (`data/state/delivery_watchlist/<date>.json`, F&O stocks only, ban-list names dropped; up to 5 stocks in the `full_d30` group);
+  - Nifty members' **results dates** from NSE board-meeting intimations into `config/events/macro_calendar.csv` (rows tagged `[auto:nse-board-meetings]`; hand-entered rows win);
+  - **quarterly results and shareholding** (XBRL) for the watchlist and the 10 heavyweights into `data/parquet/fundamentals/`. One stock by hand: `uv run python tasks.py fundamentals SYMBOLS=RELIANCE`.
+  - **swing** (paper only): the swing paper account applies the day's bars (fills last night's orders at the open, stops, exits), the SPEC §5.8 scanner queues new entries for tomorrow's open, and on a month's last trading day the NIFTYBEES trend sleeve signal. Night file `data/state/swing/<date>.json`; account `data/state/swing_paper_state.json`. Cockpit → Research → Swing. By hand: `uv run python tasks.py swing DATE=<trade date>` (needs that day's F&O bhavcopy and delivery file). Run nights in order: the account refuses a date it has already processed.
+  - A non-zero exit means a step failed (often NSE blocking a request); the other steps still ran. Read the log.
 
 ## Daily — event arbitrage
 
@@ -95,8 +101,9 @@ If the laptop **sleeps**, everything pauses: keep it awake and plugged in during
 ## Monthly / when NSE announces
 
 - [ ] **Macro calendar** (`config/events/macro_calendar.csv`): add each new official date with its source URL. Mark anything not yet confirmed `UNVERIFIED`. Fill in the Budget date when announced and confirm India CPI dates against the MoSPI calendar.
-- [ ] **Results season:** add each heavyweight's board-meeting/results date as a `CONSTITUENT_EARNINGS` row with its index weight.
-- [ ] **Index weights:** check the weights in `config/reference/nifty50_constituents.csv` against the latest NSE Indices factsheet, then set `weight_status` to empty (verified). After NSE's semi-annual rebalance, update the member list (`ind_nifty50list.csv`) with `effective_from`/`effective_to`.
+- [ ] **Results season:** the evening job adds Nifty members' results dates automatically. Check them in the cockpit's event list; add a hand row (it takes precedence) when a company announces a time or NSE's list misses it. Rows only count in the 24 h earnings weight once the member has a weight.
+- [ ] **Index weights:** the evening job derives all 50 (`weight_status = derived`). Monthly, after the NSE Indices factsheet is out: `uv run --extra mining python tasks.py index-weights-verify` marks top-10 weights within 0.3 points verified and lists those that differ. After NSE's semi-annual rebalance, update the member list (`ind_nifty50list.csv`) with `effective_from`/`effective_to`.
+- [ ] **Delivery study:** after `eod-backfill DATASETS=delivery,fo`, rerun `uv run python tasks.py delivery-study` (report in `reports/research/`). Keep `delivery_watch.bias_in_score: false` unless a setting passes (DSR ≥ 90%, |t| ≥ 3) and the owner approves.
 
 - [ ] Freeze quantities: NSE revised these almost monthly in 2026. Add rows to `config/rules/freeze_qty.csv`.
 - [ ] Lot-size revisions: add rows to `config/rules/lot_sizes.csv`.
