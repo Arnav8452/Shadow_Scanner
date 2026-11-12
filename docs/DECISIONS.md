@@ -4,6 +4,85 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Equity swing (SPEC §5.8), trend sleeve (§5.6), swing paper account, cockpit Strategies view (12 Nov 2026)
+
+Equity first, sized for ₹2L, no futures. Everything here is **paper**; no live path imports it. Rules marked HYPOTHESIS are starting values for the owner to set, not tested edges.
+
+**Built**
+- `engine/strategies/swing_scanner.py` — nightly scan of the day's F&O stocks on NSE `sec_bhavdata_full` bars (survivorship-free: the universe is that day's F&O bhavcopy). Breakout: close ≥ 0.5% above a resistance with ≥ 2 pivot touches (within 0.75%) in 60 sessions, on ≥ 1.5× 20-day volume, optional coil filter; the bearish mirror is a breakdown. Support bounce: close above a rising 50-day average, low tags a multi-touch support, close in the top 40% of the day's range. Liquidity: price ≥ ₹50, ≥ ₹10 cr average traded value.
+- Instrument: IV rank (percentile of today's own Black-76 stock ATM IV among the previous 252 sessions, `data/parquet/eod/stock_iv.parquet`, one year backfilled 3 Nov 2025 → 11 Nov 2026, 52,619 rows) ≤ 50 and no results inside 10 days and not in the next session's ban list and one lot's premium ≤ 2.5% of capital → ATM stock option (CE long, PE short) with ≥ 5 trading days to expiry. Otherwise cash for longs; **shorts are skipped** (no overnight cash shorts; no futures). Stops: option = close back through the line, capped at 25% of premium, plus a 2-session no-follow-through time stop; cash = 6% (SPEC 5–7%). Max hold 15 sessions. Cash quantity = min(risk ÷ stop distance, 25% of capital ÷ price).
+- `engine/strategies/trend_sleeve.py` — SPEC §5.6 on NIFTYBEES (cash ETF): on a month's last trading day, Nifty 50 12-month return vs the 91-day T-bill rate (`risk_free_rate.csv`); long → buy 20% of capital, flat → sell. 10% disaster stop (HYPOTHESIS; it is also the risk counted against the per-trade gate: 2% of capital).
+- `engine/execution/swing_paper.py` — separate from the cockpit's intraday accounts. Orders placed at night fill at the next open ± an estimated half-spread (cash 0.05%, options 1.5%: HYPOTHESIS, because no depth is recorded for stocks); entries skip if the open is already back through the line; intraday stops against the day's low; line/time/max-hold/expiry exits queue for the next open; marks at the estimated bid. Costs from `config/rules` (delivery; same-day round trips as intraday; options with the stock's own lot). SPEC §6 stock-F&O expiry guard: options exit by E-2. Risk from `settings.risk` unchanged: per-trade 2.5% (directional), max open risk, no stacking/averaging, max trades a day, daily/weekly loss kill switch. Cash in use is capped by `margin_headroom_max_used_pct` (50%), which is my reading of "headroom" for a cash account — owner to confirm. State `data/state/swing_paper_state.json`, journal `data/state/paper_swing.jsonl`.
+- `engine/strategies/swing_night.py` + evening step `swing` (`tasks.py swing DATE=`): stock IV for the day → account applies the day's bars → scan → plan → queue → trend on month-ends → `data/state/swing/<T>.json` (plans, why each was or was not queued, account snapshot).
+- Cockpit Research tab: **Strategies** (every SPEC §5 and Addendum A item, `engine/strategies/registry.py`: live 0, paper 5, research 12, not built 7 after the merge with the main session's re-scope (§5.1 condor/credit spreads and §5.2 directional are paper in the cockpit; Track A is a research signal study), with the newest output file), **Swing** (candidates by night, trend signal, account, queued orders, open and closed trades), **Event arbitrage** (screen computed on request from `events.yaml` with no side effects — no feed fetch, no alert state, no report write — plus saved `reports/event_arb/<date>.html` in a sandboxed frame and the last 60 days of classified announcements).
+
+**First real night (11 Nov 2026)**: 10 long breakouts; IV ranks 42–100, so all cash (CDSL's ATM call was ₹17,338 a lot vs the ₹5,000 budget). CDSL ×35 and CAMS ×69 queued; the other 8 refused at the 50% capital-in-use cap. Nothing has filled yet.
+
+**Decisions**
+- Stock options are paper-only and stay so while settings say stock F&O is deferred at ₹2L. Index strategies keep their status (code-only decision functions are "research"; §5.1 condor/credit spreads and §5.2 directional in the cockpit are "paper"; the Track A signal study is "research"; nothing is live).
+- No spreads for high-IV names yet: SPEC allows "cash or a spread"; cash is simpler and keeps risk defined by the stop. Bearish setups with high IV are skipped rather than shorted.
+- Results dates for the event filter come from NSE's board-meeting list saved by the evening `calendar` step (point-in-time: newest list fetched on or before the night).
+
+**Open questions for the owner**
+1. Trend sleeve allocation (20%) and disaster stop (10%).
+2. Should cash swing positions count against `margin_headroom_max_used_pct` (50%), or have their own cap? Today it limits the book to ~2 cash names.
+3. Practice targets before live (SPEC: ≥ 10 cash and ≥ 5 option paper swings) — reported in the cockpit; no live path exists.
+4. Bid/ask for stocks: EOD fills use an assumed half-spread. Recording NSE_EQ depth for open positions would replace it.
+
+---
+
+## Equity pillar from exchange filings: results, holdings, results dates, delivery watchlist (12 Nov 2026)
+
+Retail platforms (Screener.in, Tijori, Trendlyne) forbid scraping and have no public API, so the same facts are taken from the exchange filings they are built on.
+
+**Sources checked on 12 Nov 2026** (plain HTTPS GET, generic User-Agent, no cookies; stdlib client):
+
+| What | URL | Result |
+|---|---|---|
+| Quarterly results list | `https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol=X&type=Integrated Filing- Financials` | 200 JSON; quarters ended Mar 2025 on (SEBI Integrated Filing) |
+| Older results list | `https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=X&period=Quarterly` | 200 JSON, but stops at the Dec 2024 quarter — not used |
+| Shareholding list | `https://www.nseindia.com/api/corporate-share-holdings-master?index=equities&symbol=X` | 200 JSON |
+| Board meetings | `https://www.nseindia.com/api/corporate-board-meetings?index=equities&from_date=DD-MM-YYYY&to_date=…` | 200 JSON (one request for all companies) |
+| XBRL files | `https://nsearchives.nseindia.com/corporate/xbrl/…` | 200 XML |
+| Delivery | `https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_DDMMYYYY.csv` (already in `download.py`) | 200 CSV |
+| BSE API | `https://api.bseindia.com/BseIndiaAPI/api/…` | **403** without browser headers — not used |
+| NSE RSS (`Financial_Results.xml`, `Board_Meetings.xml`, `Shareholding_Pattern.xml`) | `nsearchives…/content/RSS/` | 200, but only a few items and no XBRL links — not used |
+
+The `www.nseindia.com/api` endpoints are what NSE's own filing pages call. NSE publishes no documentation or terms for them, so they may change or start requiring a browser session; every step fails soft and says so in the log. The files are public exchange disclosures, kept for the owner's own use only.
+
+**Built:**
+1. **XBRL parsers** (`engine/data/fundamentals/xbrl.py`), tested on trimmed real filings in `tests/fixtures/nse/` (Reliance IndAs, HDFC Bank banking, Bajaj Finance NBFC, HDFC Life insurance, Reliance shareholding; individual shareholders' names and PANs were removed). Revenue, EBITDA (derived, non-financial companies only), operating profit (banks: before provisions), PBT, PAT, PAT to owners, EPS; promoter / FII / DII / MF / insurance / retail holdings. The parser picks the quarter's context, not the half-year one in the same file. Values are rupees as filed.
+2. **Point in time** (`engine/data/fundamentals/store.py`): one Parquet row per filing in `data/parquet/fundamentals/`, `known_at` = NSE's dissemination time (a revision from its own time). Readers take `as_of`; growth (QoQ, YoY) compares quarter with quarter, consolidated where filed. `tasks.py fundamentals SYMBOLS=…`.
+3. **Results dates** (`engine/data/events/earnings.py`): NSE board-meeting intimations for Nifty members become `CONSTITUENT_EARNINGS` rows (tag `[auto:nse-board-meetings]`) with the index weight where one is loaded. NSE gives the date but not the release time, so the window covers the session. Future auto rows are replaced on refresh (a postponed meeting moves), past ones are kept, hand-entered rows win.
+4. **Delivery watchlist** (`engine/data/eod/delivery_watch.py`): stocks with F&O contracts, scanned with `scan_relative_delivery_spikes` over 20 prior sessions, ban-list names dropped, `LONG_ACCUMULATION` first then `RETAIL_CHURN_FADE`, at most 5. Needs ≥ 6 delivery files or the list is left empty.
+5. **Live wiring** (`shadow_live.delivery_watch`, on): the live scanner reads the newest list dated *before* its session (never the same day), adds the stocks after the index core (45 index keys + 5 stocks = the 50-key `full_d30` cap; if the index list grows, stocks come before the farthest options), and sets `delivery_bias` and previous-day levels on their state. `VWAP_DELIVERY_RECLAIM` can now fire. Watch-only, as before.
+6. **Evening job** `tasks.py evening` (`engine/data/eod/evening.py`): EOD + missing delivery files → watchlist → results dates → filings for the watchlist and the 10 heavyweights by weight. Added to `register_eod.ps1` after the IV history (the owner re-runs that script to pick it up).
+7. **Cockpit:** Research tab panel "Delivery-spike stocks: results and holdings" (`/api/research/equity`).
+
+**Stocks in the live scanner, measured correctly** (requested by the main session, owner-approved):
+- **Costs.** Track A costed every non-option as futures. A stock (instrument master `Kind.EQUITY`, carried as `is_equity` on the scanner state like `is_option`) is now costed as an intraday cash trade (`equity_intraday_charges`, `segment = equity_intraday`). New rule rows:
+  - NSE cash transaction charge + IPFT ₹307/crore each side (0.00307%) — **primary**, [NSE/FA/73061](https://nsearchives.nseindia.com/content/circulars/FA73061.pdf) (27 Feb 2026: ₹297 + ₹10 IPFT until 28 Feb 2026, ₹306.99 + ₹0.01 from 1 Mar 2026, same total). The delivery row (same value) now cites it too.
+  - STT 0.025% on intraday sells, stamp duty 0.003% on intraday buys — secondary ([upstox.com/brokerage-charges](https://upstox.com/brokerage-charges/), dated tables for Oct 2024 and Apr 2026). No primary STT/stamp text was read.
+  - Upstox brokerage: intraday ₹20 or 0.1% (standard), ₹30 or 0.1% (Plus); delivery ₹30 on Plus; DP ₹20 + GST per scrip per sell day. Secondary (Upstox pages, 12 Nov 2026). The Plus page does not say "whichever is lower"; the charges page says Plus is "up to ₹30/order", so it is read that way.
+- **50-key cap.** The stock group is a configurable count (`delivery_watch.max_symbols`, 5) placed before the farthest index options, so it trims strikes rather than exceeding the cap; the repo-config test counts it. Upstox documents `full_d30` only with an `NSE_FO` example and says nothing about `NSE_EQ`. The 11 Nov probe in `full_d30` did get Reliance cash data (indices came back empty), but no instrument has shown more than 5 levels yet. New `delivery_watch.feed_mode: full` subscribes stocks in 5-level `full` on the same socket if `upstox-probe D30=1` in market hours shows `RELIANCE (cash)` without 30 levels.
+- **Paper bot (not merged: the main session's cockpit rework, 12 Nov, replaced this bot code; it stays in this worktree and `tests/data/test_stock_vehicle.py` for a later re-port).** A stock signal maps to that stock's ATM option (bullish call, bearish put) in `CockpitCore.choose_vehicle`: F&O stocks only, not on today's ban list (`build_cockpit` reads it), nearest expiry ≥ 5 calendar days away (stock options settle physically; SPEC §6 closes ITM/near-ATM by E-2). The option is added to the feed on demand (at most 2, ahead of far index options), bought at the ask with its own lot once its book arrives (30 s), and released when the signal closes. No cash-equity buying in the paper accounts.
+
+**Owner's answers to the open questions (applied 12 Nov 2026):**
+1. **Index weights derived for all 50** (`engine/data/constituents/weights.py`, evening step `weights`): close × shares × (1 − promoter holding), normalised; `weight_status = derived` (not verified). Monthly `tasks.py index-weights-verify` reads the NSE Indices factsheet's top 10 and marks a weight verified when within 0.3 points. First run (prices 11 Nov, factsheet dated 30 Oct 2026, [ind_nifty50.pdf](https://www.niftyindices.com/Factsheet/ind_nifty50.pdf)): 8 of 10 verified; **L&T 4.75 vs 4.25** and **Infosys 3.31 vs 3.92** differ (1 − promoter is a rough proxy for NSE's investible weight factor), so they stay `derived`. "Top 10 heavyweights" and the 24 h results weight now cover all 50. Only the current weights are kept in the CSV (no history yet).
+2. **General insurers:** ICICI Lombard's Q2 filing (`IFGI`) is a fixture and parses (revenue = net premium earned; PBT/PAT/EPS). Any schema without a fixture test is shown as "not parsed" (`PARSED_SCHEMAS`), never estimated.
+3. **Delivery thresholds are HYPOTHESES** (`shadow_live.delivery_watch.spike`), and spikes now only choose what to watch: `bias_in_score: false` keeps the bias away from the scanner (no delivery points, no `VWAP_DELIVERY_RECLAIM`). **Event study** (`engine/research/delivery_event_study.py`, `tasks.py delivery-study`; report in `reports/research/`): 268 sessions of delivery files (3 Nov 2025 – 11 Nov 2026), F&O universe as of each day, entry at the next open, delivery costs 0.41% round trip on ₹50k + 0.05%/side slippage, 72 trials (15 threshold sets × biases × 1/3/5 days). **No cell passes** (deflated Sharpe ≥ 90% and |t| ≥ 3). Best: ≥ 3× delivery and ≥ +2% close, long, 5 days: +0.17% net, excess +0.71%, t = 1.8, DSR 14%. The live defaults (2×, +1%) lose after costs at every horizon. Fading retail-churn spikes is wrong-way: over 5 days the stocks kept rising (excess −1.24%, t = −3.5; one of 72 trials, not a strategy). Conclusion: keep spikes as a watchlist filter only.
+4. **Liquid option chain required** (`delivery_watch.option_liquidity`, HYPOTHESIS): near-ATM (±2 strikes) calls + puts of the nearest expiry ≥ 5 days out must have traded ≥ 1,000 contracts with OI ≥ 500 contracts (NSE's file gives OI in shares; divided by the lot). 11 Nov: PETRONET dropped for thin options. The paper broker's entry checks (spread, depth) are unchanged.
+- **Found:** for holidays NSE serves the previous day's delivery file under the holiday's name (2 Oct, 20 Oct, 10 Nov 2026). Loaders keep only rows dated as the file; `download.py` still saves such files (open: reject them at download).
+
+**Decisions:** EBITDA is left empty for banks, NBFCs and insurers (interest is their cost of goods). FII = "Institutions (Foreign)" in the pattern (FPIs + FDI), the usual platform definition. Results-date rows carry no weight for members whose weight is not loaded, so they show on the cockpit but add 0 to the 24 h earnings weight.
+
+**Open questions:** (the four earlier ones are answered above)
+- Weight history: the CSV holds only the latest derived weights; keep dated history if point-in-time replays need past weights.
+- Share counts come from the last quarterly pattern, so a bonus or split since then distorts a weight until the next pattern.
+- `download.py` should reject a delivery file whose rows carry another date (holiday copies).
+
+---
+
 ## Option chain, F&O screener, context at entry, and outage handling (12 Nov 2026, afternoon)
 
 The owner compared the page with Sensibull's option chain and screener and asked for the data and analysis that give an edge. They want to see which signals and conditions contributed to a position, and to know what happens when Wi-Fi drops.

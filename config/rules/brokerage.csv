@@ -21,3 +21,10 @@ zerodha,equity_delivery,flat_per_order,0,inr_per_executed_order,2024-10-01,,http
 upstox_plus,options,flat_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,"Upstox Plus plan: ₹30 per order for equity options (Compare Plans table; brokerage-charges page: Up to ₹30/order). Plan start date not researched, so the row starts on the verification date. Plus subscription fee, if any, not stated on the page."
 upstox_plus,futures,pct_of_turnover,0.05,pct,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,"Upstox Plus: ₹30 or 0.05% per order, whichever is lower."
 upstox_plus,futures,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,
+upstox,equity_intraday,pct_of_turnover,0.1,pct,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Upstox: ₹20 per executed order or 0.1%, whichever is lower. Start date not researched."
+upstox,equity_intraday,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,
+upstox_plus,equity_intraday,pct_of_turnover,0.1,pct,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,"Plus Compare Plans: '₹30 or 0.10% per order'; the charges page says Plus brokerage is 'up to ₹30/order', read as whichever is lower. Starts on the plan verification date, like the other Plus rows."
+upstox_plus,equity_intraday,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,
+upstox_plus,equity_delivery,flat_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,"Plus Compare Plans: '₹30 or 2.5% per order' (2.5% is lower only below a ₹1,200 order; modelled as flat ₹30)."
+paper,equity_intraday,pct_of_turnover,0.03,pct,2000-01-01,,,,UNVERIFIED,"Paper default, same as the futures default."
+paper,equity_intraday,cap_per_order,20,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default."

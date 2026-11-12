@@ -495,10 +495,13 @@ class UpstoxFeed:
         ws_factory: Callable[..., Any] = _default_ws_factory,
         ssl_context_factory: Callable[[], ssl.SSLContext] = ssl.create_default_context,
         reconnect: bool = True,
+        full_mode_prefixes: Sequence[str] = (),
     ) -> None:
         if mode not in {MODE_LTPC, MODE_FULL, MODE_FULL_D30}:
             raise ValueError(f"Unsupported Upstox V3 mode: {mode!r}")
         self.mode = mode
+        # Key prefixes (e.g. "NSE_EQ|") subscribed in ``full`` even on a ``full_d30`` feed.
+        self.full_mode_prefixes = tuple(full_mode_prefixes)
         self.name = "upstox_d30" if mode == MODE_FULL_D30 else "upstox"
         default_cap = {MODE_FULL_D30: 50, MODE_FULL: 2000, MODE_LTPC: 5000}[mode]
         self.max_symbols = max_symbols or default_cap
@@ -562,7 +565,9 @@ class UpstoxFeed:
     def mode_for(self, key: str) -> str:
         """Indices have no order book: in ``full_d30`` Upstox answers them with an empty
         ``fullFeed`` (seen live, 11 Nov 2026), so they are subscribed in ``full`` instead."""
-        if self.mode == MODE_FULL_D30 and "_INDEX|" in key:
+        if self.mode == MODE_FULL_D30 and (
+            "_INDEX|" in key or key.startswith(self.full_mode_prefixes)
+        ):
             return MODE_FULL
         return self.mode
 

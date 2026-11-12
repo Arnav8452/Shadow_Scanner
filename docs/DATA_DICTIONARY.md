@@ -121,3 +121,41 @@ Written by `tasks.py mine-log FILE=<pdf> LABEL=<label>`. File names come from LA
 - `data/raw/instruments/<broker>/<YYYY-MM-DD>/<segment>.csv.gz` + `.meta.json` — the broker contract file as downloaded, with `fetched_at` (known-at), URL and SHA-256.
 - `data/state/recorder_sticky.json` — contracts that entered the strike band, kept until expiry.
 - `reports/qc/<YYYY-MM-DD>.json|.md` — day QC report (`tasks.py qc`); `reports/qc/sim/` for dry runs.
+
+## Fundamentals — `data/parquet/fundamentals/{results,shareholding}.parquet`
+
+From NSE's XBRL filings (`engine.data.fundamentals`); one row per filing. Raw XBRL and the JSON filing lists are kept under `data/raw/fundamentals/` with a `.meta.json` (URL, fetch time, sha256, `known_at`).
+
+| Column | Meaning |
+|---|---|
+| `known_at` | **Known-at** (UTC): NSE's dissemination time of the filing (`broadcast_Date` / `broadcastDate`); for a revised filing, its revision time. Always filter `known_at <= as_of`. |
+| `filing_id`, `revision`, `source_url` | NSE sequence/record id, `Original`/`Revised`, the XBRL file on `nsearchives.nseindia.com`. |
+| `symbol`, `isin`, `company` | As filed. |
+| `schema` (results) | SEBI Integrated Filing taxonomy: `IndAs`, `Banking`, `NBFC`, `LI`, `GI`. |
+| `period_start`, `period_end`, `period_months` | The reporting period (the quarter; the half-year column in the same file is ignored). |
+| `consolidated`, `audited` | As filed. Readers prefer consolidated when both exist. |
+| `revenue_inr` | Rupees. Revenue from operations; banks: interest earned; insurers: net premium. |
+| `total_income_inr`, `pbt_inr`, `pat_inr`, `pat_owners_inr` | Rupees. `pat_owners_inr` = attributable to owners of the parent. |
+| `ebitda_inr` | Derived, non-financial companies only: profit before exceptional items and tax + finance costs + depreciation − other income. |
+| `operating_profit_inr` | EBITDA (companies) or operating profit before provisions (banks). |
+| `eps_basic`, `eps_diluted` | ₹ per share for the quarter (not annualised). |
+| `as_on` (shareholding) | Quarter-end date of the pattern. |
+| `promoter_pct`, `public_pct`, `fii_pct`, `fpi_cat1_pct`, `dii_pct`, `mf_pct`, `insurance_pct`, `govt_pct`, `retail_pct`, `non_institutions_pct` | Percent of total shares. `fii_pct` = Institutions (Foreign): FPIs + FDI + other foreign. `retail_pct` = resident individuals up to ₹2 lakh nominal. |
+| `total_shares`, `shareholders` | Totals from the pattern. |
+
+## Delivery watchlist — `data/state/delivery_watchlist/<trade_date>.json`
+
+Written by `tasks.py evening` from NSE's `sec_bhavdata_full` files. `known_at` is 19:30 IST on the trade date; the live scanner reads only a file dated before its session. Items: `symbol`, `bias`, delivery multiple and %, close return, VWAP proxy, that day's high/low/close (used as previous-day levels), rationale. `excluded_for_ban` lists spike stocks dropped because they are in the F&O ban for the next session.
+
+## Stock IV — `data/parquet/eod/stock_iv.parquet`
+
+One row per F&O stock per trade date: our Black-76 ATM IV from the F&O bhavcopy closes (nearest expiry with enough days; parity forward), tier C (EOD closes). The swing scanner's "IV rank" is the percentile of today's IV among the stock's previous 252 daily IVs (strictly earlier days; none below 60 observations). Known 19:30 IST on the trade date. Backfilled from 3 Nov 2025.
+
+## Swing — `data/state/swing/<trade_date>.json`, `data/state/swing_paper_state.json`, `data/state/paper_swing.jsonl`
+
+Night file (known 19:30 IST): `plans` (each candidate: setup, direction, level, close, volume multiple, touches, coil, IV rank, vehicle `OPTION|CASH|SKIP` and why, contract and lot, quantity, estimated entry, stop, risk ₹, `queued` and `queue_note`), `trend` (signal text, 12-month return, queue note), `account` (snapshot after queueing), `ban_trade_date`. The state file is the paper account (cash, pending orders, positions with stop/line/sessions, closed trades with charges, equity marks, kill-switch date, last processed day); the journal has one JSON line per event (order, refused, fill, close, mark, cancel). Paper only; EOD fills at the open ± an assumed half-spread.
+
+## Index constituents — `config/reference/nifty50_constituents.csv`
+
+`weight_status`: empty = verified against the NSE Indices factsheet (within 0.3 points; the factsheet URL and date are in `notes`); `derived` = our free-float market-cap estimate (close x shares x (1 - promoter holding), normalised; `engine/data/constituents/weights.py`); `UNVERIFIED` = no source. Only verified weights count as verified anywhere in the engine.
+

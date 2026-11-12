@@ -7,6 +7,8 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | cockpit [OPEN=0] | replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]
                       | eod [DATE=] | eod-backfill FROM= TO= | iv-history [FROM= TO=]
                       | screener-history [DAYS=400]
+                      | evening [DATE=] [STEPS=...] | fundamentals [SYMBOLS=A,B]
+                      | swing [DATE=] | delivery-study [FROM= TO=] | index-weights-verify
                       | event-arb | shadow-scan [VERSION=v1_shadow|v2_bot]
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
@@ -319,6 +321,257 @@ def task_screener_history(params: dict[str, str]) -> int:
     days = cache.available_days(_today_ist(), back_days=int(params.get("DAYS", "400")))
     done = cache.build(days, progress=lambda d: print(f"{d} summarised", flush=True))
     print(f"screener history: {done} sessions cached")
+    return 0
+
+
+def _evening_setup() -> tuple[Any, Any, Any]:
+    sys.path.insert(0, str(ROOT))
+    from engine.core.config import load_settings
+    from engine.core.logging_setup import setup_logging
+    from engine.data.eod.evening import evening_config
+    from engine.shadow.live import load_shadow_live_config
+
+    settings = load_settings()
+    setup_logging(settings.logging_config)
+    _, _, cal = _eod_common()
+    cfg = evening_config(settings.raw, load_shadow_live_config(settings).delivery_watch, ROOT)
+    return settings, cfg, cal
+
+
+def task_evening(params: dict[str, str]) -> int:
+    """Evening job (after ~19:30 IST; schedule it daily): NSE EOD + delivery files, the
+    delivery-spike watchlist for tomorrow's shadow scanner, Nifty members' results dates into
+    config/events/macro_calendar.csv, and results/shareholding XBRL for the watchlist and
+    heavyweights. DATE=YYYY-MM-DD trade date (default: today after 19:30, else the last trading
+    day). STEPS=eod,watchlist,weights,calendar,swing,fundamentals (default all; `weights`
+    derives all Nifty weights from free-float market cap; `swing` runs the swing paper account
+    and scanner, engine/strategies/swing_night.py)."""
+    settings, cfg, cal = _evening_setup()
+    from engine.data.eod.evening import run_evening
+
+    steps = params.get("STEPS", "eod,watchlist,weights,calendar,swing,fundamentals").split(",")
+    rep = run_evening(
+        cfg,
+        raw_dir=settings.paths["raw"],
+        parquet_dir=settings.paths["parquet"] / "fundamentals",
+        now=datetime.now(IST),
+        calendar=cal,
+        trade_date=date.fromisoformat(params["DATE"]) if params.get("DATE") else None,
+        steps=steps,
+        swing=_swing_night(settings, cal),
+    )
+    print(f"evening job for trade date {rep.trade_date}:")
+    for line in rep.lines:
+        print("  " + line)
+    print(f"{rep.errors} problem(s)")
+    return 1 if rep.errors else 0
+
+
+def _swing_night(settings: Any, cal: Any) -> Any:
+    """``day -> report lines`` for the nightly swing run (paper only)."""
+    from engine.core.rules import RuleBook
+    from engine.data.eod.download import fetch_eod
+    from engine.strategies.swing_night import fill_config, run_swing_night, trend_config
+    from engine.strategies.swing_scanner import swing_config
+
+    raw = settings.raw
+    book = RuleBook.load(ROOT / "config" / "rules")
+
+    def fetch_index(d: date, raw_dir: Path, now: datetime) -> None:
+        fetch_eod("indices", d, raw_dir=raw_dir, now=now)
+
+    def run(day: date) -> list[str]:
+        now = datetime.now(IST)
+        raw_dir = settings.paths["raw"]
+        rep = run_swing_night(
+            day=day,
+            now=now,
+            raw_dir=raw_dir,
+            parquet_dir=settings.paths["parquet"],
+            state_dir=settings.paths["data"] / "state",
+            book=book,
+            cal=cal,
+            limits=settings.risk,
+            broker=settings.shadow_scanner.cost_broker,
+            cfg=swing_config(raw.get("swing")),
+            trend=trend_config(raw.get("trend")),
+            fills=fill_config(raw.get("swing_paper")),
+            fetch_index=lambda d: fetch_index(d, raw_dir, now),
+        )
+        return rep.lines
+
+    return run
+
+
+def task_swing(params: dict[str, str]) -> int:
+    """Nightly swing run on its own (normally a step of `evening`): applies the day's bars to the
+    swing paper account, scans for SPEC §5.8 setups and queues paper entries for the next open;
+    the trend sleeve on month-ends. DATE=YYYY-MM-DD (default: the evening trade date). Needs
+    that day's F&O bhavcopy and delivery file (tasks.py eod or evening)."""
+    settings, _, cal = _evening_setup()
+    from engine.data.eod.evening import evening_trade_date
+
+    day = (
+        date.fromisoformat(params["DATE"])
+        if params.get("DATE")
+        else evening_trade_date(datetime.now(IST), cal)
+    )
+    try:
+        lines = _swing_night(settings, cal)(day)
+    except FileNotFoundError as exc:
+        print(f"swing: {exc}", file=sys.stderr)
+        return 1
+    print(f"swing night {day}:")
+    for line in lines:
+        print("  " + line)
+    return 0
+
+
+def task_fundamentals(params: dict[str, str]) -> int:
+    """Quarterly results and shareholding from NSE XBRL filings into
+    data/parquet/fundamentals/. SYMBOLS=RELIANCE,INFY (default: the Nifty heavyweights in
+    settings `fundamentals`). Prints the latest quarter as known now."""
+    settings, cfg, _ = _evening_setup()
+    from engine.data.constituents.table import heavyweights, load_constituent_table
+    from engine.data.fundamentals.store import equity_summary, refresh_symbol
+
+    now = datetime.now(IST)
+    if params.get("SYMBOLS"):
+        symbols = [s.strip().upper() for s in params["SYMBOLS"].split(",") if s.strip()]
+    else:
+        rows = load_constituent_table(cfg.constituents_file)
+        top = heavyweights(rows, cfg.index, now.date(), cfg.heavyweights_top_n)
+        symbols = [r.symbol for r in top]
+    out_dir = settings.paths["parquet"] / "fundamentals"
+    bad = 0
+    for sym in symbols:
+        rep = refresh_symbol(
+            sym,
+            raw_dir=settings.paths["raw"],
+            parquet_dir=out_dir,
+            now=now,
+            n_periods=cfg.periods,
+            pace_s=cfg.pace_s,
+        )
+        bad += bool(rep.errors)
+        s = equity_summary(out_dir, sym, now)
+        r, h = s["results"], s["holding"]
+        line = f"{sym:<12} +{rep.results_new} results +{rep.shareholding_new} holdings"
+        if r:
+            line += (
+                f" | Q to {r['period_end']}: revenue ₹{r['revenue_cr']} cr "
+                f"(YoY {r['revenue_yoy_pct']}%), PAT ₹{r['pat_cr']} cr (YoY {r['pat_yoy_pct']}%)"
+            )
+        if h:
+            line += f" | promoter {h['promoter_pct']}% FII {h['fii_pct']}% DII {h['dii_pct']}%"
+        print(line + (f" | {'; '.join(rep.errors)}" if rep.errors else ""))
+    return 1 if bad else 0
+
+
+def task_index_weights_verify(params: dict[str, str]) -> int:
+    """Monthly: compare the derived Nifty weights with the NSE Indices factsheet's top 10 and
+    mark matches (within TOL=0.3 points) verified. FILE=<pdf> to use a saved factsheet instead
+    of downloading it. Needs pdfplumber (`uv sync --extra mining`)."""
+    settings, cfg, _ = _evening_setup()
+    import pdfplumber
+
+    from engine.core.net import http_get_bytes
+    from engine.data.constituents.table import load_constituent_table, members_on
+    from engine.data.constituents.weights import (
+        FACTSHEET_URL,
+        parse_factsheet,
+        verify_against_factsheet,
+    )
+
+    today = _today_ist()
+    if params.get("FILE"):
+        pdf = Path(params["FILE"])
+    else:
+        pdf = settings.paths["raw"] / "reference" / "factsheet" / f"ind_nifty50_{today}.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_bytes(http_get_bytes(FACTSHEET_URL))
+    with pdfplumber.open(pdf) as doc:
+        text = "\n".join(page.extract_text() or "" for page in doc.pages)
+    import csv
+
+    with cfg.constituents_file.open(encoding="utf-8", newline="") as fh:
+        names = {
+            r["company"].strip(): r["symbol"].strip()
+            for r in csv.DictReader(fh)
+            if r["index"].strip().upper() == cfg.index
+        }
+    as_of, top = parse_factsheet(text, names)
+    if len(top) < 5:
+        print(f"could not read the top constituents from {pdf} ({len(top)} found)")
+        return 1
+    res = verify_against_factsheet(
+        cfg.constituents_file,
+        top,
+        index=cfg.index,
+        source_url=f"{FACTSHEET_URL} (factsheet dated {as_of})",
+        checked_on=today,
+        tolerance_pts=float(params.get("TOL", "0.3")),
+    )
+    print(f"factsheet dated {as_of}: {len(top)} weights read")
+    for sym, (ours, theirs, ok) in sorted(res.items(), key=lambda x: -x[1][1]):
+        verdict = "verified" if ok else "differs"
+        print(f"  {sym:<12} ours {ours:6.2f}  factsheet {theirs:6.2f}  {verdict}")
+    rows = members_on(load_constituent_table(cfg.constituents_file), cfg.index, today)
+    print(f"{sum(r.weight_verified for r in rows)} of {len(rows)} member weights verified")
+    return 0
+
+
+def task_delivery_study(params: dict[str, str]) -> int:
+    """Research: do delivery spikes predict 1/3/5-session returns, net of costs? FROM=/TO=
+    (default the last 400 days). Needs `eod-backfill DATASETS=delivery,fo` first. Writes
+    reports/research/delivery_event_study.{md,json}. Every threshold set tried is a trial."""
+    settings, _, _ = _evening_setup()
+    from datetime import timedelta
+
+    from engine.core.rules import RuleBook
+    from engine.research.delivery_event_study import (
+        DEFAULT_GRID,
+        features,
+        load_history,
+        round_trip_cost_pct,
+        run_study,
+        trial_count,
+        write_outputs,
+    )
+
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else _today_ist()
+    start = date.fromisoformat(params["FROM"]) if params.get("FROM") else end - timedelta(days=400)
+    notional = float(params.get("NOTIONAL", "50000"))
+    slip = float(params.get("SLIP_PCT", "0.05"))  # HYPOTHESIS: per side, % of price
+    broker = settings.shadow_scanner.cost_broker
+    rows, fno = load_history(settings.paths["raw"], start, end)
+    feats = features(rows, fno)
+    if not feats:
+        print("no delivery/F&O history in range; run eod-backfill DATASETS=delivery,fo first")
+        return 1
+    book = RuleBook.load(ROOT / "config" / "rules")
+    cost = round_trip_cost_pct(book, end, notional=notional, broker=broker)
+    results = run_study(feats, cost_pct=cost, slippage_pct_per_side=slip)
+    days = sorted({f.day for f in feats})
+    meta = {
+        "summary": "Long rows are cash-delivery trades; short rows (churn, distribution) can "
+        "only be expressed with options (no overnight cash shorts).",
+        "sample": f"{days[0]} to {days[-1]} ({len(days)} signal days, {len(feats)} stock-days)",
+        "universe": "stocks with stock futures in that day's F&O bhavcopy",
+        "entry / exit": "open of T+1 / close of T+h",
+        "costs": f"delivery round trip {cost:.3f}% on ₹{notional:,.0f} ({broker}) + "
+        f"{slip}% slippage per side (HYPOTHESIS); 2x slippage column",
+        "trials": f"{trial_count(DEFAULT_GRID, (1, 3, 5))} (threshold sets x biases x horizons)",
+    }
+    md = write_outputs(ROOT / "reports" / "research", results, meta)
+    passed = [r for r in results if r.passed]
+    print(f"{len(results)} cells; {len(passed)} pass (DSR >= 90% and |t| >= 3) -> {md}")
+    for r in sorted(results, key=lambda r: -r.deflated_sharpe_pct)[:8]:
+        print(
+            f"  {r.trial:<34} {r.bias:<18} h={r.horizon} n={r.n_trades:<5} "
+            f"net {r.mean_net_pct:+.2f}% excess {r.excess_gross_pct:+.2f}% "
+            f"t={r.t_stat_excess:+.1f} DSR {r.deflated_sharpe_pct:.0f}%"
+        )
     return 0
 
 

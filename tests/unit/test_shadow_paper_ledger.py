@@ -136,6 +136,33 @@ def test_option_charges_use_master_kind_for_broker_keys(repo_root: Path) -> None
     assert opt != fut  # options: flat brokerage and premium STT; futures: turnover-based
 
 
+def test_stock_charges_are_intraday_cash_equity(repo_root: Path) -> None:
+    from engine.backtest.costs import equity_intraday_charges
+    from engine.core.rules import RuleBook
+
+    scanner, _ = _scanner_with_signal(repo_root)
+    key = "NSE_EQ|INE094A01015"  # Upstox key: the type comes from the master, not the text
+    scanner.register_instrument(InstrumentMicrostructureState(key, is_option=False, is_equity=True))
+    assert scanner.cost_segment(key) == "equity_intraday"
+    assert scanner.cost_segment("NSE_FO|2") == "futures"  # unknown: futures as before
+    on = DAY_10_30.date()
+    got = scanner._round_trip_charges(
+        key, entry_turnover=100_000.0, exit_turnover=101_000.0, is_long=True, on=on
+    )
+    book = RuleBook.load(repo_root / "config" / "rules")
+    want = sum(
+        equity_intraday_charges(
+            book, on, side=s, value_inr=v, broker=scanner.cost_broker, allow_unverified=True
+        ).total
+        for s, v in (("buy", 100_000.0), ("sell", 101_000.0))
+    )
+    assert got == pytest.approx(want)
+    short = scanner._round_trip_charges(
+        key, entry_turnover=101_000.0, exit_turnover=100_000.0, is_long=False, on=on
+    )
+    assert short == pytest.approx(want)  # a short sells at entry: STT on the sell leg either way
+
+
 def test_untriggered_signal_is_cancelled_after_cutoff(repo_root: Path) -> None:
     scanner, sig = _scanner_with_signal(repo_root)
     late = DAY_10_30.replace(hour=15, minute=5)

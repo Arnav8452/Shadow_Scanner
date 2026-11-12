@@ -1,8 +1,9 @@
 """Index constituents from ``config/reference/<index>_constituents.csv`` (point in time).
 
 Membership comes from NSE's published list (``status = primary``). Weights are only filled where
-known; rows whose weights have no source are ``weight_status = UNVERIFIED`` and the analytics
-that use them say so. Earlier membership history is not loaded, so queries before a row's
+known; rows whose weights have no source are ``weight_status = UNVERIFIED``; weights estimated from
+free-float market cap are ``derived`` (``engine.data.constituents.weights``). Neither counts as
+verified, and the analytics that use them say so. Earlier membership history is not loaded, so queries before a row's
 ``effective_from`` return nothing rather than today's list (no survivorship bias).
 """
 
@@ -29,6 +30,7 @@ class ConstituentRow:
     effective_from: date
     effective_to: date | None
     source_url: str
+    weight_status: str = ""  # "" verified | derived | UNVERIFIED
 
     def active(self, on: date) -> bool:
         return self.effective_from <= on and (self.effective_to is None or on < self.effective_to)
@@ -46,8 +48,10 @@ def load_constituent_table(path: Path) -> list[ConstituentRow]:
                     isin=r["isin"].strip(),
                     industry=(r.get("industry") or "").strip(),
                     weight_pct=float(w) if w else None,
+                    # "derived" (our free-float estimate) and UNVERIFIED are not verified;
+                    # only an empty status (checked against the NSE factsheet) is.
                     weight_verified=bool(w)
-                    and (r.get("weight_status") or "").strip() != "UNVERIFIED",
+                    and (r.get("weight_status") or "").strip() not in ("UNVERIFIED", "derived"),
                     effective_from=date.fromisoformat(r["effective_from"].strip()),
                     effective_to=(
                         date.fromisoformat(r["effective_to"].strip())
@@ -55,6 +59,7 @@ def load_constituent_table(path: Path) -> list[ConstituentRow]:
                         else None
                     ),
                     source_url=(r.get("source_url") or "").strip(),
+                    weight_status=(r.get("weight_status") or "").strip(),
                 )
             )
     return rows

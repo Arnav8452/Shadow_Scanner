@@ -7,3 +7,5 @@ futures,sell,0.02,pct_of_price,2024-10-01,2026-04-01,https://zerodha.com/marketi
 futures,sell,0.05,pct_of_price,2026-04-01,,https://zerodha.com/charges,2026-11-09,secondary,"Budget 2026."
 equity_delivery,buy,0.1,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Start date not researched. Buyback tenders via the exchange window are sales and attract sell-side STT."
 equity_delivery,sell,0.1,pct_of_value,2024-10-01,,https://zerodha.com/charges,2026-11-09,secondary,"Start date not researched."
+equity_intraday,buy,0,pct_of_value,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Intraday (non-delivery) STT is on the sell side only."
+equity_intraday,sell,0.025,pct_of_value,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Upstox charges page tables 'from 1 Oct 2024' and 'from 1 Apr 2026' both show 0.025% on the sell side (Budget 2026 changed F&O STT only). Start date not researched before Oct 2024."

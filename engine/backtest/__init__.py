@@ -5,6 +5,7 @@ from engine.backtest.costs import (
     ChargeBreakdown,
     Side,
     equity_delivery_charges,
+    equity_intraday_charges,
     fno_charges,
 )
 from engine.backtest.deflated_sharpe import (
@@ -36,6 +37,7 @@ __all__ = [
     "WalkForwardSummary",
     "compute_deflated_sharpe",
     "equity_delivery_charges",
+    "equity_intraday_charges",
     "evaluate_backtest_with_stress",
     "evaluate_walk_forward",
     "expected_max_sharpe",

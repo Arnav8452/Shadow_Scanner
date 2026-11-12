@@ -16,6 +16,7 @@ from typing import Any
 
 BANDS = ((75.0, 80.0, "75–80"), (80.0, 90.0, "80–90"), (90.0, 101.0, "90+"))
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9_\-]{1,60}\.md$")
+_DATED = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -429,3 +430,190 @@ def flows(raw_dir: Path) -> dict[str, Any]:
         "ban list applies to the trade date shown."
     )
     return out
+
+
+def equity(data_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """Latest delivery-spike watchlist with each stock's latest results and holding changes
+    (exchange XBRL filings, as known now)."""
+    from engine.core.rules import IST
+    from engine.data.fundamentals.store import equity_summary
+
+    as_of = now or datetime.now(IST)
+    wl_dir = data_dir / "state" / "delivery_watchlist"
+    files = sorted(p for p in wl_dir.glob("*.json") if len(p.stem) == 10) if wl_dir.exists() else []
+    out: dict[str, Any] = {
+        "note": (
+            "Delivery spikes from NSE EOD files (hypothesis input, unproven). Results and "
+            "holdings from NSE XBRL filings, shown as known now; growth is like-for-like "
+            "(consolidated where filed). ₹ crore."
+        ),
+        "rows": [],
+    }
+    if not files:
+        out["empty"] = "No delivery watchlist yet (tasks.py evening, after 19:30 IST)."
+        return out
+    wl = json.loads(files[-1].read_text(encoding="utf-8"))
+    out.update(
+        trade_date=wl.get("trade_date"),
+        ban_trade_date=wl.get("ban_trade_date"),
+        excluded_for_ban=wl.get("excluded_for_ban", []),
+        sessions_used=wl.get("sessions_used"),
+    )
+    parquet = data_dir / "parquet" / "fundamentals"
+    for item in wl.get("items", []):
+        sym = str(item.get("symbol", ""))
+        if not sym:
+            continue
+        s = equity_summary(parquet, sym, as_of)
+        out["rows"].append(
+            {
+                "symbol": sym,
+                "bias": item.get("bias"),
+                "delivery_x": item.get("delivery_qty_multiple"),
+                "delivery_pct": item.get("delivery_pct"),
+                "ret_pct": item.get("close_return_pct"),
+                "results": s["results"],
+                "holding": s["holding"],
+            }
+        )
+    return out
+
+
+def _latest_dated(dir_: Path, suffix: str) -> list[Path]:
+    """Files named ``YYYY-MM-DD<suffix>``, oldest first."""
+    if not dir_.exists():
+        return []
+    return sorted(p for p in dir_.glob("*" + suffix) if _DATED.match(p.name[: -len(suffix)]))
+
+
+def swing(data_dir: Path, *, day: str = "") -> dict[str, Any]:
+    """Nightly swing candidates (SPEC §5.8) and the swing paper account, from the evening job's
+    ``data/state/swing/<T>.json``. Paper only."""
+    files = _latest_dated(data_dir / "state" / "swing", ".json")
+    out: dict[str, Any] = {"days": [p.stem for p in files][-30:]}
+    if not files:
+        out["empty"] = "No swing run yet (tasks.py evening or tasks.py swing, after 19:30 IST)."
+        return out
+    pick = [p for p in files if p.stem == day] if day else []
+    path = pick[0] if pick else files[-1]
+    night = json.loads(path.read_text(encoding="utf-8"))
+    acct = night.get("account")
+    state = data_dir / "state" / "swing_paper_state.json"
+    if acct is None and state.exists():  # older nightly files: raw state, no derived figures
+        raw = json.loads(state.read_text(encoding="utf-8"))
+        acct = {k: raw.get(k) for k in ("capital", "cash", "pending", "positions", "closed")}
+    out.update(
+        day=night.get("day"),
+        known_at=night.get("known_at"),
+        ban_trade_date=night.get("ban_trade_date"),
+        plans=night.get("plans", []),
+        trend=night.get("trend"),
+        account=acct,
+        note=night.get("note", ""),
+    )
+    return out
+
+
+def event_arb(root: Path, *, as_of: date | None = None) -> dict[str, Any]:
+    """Event-arbitrage screen (Addendum A) computed now from ``config/event_arb/events.yaml``
+    without side effects (no feed fetch, no alert state, no report write), plus the saved
+    reports from ``tasks.py event-arb`` and recent classified announcements."""
+    from engine.core.calendar import TradingCalendar
+    from engine.core.config import load_settings
+    from engine.core.rules import IST, RuleBook
+    from engine.sidecars.event_arb.run import make_cost_fn, rule_inputs
+    from engine.sidecars.event_arb.screen import EventArbConfig, screen_all
+    from engine.sidecars.event_arb.sources import CandidateStore, load_events
+
+    as_of = as_of or datetime.now(IST).date()
+    settings = load_settings(root=root)
+    raw = dict(settings.raw.get("event_arb") or {})
+    cfg = EventArbConfig.from_mapping(raw, settings.risk.capital_inr)
+    book = RuleBook.load(root / "config" / "rules")
+    cal = TradingCalendar.from_rulebook(book)
+    rules = rule_inputs(book, as_of)
+    cost_fn = make_cost_fn(book, as_of, str(raw.get("broker", "zerodha")))
+    events = load_events(root / str(raw.get("events_file", "config/event_arb/events.yaml")))
+    rows = []
+    for s in screen_all(events, as_of, cal, cfg, rules, cost_fn):
+        pess = next(
+            (r for r in s.results if s.pessimistic is not None and r.scenario == s.pessimistic),
+            None,
+        )
+        rows.append(
+            {
+                "symbol": s.event.symbol,
+                "company": s.event.company,
+                "type": s.event.type.value,
+                "verdict": s.verdict.value,
+                "announced_on": s.event.announced_on.isoformat(),
+                "last_buy_day": s.last_buy_day.isoformat() if s.last_buy_day else None,
+                "shares": s.sizing.shares if s.sizing else None,
+                "pessimistic": s.pessimistic.label if s.pessimistic else None,
+                "cushion_pct": None if pess is None or pess.cushion is None else pess.cushion * 100,
+                "flags": [{"level": f.level.value, "text": f.text} for f in s.flags],
+                "filing_url": s.event.filing_url,
+            }
+        )
+    report_dir = root / str(raw.get("report_dir", "reports/event_arb"))
+    store = CandidateStore(
+        root / str(raw.get("candidates_file", "data/event_arb/candidates.jsonl"))
+    )
+    return {
+        "as_of": as_of.isoformat(),
+        "rows": rows,
+        "reports": [p.stem for p in _latest_dated(report_dir, ".html")][-30:],
+        "candidates": [
+            {
+                "published": a.published,
+                "company": a.company,
+                "kind": a.kind,
+                "url": a.url,
+                "subject": a.subject,
+                "note": a.note,
+            }
+            for a in store.recent(as_of, 60)[:30]
+        ],
+        "unverified": list(rules.unverified),
+        "note": "Information only: the tracker never trades. Screen computed now from "
+        "events.yaml; the saved report is what tasks.py event-arb wrote that day.",
+    }
+
+
+def event_arb_report(root: Path, name: str) -> dict[str, Any]:
+    """One saved report (``reports/event_arb/<YYYY-MM-DD>.html``), shown in a sandboxed frame."""
+    if not _DATED.match(name):
+        raise ValueError("bad report name")
+    p = root / "reports" / "event_arb" / f"{name}.html"
+    if not p.exists():
+        raise FileNotFoundError(name)
+    return {"name": name, "html": p.read_text(encoding="utf-8")}
+
+
+def strategies(root: Path) -> dict[str, Any]:
+    """Every SPEC §5 and Addendum A item with its status and when it last produced output."""
+    from engine.core.rules import IST
+    from engine.strategies.registry import REGISTRY, STATUSES
+
+    rows = []
+    for it in REGISTRY:
+        last = None
+        if it.evidence:
+            hits = list(root.glob(it.evidence))
+            if hits:
+                newest = max(hits, key=lambda p: p.stat().st_mtime)
+                last = datetime.fromtimestamp(newest.stat().st_mtime, tz=IST).isoformat(
+                    timespec="minutes"
+                )
+        rows.append(
+            {"ref": it.ref, "name": it.name, "status": it.status, "where": it.where,
+             "note": it.note, "last_output": last}
+        )  # fmt: skip
+    counts = {s: sum(1 for r in rows if r["status"] == s) for s in STATUSES}
+    return {
+        "rows": rows,
+        "counts": counts,
+        "note": "live = real orders (none: live trading is disabled); paper = runs on real data "
+        "and books paper trades with costs; research = code exists but not a paper strategy, or "
+        "information only; not built = no code yet or out of scope.",
+    }
