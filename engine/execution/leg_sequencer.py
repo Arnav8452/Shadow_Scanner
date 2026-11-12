@@ -35,6 +35,9 @@ class SpreadLegIntent:
     is_protective_hedge: bool
     order_type: str = "LIMIT"  # "LIMIT" or "MARKET_PROTECTED" (plain "MARKET" is forbidden)
     option_type: str | None = None  # "CE" / "PE"; inferred from the symbol when omitted
+    # A futures leg. A short future is defined-risk only when a long CALL of at least its
+    # quantity is already held (the call caps the loss on a rise): it needs "CE" cover.
+    is_future: bool = False
 
     def __post_init__(self) -> None:
         ot = self.order_type.upper()
@@ -52,6 +55,11 @@ class SpreadLegIntent:
             raise ValueError(f"option_type must be CE or PE, got {self.option_type!r}")
 
     @property
+    def cover_type(self) -> str | None:
+        """The option type that must already be bought to cover this leg when it is short."""
+        return "CE" if self.is_future else self.opt_type
+
+    @property
     def opt_type(self) -> str | None:
         if self.option_type is not None:
             return self.option_type.upper()
@@ -66,7 +74,7 @@ class NakedShortError(ValueError):
 def _coverage(legs: Sequence[SpreadLegIntent]) -> dict[str | None, int]:
     cover: dict[str | None, int] = defaultdict(int)
     for lg in legs:
-        if lg.side.upper() == "BUY" and lg.opt_type is not None:
+        if lg.side.upper() == "BUY" and lg.opt_type is not None and not lg.is_future:
             cover[lg.opt_type] += lg.qty
     return cover
 
@@ -80,7 +88,7 @@ def sequence_entry_legs(
     cover = _coverage(buys)
     need: dict[str | None, int] = defaultdict(int)
     for sh in shorts:
-        need[sh.opt_type] += sh.qty
+        need[sh.cover_type] += sh.qty
     for typ, qty in need.items():
         if typ is None or cover.get(typ, 0) < qty:
             raise NakedShortError(
@@ -105,7 +113,7 @@ def cap_short_legs_to_filled_hedges(
     available = _coverage(filled_hedges)
     capped: list[SpreadLegIntent] = []
     for sh in shorts:
-        typ = sh.opt_type
+        typ = sh.cover_type  # a short future needs long-call cover
         if typ is None:
             continue
         q = (min(sh.qty, available.get(typ, 0)) // lot) * lot

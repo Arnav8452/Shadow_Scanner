@@ -26,7 +26,7 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 - **Long-option strategies** (`plays_long.py`): put-panic breakdown (S1), OI-unwinding ignition with the second-mouse retest (S2), 0DTE afternoon gamma (S3, 2 lots), the 5-pillar breakthrough scalper with writer stop-cluster projection (rules.md), spoof rug-pull / eaten-wall fade (spoofing notes), and the absorption-zone wave rider (ride_wave.md).
 - **Multi-leg strategies** (`plays_spread.py`): the straddle-VWAP iron fly with post-flush entry (A), OI-velocity credit spreads (B), the term-structure calendar (C, overnight), the compression + skew debit spread (D, up to 2 days), the expiry pin seller (fix2.md), the hedged synthetic future, the married future, and MCX minis.
   - **MCX minis are coded but dormant:** there is no MCX feed, instrument master or MCX cost rows. CTT 0.01% must be verified before adding rows.
-  - **The married future is bullish only:** its mirror needs a short future, which the defined-risk leg sequencer does not allow.
+  - **The married future runs both ways (owner correction):** the notes define the bearish form too. The mirror buys the ATM call first, then sells the future. The leg sequencer now treats a short future like a short call: it is placed only after a long call is filled, and it is bought back first on exit. Worst case = (|F − K| + hedge premium) × lot, so it stays defined risk.
 - **Spoofing** (`engine/shadow/spoof.py`, from the pasted module):
   - walls ≥ 3× the side's median, tracked by price;
   - a phantom cancel ratio separates pulled walls (spoof rug-pull, ≥ 0.75) from eaten ones (≤ 0.20 with 70% traded);
@@ -42,7 +42,7 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 **Not yet possible:**
 - MCX (no data or verified costs).
-- The calendar and compression strategies need history first: 10–20 sessions of term-spread and width history, recorded at each close. The calendar also needs a 14+ day expiry in the recorder's chain, and the recorder currently keeps the nearest 2–3.
+- The calendar and compression strategies need history first: 10–20 sessions of term-spread and width history, recorded at each close. The recorder now also keeps Nifty's next monthly expiry (the calendar's far leg). On 12 Nov that takes the recorded set from 363 to 567 symbols, against a 1,998 cap.
 - Heavyweight CVD uses day returns as a proxy.
 
 ---

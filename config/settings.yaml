@@ -243,8 +243,8 @@ recorder:                # M2 — what to record and how (SPEC §3 L1); not risk
   underlyings:                # spot keys per broker
     - name: NIFTY
       spot: {upstox: "NSE_INDEX|Nifty 50", fyers: "NSE:NIFTY50-INDEX"}
-      expiries: [current_weekly, next_weekly, current_monthly]
-      weights: {current_weekly: 1.0, next_weekly: 1.5, current_monthly: 2.0}
+      expiries: [current_weekly, next_weekly, current_monthly, next_monthly]   # next_monthly: the calendar's far leg (owner notes, spec C)
+      weights: {current_weekly: 1.0, next_weekly: 1.5, current_monthly: 2.0, next_monthly: 2.5}
       futures_months: 1
     - name: SENSEX
       spot: {upstox: "BSE_INDEX|SENSEX", fyers: "BSE:SENSEX-INDEX"}

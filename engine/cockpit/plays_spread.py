@@ -29,9 +29,10 @@ Defined risk throughout (wings bought first, shorts bought back first); threshol
   mirror). Planned loss = the index stop distance x quantity. Intraday to 3 days.
 - ``MarriedFuturePlay`` (futures strategy 2): a break of the previous day's high with futures
   OI +2% over 15 min and the annualized basis expanding -> buy the ATM put, then the future.
-  Target +200 index points, stop back below the breakout by 0.5%, up to 5 days. Bullish only:
-  the bearish mirror needs a short future, which the leg sequencer (defined risk) does not
-  allow.
+  Target +200 index points, stop back below the breakout by 0.5%, up to 5 days. The notes
+  give the long form only; the mirror (break of the previous day's low with OI building and
+  the basis shrinking) buys the ATM call first and then sells the future, the call capping the
+  loss on a rise.
 - ``McxMiniPlay`` (futures strategy 3): VWAP breakout with CVD z >= 2 and 2x volume on
   CRUDEOILM / NATGASMINI with the charges ratchet. Dormant: the engine has no MCX feed or
   instrument master, and MCX costs (CTT) are not in config/rules yet.
@@ -707,42 +708,60 @@ class MarriedFuturePlay(SpreadPlay):
                 continue
             spot = m.spot(und)
             oi_chg = (series[-1][1] - series[-16][1]) / max(series[-16][1], 1) * 100
-            expanding = basis[-1] > 0 and basis[-1] > statistics.fmean(basis[-30:-15])
-            if not (spot > st.pdh and oi_chg > self.fut_oi_up_pct and expanding):
+            earlier = statistics.fmean(basis[-30:-15])
+            # Long: break of the previous day's high, OI building, basis expanding into premium.
+            # Short (mirror): break of the previous day's low, OI building (short build-up),
+            # basis shrinking toward a discount.
+            if (
+                spot > st.pdh
+                and oi_chg > self.fut_oi_up_pct
+                and basis[-1] > 0
+                and basis[-1] > earlier
+            ):
+                bull, level = True, st.pdh
+            elif st.pdl and spot < st.pdl and oi_chg > self.fut_oi_up_pct and basis[-1] < earlier:
+                bull, level = False, st.pdl
+            else:
                 continue
             a = _atm(m.chain_rows(und), spot)
-            put = ((a or {}).get("pe") or {}).get("sym")
-            if not put or a is None:
+            hedge_kind = "PE" if bull else "CE"
+            hedge = ((a or {}).get(hedge_kind.lower()) or {}).get("sym")
+            if not hedge or a is None:
                 continue
-            lot = m.lot(put)
+            lot = m.lot(hedge)
+            k = float(a["k"])
+            # Hedge first (CLAUDE.md rule 1): the put (call) is bought, then the future.
             legs = [
-                Leg(put, "PE", float(a["k"]), "BUY", lot),
-                Leg(f.symbol, "FUT", 0.0, "BUY", lot),
+                Leg(hedge, hedge_kind, k, "BUY", lot),
+                Leg(f.symbol, "FUT", 0.0, "BUY" if bull else "SELL", lot),
             ]
-            stop = st.pdh * (1 - self.stop_pct / 100)
+            stop = level * (1 - self.stop_pct / 100) if bull else level * (1 + self.stop_pct / 100)
             tr = SpreadTrade(
                 "",
                 und,
                 now,
                 square_off=None,
                 spot_stop=stop,
-                bullish=True,
+                bullish=bull,
                 extra={
                     "entry_spot": spot,
                     "until": now.astimezone(IST).date().toordinal() + self.hold_days,
                 },
             )
-            # Worst case: future falls to the put strike plus the put premium.
-            put_ask = m.book(put).asks[0][0] if m.book(put) and m.book(put).asks else 0.0  # type: ignore[union-attr]
-            worst = (max(0.0, f.ltp - float(a["k"])) + put_ask) * lot
+            hb = m.book(hedge)
+            prem = hb.asks[0][0] if hb is not None and hb.asks else 0.0
+            # Worst case: the future runs to the hedge strike, plus the hedge premium.
+            worst = (abs(f.ltp - k) + prem) * lot
+            word = "above PDH" if bull else "below PDL"
+            trend = "rising" if bull else "shrinking"
             self.plan(
                 m,
                 und,
-                "MARRIED_FUTURE",
+                "MARRIED_FUTURE" if bull else "MARRIED_SHORT_FUTURE",
                 legs,
                 0.0,
-                f"{und} above PDH {st.pdh:,.0f}, futures OI +{oi_chg:.1f}%, "
-                f"basis {basis[-1]:.1f}% p.a. rising",
+                f"{und} {word} {level:,.0f}, futures OI +{oi_chg:.1f}%, "
+                f"basis {basis[-1]:.1f}% p.a. {trend}",
                 tr,
                 max_loss_inr=worst,
             )
@@ -751,13 +770,18 @@ class MarriedFuturePlay(SpreadPlay):
 
     def extra_exit(self, pos: Any, tr: SpreadTrade, now: datetime, m: Market) -> str | None:
         spot = m.spot(pos.underlying)
-        if spot and spot >= float(tr.extra.get("entry_spot", 1e12)) + self.target_pts:
-            return f"target +{self.target_pts:g} index points"
+        entry = float(tr.extra.get("entry_spot", 0.0))
+        if spot and entry:
+            moved = (spot - entry) if tr.bullish else (entry - spot)
+            if moved >= self.target_pts:
+                return f"target {self.target_pts:g} index points"
         if (
             now.astimezone(IST).date().toordinal() >= int(tr.extra.get("until", 10**9))
             and hhmm(now) >= "15:15"
         ):
             return "holding-period exit"
+        if (pos.expiry - now.astimezone(IST).date()).days <= 0 and hhmm(now) >= "14:45":
+            return "expiry-day exit"
         return None
 
 

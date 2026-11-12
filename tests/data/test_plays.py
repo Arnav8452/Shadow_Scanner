@@ -446,3 +446,72 @@ def test_spread_exit_rules_and_high_iv_router(repo_root: Path, tmp_path: Path, m
     text = r.route(mkt, "NIFTY", True, "test")
     assert "debit spread" in text and hiv.pending is not None
     assert hiv.pending["structure"] == "BULL_CALL"
+
+
+# ---------------------------------------------------------------- married future, both ways
+
+
+def test_short_future_needs_a_long_call_first() -> None:
+    from engine.execution.leg_sequencer import (
+        NakedShortError,
+        SpreadLegIntent,
+        cap_short_legs_to_filled_hedges,
+        sequence_entry_legs,
+    )
+
+    fut = SpreadLegIntent("NIFTYFUT", "SELL", 65, 1.0, False, is_future=True)
+    call = SpreadLegIntent("C", "BUY", 65, 1.0, True, option_type="CE")
+    put = SpreadLegIntent("P", "BUY", 65, 1.0, True, option_type="PE")
+    buys, shorts = sequence_entry_legs([fut, call])
+    assert buys == [call] and shorts == [fut]
+    with pytest.raises(NakedShortError):
+        sequence_entry_legs([fut])
+    with pytest.raises(NakedShortError):
+        sequence_entry_legs([fut, put])  # a put does not cap a short future's loss
+    assert cap_short_legs_to_filled_hedges([fut], [call], lot_size=65) == [fut]
+
+
+def test_married_short_future_round_trip(repo_root: Path, tmp_path: Path) -> None:
+    from engine.cockpit.condor import Leg
+
+    acct = _spread(repo_root, tmp_path, "married")
+    call, fut = opt_symbol(WEEKLY, 25000, Kind.CALL), "NSE:NIFTY26NOVFUT"
+    legs = [Leg(call, "CE", 25000.0, "BUY", 65), Leg(fut, "FUT", 0.0, "SELL", 65)]
+    books = {call: bk(100.0, 100.5), fut: bk(25020.0, 25020.5, qty=20_000)}
+    ok, text = acct.open_spread(structure="MARRIED_SHORT_FUTURE", underlying="NIFTY", expiry=WEEKLY,
+                                legs=legs, width_pts=0.0, books=books, now=D.replace(hour=11),
+                                spot=25000.0, reason="test", max_loss_inr=8_000.0)
+    assert ok, text
+    sides = [o.side for o in acct.broker.order_history if o.filled_qty]
+    assert sides == ["BUY", "SELL"]  # call first, then the short future
+    later = {call: bk(40.0, 40.5), fut: bk(24900.0, 24900.5, qty=20_000)}
+    ok, text = acct.close(acct.positions[0], later, D.replace(hour=14), "test")
+    assert ok, text
+    t = acct.closed[-1]
+    # Future: sold ~25020, bought back ~24900.5 = +119.5; call: 100.5 -> 40 = -60.5.
+    assert t.gross_inr == pytest.approx((119.5 - 60.5) * 65, abs=65)
+    assert 0 < t.net_inr < t.gross_inr
+
+
+def test_married_future_triggers_both_ways(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    def run(spot: float, pdh: float, pdl: float, basis_up: bool) -> MarriedFuturePlay:
+        p = MarriedFuturePlay("mf", "Married", "F2", _spread(repo_root, tmp_path / str(spot), "mf"))
+        st = SimpleNamespace(pdh=pdh, pdl=pdl)
+        mkt.core.runner.scanner.states = {"NSE:NIFTY50-INDEX": st}
+        mkt.spots["NIFTY"] = spot
+        f = fut_state(spot + 20, 0)
+        mkt.futs["NIFTY"] = f
+        now = D.replace(hour=10, minute=30)
+        p.fut_oi["NIFTY"] = [(now - timedelta(minutes=16 - i), 1_000_000 + i * 2000) for i in range(16)]
+        p.basis["NIFTY"] = [5.0 + (i * 0.1 if basis_up else -i * 0.1) for i in range(30)]
+        mkt.now = now
+        p.look(now, mkt)
+        return p
+
+    up = run(25100.0, pdh=25050.0, pdl=24800.0, basis_up=True)
+    assert up.pending is not None and up.pending["structure"] == "MARRIED_FUTURE"
+    assert [(lg.kind, lg.side) for lg in up.pending["legs"]] == [("PE", "BUY"), ("FUT", "BUY")]
+    down = run(24700.0, pdh=25050.0, pdl=24800.0, basis_up=False)
+    assert down.pending is not None and down.pending["structure"] == "MARRIED_SHORT_FUTURE"
+    assert [(lg.kind, lg.side) for lg in down.pending["legs"]] == [("CE", "BUY"), ("FUT", "SELL")]
+    assert down.pending["trade"].spot_stop == pytest.approx(24800.0 * 1.005)

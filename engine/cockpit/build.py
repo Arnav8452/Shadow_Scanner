@@ -381,8 +381,9 @@ def make_plays(
         "synthetic": "On a confirmed setup: buy the wing 350 pts away first, then long call / "
         "short put (or the mirror) at the money; planned loss = a 0.5% index stop; up to 3 days.",
         "married": "Index above the previous day's high, futures OI +2% in 15 min and the "
-        "annualized basis rising -> buy the ATM put, then the future. Target +200 pts, stop "
-        "0.5% under the breakout, up to 5 days. Bullish only (a short future is not sequenced).",
+        "annualized basis rising -> buy the ATM put, then the future. Mirror: below the "
+        "previous day's low with OI +2% and the basis shrinking -> buy the ATM call, then sell "
+        "the future. Target 200 pts, stop 0.5% beyond the broken level, up to 5 days.",
         "mcx": "VWAP breakout with CVD z >= 2 and 2x volume on CRUDEOILM / NATGASMINI with the "
         "charges ratchet. Dormant: no MCX feed, instrument master or MCX cost rows yet.",
     }

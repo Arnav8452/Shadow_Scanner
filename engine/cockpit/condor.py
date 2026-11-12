@@ -303,6 +303,7 @@ class SpreadAccount:
                 1.0,
                 lg.side == "BUY",
                 option_type=lg.kind if lg.kind in ("CE", "PE") else None,
+                is_future=lg.kind == "FUT",
             )
             for lg in legs
         ]
