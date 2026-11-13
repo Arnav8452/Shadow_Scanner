@@ -13,7 +13,7 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
                       | candle-backtest STRAT=condor|log3 FROM= [TO=] [SET=k=v] [VARIANTS=0]
-                        [CACHE=] [DOTENV=] [TRIALS=]
+                        [SPREADS=p90] [QUOTES=] [CACHE=] [DOTENV=] [TRIALS=]
 """
 
 from __future__ import annotations
@@ -1370,7 +1370,9 @@ def task_candle_backtest(params: dict[str, str]) -> int:
     bar's open with the punitive haircut, rerun at 2x; walk-forward, Monte Carlo and deflated
     Sharpe over every parameter set tried. Order-book strategies are refused. The condor runs
     its variant grid (each a trial; VARIANTS=0 for the live config only). SET=key=value,...
-    changes rule parameters (e.g. SET=side_stop_mult=0); each change is a new trial. Report
+    changes rule parameters (e.g. SET=side_stop_mult=0); each change is a new trial.
+    SPREADS=p90|median sets the base haircut from the recorder's measured spreads (QUOTES= another
+    recorded-quotes folder; the report always prints the measured table). Report
     and trades in reports/candle_backtest/. CACHE= another download folder; DOTENV= another
     .env file; TRIALS= another trial registry."""
     _raw_dir, book, cal = _eod_common()
@@ -1440,17 +1442,37 @@ def task_candle_backtest(params: dict[str, str]) -> int:
     rk = raw.get("risk") or {}
     market = Market(src, book, cal)
     hfrom = cb.get("iv_history_from")
-    hc = Haircut(float(cb.get("haircut_min_inr", 1.5)), float(cb.get("haircut_pct", 1.5)))
-    plan_hc = Haircut(
-        float(cb.get("plan_haircut_min_inr", 1.0)), float(cb.get("plan_haircut_pct", 0.75))
-    )
+    from engine.backtest.candles.spreads import haircut_table, measure_spreads, render_spreads
+
+    quotes_dir = Path(params.get("QUOTES") or settings.paths["parquet"] / "quotes")
+    buckets, rec_days = measure_spreads(quotes_dir)
+    appendix = render_spreads(buckets, rec_days)
+    hc = Haircut(float(cb.get("haircut_min_inr", 0.10)), float(cb.get("haircut_pct", 0.5)))
+    if params.get("SPREADS"):  # SPREADS=p90|median: the recorded half-spreads per price bucket
+        if not buckets:
+            print("SPREADS= needs recorded quotes in data/parquet/quotes", file=sys.stderr)
+            return 2
+        hc = Haircut(table=haircut_table(buckets, params["SPREADS"]))
+        appendix += "\n\nThe base haircut is each bucket's " + params["SPREADS"] + " half-spread."
     scenarios = {
         "base": (hc, 1.0),
         "stress": (
             hc.scaled(float(cb.get("stress_mult", 2.0))),
             float(cb.get("stress_charges_mult", 2.0)),
         ),
-        "plan": (plan_hc, 1.0),
+        "plan": (
+            Haircut(
+                float(cb.get("plan_haircut_min_inr", 1.0)), float(cb.get("plan_haircut_pct", 0.75))
+            ),
+            1.0,
+        ),
+        "extreme": (
+            Haircut(
+                float(cb.get("extreme_haircut_min_inr", 1.5)),
+                float(cb.get("extreme_haircut_pct", 1.5)),
+            ),
+            1.0,
+        ),
     }
 
     def make_ctx(scenario: str) -> Any:
@@ -1511,6 +1533,8 @@ def task_candle_backtest(params: dict[str, str]) -> int:
             ),
             also_trials=variants,
             label=label,
+            extra_scenarios=("plan", "extreme"),
+            appendix=appendix,
             wf_train=int(wf.get("train", 60)),
             wf_test=int(wf.get("test", 20)),
             mc_paths=int(mc.get("paths", 1000)),
@@ -1518,11 +1542,11 @@ def task_candle_backtest(params: dict[str, str]) -> int:
             ruin_pct=float(mc.get("ruin_pct", 20)),
         )
         results.append(res)
-        s1, s2, s3 = res.s1, res.s2, res.s3
+        s1, s2 = res.s1, res.s2
+        others = "; ".join(f"{d}: net {x.net:,.0f}" for d, _, x in res.extra)
         print(
             f"CANDLE APPROXIMATION {spec.key} {label}: {s1.trades} trades, net {s1.net:,.0f}; "
-            f"{res.stress_desc}: net {s2.net:,.0f}; "
-            f"{res.plan_desc}: net {s3.net if s3 else 0:,.0f}; t={s1.t_stat:.2f}; "
+            f"{res.stress_desc}: net {s2.net:,.0f}; {others}; t={s1.t_stat:.2f}; "
             f"DSR {res.dsr.deflated_sharpe_pct:.1f}% over {res.n_trials} trial(s)",
             flush=True,
         )

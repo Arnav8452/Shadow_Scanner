@@ -170,8 +170,14 @@ def _ctx(book: RuleBook, src: Any, mult: float = 1.0, charges_mult: float = 1.0,
 # ---------------------------------------------------------------------------- fills, rules
 
 
-def test_haircut_is_punitive_and_doubles() -> None:
-    h = Haircut()
+def test_haircut_default_extreme_and_table() -> None:
+    d = Haircut()  # max(₹0.10, 0.5%): 2-3x the recorded median half-spread
+    assert d.half(10.0) == pytest.approx(0.10) and d.half(200.0) == pytest.approx(1.0)
+    assert d.describe() == "max(₹0.1, 0.5% of price)"
+    t = Haircut(table=((0.0, 0.5), (50.0, 0.2)))  # measured half-spreads by price bucket
+    assert t.half(20.0) == pytest.approx(0.1) and t.half(100.0) == pytest.approx(0.2)
+    assert t.half(1.0) == pytest.approx(0.025)  # floor: half a tick
+    h = Haircut(1.5, 1.5)  # the first brief's extreme value
     assert h.half(10.0) == 1.5  # the ₹1.50 floor
     assert h.half(200.0) == pytest.approx(3.0)  # 1.5% of price
     assert h.buy(200.0) == 203.0 and h.sell(200.0) == 197.0
@@ -232,7 +238,7 @@ def test_fill_is_next_open_plus_haircut_never_the_close(book: RuleBook) -> None:
     ctx = _ctx(book, src)
     lg = _fill_leg(ctx, c, "BUY", 75, _at(d, "10:00"), 3)
     assert lg is not None
-    assert lg.entry_ref == 104 and lg.entry_px == pytest.approx(104 + 1.56)
+    assert lg.entry_ref == 104 and lg.entry_px == pytest.approx(104 + ctx.haircut.half(104))
     assert lg.entry_px != 100.0 + ctx.haircut.half(100.0)  # not the decision bar's close
 
 
@@ -350,7 +356,7 @@ def test_run_and_report_say_candle_approximation(book: RuleBook, tmp_path: Path)
     assert res.s1.trades >= 1 and res.n_trials == 1
     assert res.s2.haircut_paid > res.s1.haircut_paid
     text = render_report(res, "x.csv")
-    assert "CANDLE APPROXIMATION" in text and "2x haircut" in text
+    assert "CANDLE APPROXIMATION" in text and "2x max(₹0.1, 0.5% of price), charges x2" in text
     assert "Deflated Sharpe" in text and "Walk-forward" in text
 
 
@@ -458,8 +464,9 @@ def test_stress_doubles_charges(book: RuleBook) -> None:
 
 def test_condor_variant_grid_is_eight_distinct_trials(tmp_path: Path) -> None:
     vs = condor_variants(CondorConfig())
-    assert len(vs) == 8 and "live config" in vs[0].label
-    assert {(v.structure, v.cfg.short_delta, v.cfg.stop_mult) for v in vs} == {
+    assert len(vs) == 10 and "live config" in vs[0].label
+    assert vs[8].cfg.side_stop_mult == 0 and vs[9].skip_pre_closure
+    assert {(v.structure, v.cfg.short_delta, v.cfg.stop_mult) for v in vs[:8]} == {
         (s_, d, m)
         for s_ in ("IRON_CONDOR", "TREND_SPREAD")
         for d in (0.16, 0.20)
@@ -467,7 +474,7 @@ def test_condor_variant_grid_is_eight_distinct_trials(tmp_path: Path) -> None:
     }
     now = datetime(2026, 11, 13, tzinfo=IST)
     counts = [register_trial(tmp_path / "t.jsonl", "condor", v, now)[1] for v in vs]
-    assert counts == list(range(1, 9))
+    assert counts == list(range(1, 11))
 
 
 def test_trend_spread_sells_one_side_with_economics(book: RuleBook) -> None:
@@ -501,7 +508,14 @@ def _weekend_trade(ctx: Ctx, at: datetime) -> tuple[CandleTrade, dict[str, float
         legs.append(LegTrade(f"{wing_k:g}{kind}", kind, wing_k, "BUY", 75, at, 1.0, 1.0))
         legs.append(
             LegTrade(
-                f"{short_k:g}{kind}", kind, short_k, "SELL", 75, at, 0.0, side_ctc / 0.75 + 1.0
+                f"{short_k:g}{kind}",
+                kind,
+                short_k,
+                "SELL",
+                75,
+                at,
+                side_ctc / 0.75 + 1.0,
+                side_ctc / 0.75 + 1.0,
             )
         )
         px[f"{short_k:g}{kind}"], px[f"{wing_k:g}{kind}"] = ps, pw
@@ -554,8 +568,70 @@ def test_side_stop_zero_means_off(book: RuleBook) -> None:
     tr, px = _weekend_trade(ctx, wed.start)
     for lg in tr.legs:  # the put side now costs 3x its credit to close; the whole far less
         if lg.kind == "PE" and lg.side == "SELL":
-            lg.entry_px = 1.0 + (px["23000PE"] - px["22900PE"]) / 3
+            lg.entry_px = lg.entry_ref = 1.0 + (px["23000PE"] - px["22900PE"]) / 3
     tr.credit_pts = sum(lg.entry_px if lg.side == "SELL" else -lg.entry_px for lg in tr.legs)
     cfg = CondorConfig(stop_mult=99.0, exit_on_short_touch=False)
     assert "put side stop" in (_condor_exit(ctx, cfg, tr, wed, px) or "")
     assert _condor_exit(ctx, replace(cfg, side_stop_mult=0.0), tr, wed, px) is None
+
+
+# --------------------------------------------- model 2 (14 Nov review): credit at trade prices
+
+
+def test_stops_compare_against_the_credit_at_trade_prices(book: RuleBook) -> None:
+    """2025-02-04 shape: a put side worth 14.1 at trade prices but 11.1 after the haircut.
+    A cost to close of 24.4 must not stop it (2x / 2.2x of 14.1 are 28.2 / 31.0)."""
+    d = date(2025, 1, 8)  # a Wednesday: no closure rules
+    at = _at(d, "11:00")
+    legs = [
+        LegTrade("22900PE", "PE", 22900, "BUY", 75, at, 5.0, 6.5),
+        LegTrade("23000PE", "PE", 23000, "SELL", 75, at, 19.1, 17.6),
+    ]
+    tr = CandleTrade("condor", "BULL_PUT", date(2025, 1, 16), at, "", legs, credit_pts=11.1)
+    ctx = _ctx(book, MemorySource({}, {}, {}))
+    bar = Bar(_at(d, "11:05"), 23500, 23501, 23499, 23500)
+    cfg = CondorConfig(exit_on_short_touch=False)
+    assert _condor_exit(ctx, cfg, tr, bar, {"22900PE": 5.0, "23000PE": 29.4}) is None
+    assert "stop" in (_condor_exit(ctx, cfg, tr, bar, {"22900PE": 5.0, "23000PE": 37.0}) or "")
+    ctx.trigger_on_haircut = True  # the old model: the shrunk credit sets the levels
+    assert "stop" in (_condor_exit(ctx, cfg, tr, bar, {"22900PE": 5.0, "23000PE": 29.4}) or "")
+
+
+def test_no_entries_before_a_closure(book: RuleBook) -> None:
+    days = _weekdays(date(2025, 1, 1), date(2025, 1, 17))
+    src = Synth(days, _calm, lambda di: 0.12 + 0.003 * di)
+    ctx = _ctx(book, src, iv_history_from=days[0], iv_min_history=3)
+    rng = [d for d in days if d >= date(2025, 1, 8)]
+    var = CondorVariant(CondorConfig(), skip_pre_closure=True)
+    out = resolve("condor").run(ctx, rng, var)
+    assert out.skips["last session before a market closure"] >= 1
+    assert all(t.entry_at.weekday() != 4 for t in out.trades)
+
+
+def test_measure_spreads_from_recorded_quotes(tmp_path: Path) -> None:
+    import duckdb
+
+    from engine.backtest.candles.spreads import haircut_table, measure_spreads, render_spreads
+
+    day = tmp_path / "date=2026-11-12"
+    day.mkdir()
+    con = duckdb.connect()
+    con.execute(
+        "COPY (SELECT TIMESTAMPTZ '2026-11-12 11:00:00+05:30' + to_seconds(i) AS ts, 'NIFTY' "
+        "AS underlying, CASE WHEN i % 2 = 0 THEN 'CE' ELSE 'PE' END AS kind, 'snap' AS capture, "
+        "DATE '2026-11-12' AS date, CASE WHEN i < 100 THEN DATE '2026-11-17' "
+        "ELSE DATE '2026-12-29' END AS expiry, "
+        "CASE WHEN i < 50 THEN 20.0 ELSE 150.0 END AS ltp, "
+        "CASE WHEN i < 50 THEN 19.95 WHEN i < 100 THEN 149.8 ELSE 140.0 END AS bid, "
+        "CASE WHEN i < 50 THEN 20.05 WHEN i < 100 THEN 150.2 ELSE 160.0 END AS ask "
+        "FROM range(120) t(i)) "
+        f"TO '{(day / 'q.parquet').as_posix()}' (FORMAT parquet)"
+    )
+    con.close()
+    buckets, days = measure_spreads(tmp_path)  # the far expiry's wide quotes are left out
+    assert days == ["2026-11-12"]
+    by = {b.lo: b for b in buckets}
+    assert by[10.0].n == 50 and by[10.0].median_inr == pytest.approx(0.05)
+    assert by[100.0].p90_inr == pytest.approx(0.2)
+    assert dict(haircut_table(buckets))[10.0] == pytest.approx(0.25)
+    assert "Median ₹" in render_spreads(buckets, days)

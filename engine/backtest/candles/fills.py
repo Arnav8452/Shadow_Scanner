@@ -3,7 +3,10 @@
 **Fills.** A candle has no bid or ask. Each leg pays a half-spread ``h = mult x max(min_inr,
 pct% of price)`` on every fill: buys at ``price + h``, sells at ``price - h`` (never below one
 tick). The price is the NEXT bar's open after the decision bar, never the decision bar's close.
-The defaults (₹1.50, 1.5%) are the owner's punitive values; ``mult = 2`` is the stress rerun.
+Default ``max(₹0.10, 0.5%)``: about 2-3x the median half-spread our recorder measured on Nifty
+weekly options (12-13 Nov 2026) and at or above its 90th percentile. ``mult = 2`` is the stress
+rerun; ``max(₹1.50, 1.5%)`` (the first brief's value, 12-60x the measured spread) is kept as an
+extreme scenario. ``table`` uses measured spreads per price bucket instead.
 
 **Charges.** ``fno_charges`` per executed order from ``config/rules``. ``costs_on: run_date``
 (default) prices every trade at the rules in force when the backtest runs: the question is what
@@ -27,13 +30,30 @@ from engine.core.rules import RuleBook
 
 @dataclass(frozen=True)
 class Haircut:
-    min_inr: float = 1.5
-    pct: float = 1.5
+    min_inr: float = 0.10
+    pct: float = 0.5
     mult: float = 1.0
     tick: float = 0.05
+    # Measured spreads (``spreads.haircut_table``): ((lower price edge, half-spread % of
+    # price), ...); when set it replaces ``min_inr``/``pct`` (floor: half a tick).
+    table: tuple[tuple[float, float], ...] = ()
 
     def half(self, px: float) -> float:
+        if self.table:
+            rel = self.table[0][1]
+            for lo, r in self.table:
+                if abs(px) >= lo:
+                    rel = r
+            return self.mult * max(self.tick / 2, abs(px) * rel / 100.0)
         return self.mult * max(self.min_inr, abs(px) * self.pct / 100.0)
+
+    def describe(self) -> str:
+        core = (
+            "recorded half-spreads by price bucket"
+            if self.table
+            else f"max(₹{self.min_inr:g}, {self.pct:g}% of price)"
+        )
+        return core if self.mult == 1 else f"{self.mult:g}x {core}"
 
     def buy(self, px: float) -> float:
         return round(px + self.half(px), 2)

@@ -212,13 +212,16 @@ uv run python tasks.py candle-backtest STRAT=log3 FROM=2025-01-01
 
 - **Which strategies:** only those whose triggers use price, 1-minute volume, IV and OI. Built: `condor` (SPEC 5.1) and `log3` (the mined Log-3 momentum rule, SPEC 5.2). Allowed but not built yet: expiry gamma (5.10), 0DTE gamma, compression, iron fly.
 - **Refused:** `score`, `breakthrough`, `spoof_fade`, `zone_rider` read the order book, which no historical source has. `oi_ignition` (S2) and `oi_credit` (spec B) trigger on futures CVD z-scores, which need each trade's side from the bid/ask. The task exits with code 2.
-- **Fills:** never at the candle's close. A decision on a completed bar fills at the **next bar's open**, and every leg pays a half-spread on each side. Each rule runs three times (settings: `candle_backtest:` in `config/settings.yaml`):
-  - **1×:** the conservative haircut, `max(₹1.50, 1.5% of price)`;
-  - **stress:** 2× that haircut **and** every order's charges doubled;
-  - **plan:** the owner's plan haircut, `max(₹1, 0.75%)`, for comparison only.
+- **Fills:** never at the candle's close. A decision on a completed bar fills at the **next bar's open**, and every leg pays a half-spread on each side. Each rule runs four times (settings: `candle_backtest:` in `config/settings.yaml`):
+  - **base:** `max(₹0.10, 0.5% of price)`. That is about 2–3× the median half-spread our recorder measured on Nifty weeklies (12–13 Nov 2026), and at or above its 90th percentile. `SPREADS=p90` (or `median`) uses the measured spread of each price bucket instead.
+  - **stress:** 2× that haircut **and** every order's charges doubled.
+  - **plan:** the owner's plan haircut `max(₹1, 0.75%)`, for comparison only.
+  - **extreme:** the first brief's `max(₹1.50, 1.5%)`, 12–60× the measured spread, for comparison only.
 
-  Exit rules (take-profit, stops, adjustments) read last trades, and every fill pays the haircut. Marking the triggers with the haircut too fired the condor's side stop on the spread model itself; `trigger_on_haircut: true` brings that back for comparison. Each report also shows the gross P&L with the haircut added back, which separates spread cost from the rule's own result.
-- **Exits inside a bar:** a long option's stop or target triggers on the bar's low or high less the haircut, and fills at the level, or at the open if the bar opens beyond it. If one bar touches both, the stop is assumed.
+  Every report prints the measured spread table (median and 90th percentile by price bucket, from `data/parquet/quotes`).
+- **Exit rules:** take-profit, stops, adjustments and weekend booking compare the cost to close at last trades with the **credit at trade prices** (each leg's entry trade, before the haircut). The P&L uses the actual fills. Comparing against the haircut-shrunk credit put the stops at the wrong level: a put side worth 14.1 counted as 11.1, so its 2.2× stop fired at 24.4 instead of about 31. `trigger_on_haircut: true` restores the old model for comparison.
+- **Each report also shows** the gross P&L with the haircut added back, which separates spread cost from the rule's own result.
+- **Exits inside a bar:** a long option's stop and target are set from its entry trade price. They trigger on the bar's low or high and fill at the level less the haircut, or at the open less the haircut if the bar opens beyond it. If one bar touches both, the stop is assumed.
 - **Costs and margin:**
   - **Costs:** `config/rules` through the cost model, Upstox Plus ₹30 an order. By default the rules in force on the run date apply, i.e. what the rule would pay now (STT 0.15%).
   - **Margin:** the `margin_rules.yaml` broker-quote table.
@@ -228,10 +231,14 @@ uv run python tasks.py candle-backtest STRAT=log3 FROM=2025-01-01
   - **Daily P&L:** an open condor is marked to market at each session's close, so drawdowns include open losses.
   - **Validation:** walk-forward (60/20 sessions), block-bootstrap Monte Carlo, and a deflated Sharpe.
   - **Trials:** the deflated Sharpe counts every distinct parameter set ever run for that strategy, from `data/backtest/candle_trials.jsonl`.
-- **Condor variants:** `STRAT=condor` runs 8 variants, each counted as a trial (`VARIANTS=0` runs the live config only):
-  - short delta 0.16 or 0.20;
-  - stop at 2.0× or 1.5× the credit (take-profit 50%);
-  - a 4-leg iron condor, or a 2-leg credit spread on the side the last 30 minutes of the index favour.
+- **Condor variants:** `STRAT=condor` runs 10 variants, each counted as a trial (`VARIANTS=0` runs the live config only):
+  - **The 8-variant grid:**
+    - short delta 0.16 or 0.20;
+    - stop at 2.0× or 1.5× the credit (take-profit 50%);
+    - a 4-leg iron condor, or a 2-leg credit spread on the side the last 30 minutes of the index favour.
+  - **The live config without the 2.2× per-side stop.**
+  - **The live config with no entries on the last session before a market closure** (Friday or pre-holiday).
+  - **Trials:** when the simulator changes how a rule is priced or exited, `MODEL_VERSION` in `engine/backtest/candles/runner.py` goes up, so every rerun counts as a new trial.
 
   `SET=key=value,...` changes any rule parameter for a run, e.g. `SET=side_stop_mult=0` (0 switches the per-side stop off). The run gets its own report file and counts as a new trial.
 

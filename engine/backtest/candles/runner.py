@@ -1,9 +1,13 @@
-"""Run a candle backtest in three scenarios, then score it honestly.
+"""Run a candle backtest in several fill scenarios, then score it honestly.
 
-- **base:** the conservative haircut, ``max(₹1.50, 1.5%)`` per leg per side, charges as is;
+- **base:** ``max(₹0.10, 0.5%)`` per leg per side (2-3x the recorded median spread), or the
+  recorded spreads per price bucket with ``SPREADS=``; charges as is;
 - **stress:** 2x that haircut AND every order's charges doubled (SPEC 8 2x slippage, plus a
   margin for charges the rule tables miss);
-- **plan:** the owner's plan haircut ``max(₹1, 0.75%)``, charges as is (for comparison only).
+- extra scenarios for comparison, e.g. the owner's plan haircut ``max(₹1, 0.75%)`` and the
+  first brief's extreme ``max(₹1.50, 1.5%)``.
+
+Validation and the deflated Sharpe use the base scenario.
 
 - **Daily P&L** over every session in the range (0 on days without a trade). A structure held
   overnight is marked to market at each session's last bar (closing at the haircut, exit
@@ -45,10 +49,17 @@ from engine.backtest.montecarlo import MonteCarloSummary, run_block_bootstrap_mc
 from engine.backtest.walkforward import WalkForwardSummary, evaluate_walk_forward
 from engine.core.rules import IST
 
+# Bumped when the simulator changes how a rule is priced or exited, so reruns count as new
+# trials. 2 (14 Nov 2026): stops and take-profits measured against the credit at trade prices,
+# and the haircut default cut to max(₹0.10, 0.5%).
+MODEL_VERSION = 2
+
 
 def params_hash(strategy: str, params: Any) -> tuple[str, dict[str, Any]]:
     body = asdict(params) if is_dataclass(params) and not isinstance(params, type) else dict(params)
-    blob = json.dumps({"strategy": strategy, "params": body}, sort_keys=True, default=str)
+    blob = json.dumps(
+        {"strategy": strategy, "params": body, "model": MODEL_VERSION}, sort_keys=True, default=str
+    )
     return hashlib.sha256(blob.encode()).hexdigest()[:12], body
 
 
@@ -173,11 +184,10 @@ class RunResult:
     daily_stress: list[float]
     s1: Summary
     s2: Summary
-    plan: SimOut | None
-    s3: Summary | None
+    extra: list[tuple[str, SimOut, Summary]]  # (description, run, summary) for comparison
     stress_desc: str
-    plan_desc: str
     label: str
+    appendix: str
     wf: WalkForwardSummary
     mc: MonteCarloSummary
     dsr: DeflatedSharpeResult
@@ -195,7 +205,8 @@ def run_candle_backtest(
     trials_path: Path,
     also_trials: Sequence[Any] = (),
     label: str = "",
-    with_plan: bool = True,
+    extra_scenarios: Sequence[str] = ("plan",),
+    appendix: str = "",
     wf_train: int = 60,
     wf_test: int = 20,
     mc_paths: int = 1000,
@@ -214,11 +225,15 @@ def run_candle_backtest(
     base = spec.run(ctx1, sessions, params)
     ctx2 = make_ctx("stress")
     stress = spec.run(ctx2, sessions, params)
-    ctx3 = make_ctx("plan") if with_plan else None
-    plan = spec.run(ctx3, sessions, params) if ctx3 is not None else None
+    extra = []
+    for name in extra_scenarios:
+        cx = make_ctx(name)
+        sim = spec.run(cx, sessions, params)
+        extra.append(
+            (scenario_desc(cx), sim, summarize(sim.trades, daily_pnl(sim.trades, sessions)))
+        )
     d1 = daily_pnl(base.trades, sessions)
     d2 = daily_pnl(stress.trades, sessions)
-    d3 = daily_pnl(plan.trades, sessions) if plan is not None else []
     cap = ctx1.capital_inr
     rets = [x / cap for x in d1]
     hc = ctx1.haircut
@@ -243,17 +258,12 @@ def run_candle_backtest(
         params_hash=h,
         n_trials=n_trials,
         capital_inr=cap,
-        haircut_desc=f"max(₹{hc.min_inr:g}, {hc.pct:g}% of price) per leg per side",
+        haircut_desc=f"{hc.describe()} per leg per side",
         stress_mult=ctx2.haircut.mult,
-        stress_desc=(f"{ctx2.haircut.mult:g}x haircut, charges x{ctx2.costs.charges_mult:g}"),
-        plan_desc=(
-            f"plan haircut max(₹{ctx3.haircut.min_inr:g}, {ctx3.haircut.pct:g}%)"
-            if ctx3 is not None
-            else ""
-        ),
-        plan=plan,
-        s3=summarize(plan.trades, d3) if plan is not None else None,
+        stress_desc=scenario_desc(ctx2),
+        extra=extra,
         label=label,
+        appendix=appendix,
         costs_desc=(f"config/rules as of {costs_on}, brokerage {ctx1.costs.broker}"),
         base=base,
         stress=stress,
@@ -270,6 +280,13 @@ def run_candle_backtest(
         notes=notes,
         generated=now,
     )
+
+
+def scenario_desc(ctx: Ctx) -> str:
+    d = ctx.haircut.describe()
+    if ctx.costs.charges_mult != 1:
+        d += f", charges x{ctx.costs.charges_mult:g}"
+    return d
 
 
 # ------------------------------------------------------------------------------- report
@@ -346,12 +363,13 @@ def render_variants(results: Sequence[RunResult]) -> str:
         "stop / (net take-profit + net stop) on each trade's own credit and charges (mean over "
         "trades); take-profit on margin uses the `margin_rules.yaml` table.",
         "",
-        "| Variant | Trades | Win rate | Break-even win rate | TP on margin | Net (1x) "
-        f"| Net ({r0.stress_desc}) | Net ({r0.plan_desc or 'plan haircut'}) | t | DSR |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Variant | Trades | Win rate | Break-even win rate | TP on margin "
+        f"| Net ({r0.haircut_desc.split(' per')[0]}) | Net ({r0.stress_desc}) | "
+        + "".join(f"Net ({d}) | " for d, _, _ in r0.extra)
+        + "t | DSR |",
+        "|---|---:|---:|---:|---:|---:|---:|" + "---:|" * len(r0.extra) + "---:|---:|",
     ]
     for r in results:
-        s3 = r.s3
         L.append(
             _row(
                 r.label or r.params_hash,
@@ -361,7 +379,7 @@ def render_variants(results: Sequence[RunResult]) -> str:
                 _pct(r.s1.tp_on_margin_pct, 2),
                 _inr(r.s1.net),
                 f"{_inr(r.s2.net)} ({r.s2.trades} trades)",
-                f"{_inr(s3.net)} ({s3.trades} trades)" if s3 is not None else "—",
+                *(f"{_inr(x.net)} ({x.trades} trades)" for _, _, x in r.extra),
                 f"{r.s1.t_stat:.2f}",
                 _pct(r.dsr.deflated_sharpe_pct, 1),
             )
@@ -370,20 +388,19 @@ def render_variants(results: Sequence[RunResult]) -> str:
     L.append(
         "A variant earns more than its costs only if its win rate is above its break-even win "
         "rate by a margin the sample can resolve; with t below about 3 none of these is proven. "
-        "The stress and plan columns re-run the whole rule, so their trade counts differ: a "
+        "The other columns re-run the whole rule, so their trade counts differ: a "
         "wider haircut fails the credit filter more often, and a handful of trades proves nothing."
     )
     L.append("")
+    if r0.appendix:
+        L += [r0.appendix, ""]
     return "\n".join(L)
 
 
 def render_report(res: RunResult, csv_name: str = "", max_trades: int = 40) -> str:
-    s1, s2, s3 = res.s1, res.s2, res.s3
-    head = [f"1x ({res.haircut_desc.split(' per')[0]})", res.stress_desc]
-    sums = [s1, s2]
-    if s3 is not None:
-        head.append(res.plan_desc)
-        sums.append(s3)
+    s1, s2 = res.s1, res.s2
+    head = [res.haircut_desc.split(" per")[0], res.stress_desc, *(d for d, _, _ in res.extra)]
+    sums = [s1, s2, *(x for _, _, x in res.extra)]
     L: list[str] = []
     title = f" ({res.label})" if res.label else ""
     L.append(f"# Candle backtest — {res.spec.title}{title}: {res.start} to {res.end}")
@@ -437,13 +454,15 @@ def render_report(res: RunResult, csv_name: str = "", max_trades: int = 40) -> s
     if s1.avg_margin:
         L.append(_row("Margin per trade (estimate)", *(_inr(s.avg_margin) for s in sums)))
     L.append("")
-    L.append(f"Live is assumed to be about half of the 1x net: {_inr(s1.net / 2)}. ")
+    L.append(f"Live is assumed to be about half of the base net: {_inr(s1.net / 2)}. ")
     L.append(
         "A new signal is treated as unproven unless t is about 3; "
-        f"here t = {s1.t_stat:.2f} (1x), {s2.t_stat:.2f} ({res.stress_desc})."
+        f"here t = {s1.t_stat:.2f} (base), {s2.t_stat:.2f} ({res.stress_desc})."
     )
     L.append("")
-    L.append("## Validation (1x haircut, daily returns on capital)")
+    if res.appendix:
+        L += ["## Measured spreads", "", res.appendix, ""]
+    L.append("## Validation (base scenario, daily returns on capital)")
     L.append("")
     wf = res.wf
     L.append(
@@ -473,7 +492,7 @@ def render_report(res: RunResult, csv_name: str = "", max_trades: int = 40) -> s
     for x in (*res.spec.deviations, *COMMON_DEVIATIONS):
         L.append(f"- {x}")
     L.append("")
-    L.append("## Signals not traded (sessions, 1x run)")
+    L.append("## Signals not traded (sessions, base scenario)")
     L.append("")
     sk: Counter[str] = res.base.skips
     if sk:
@@ -482,7 +501,7 @@ def render_report(res: RunResult, csv_name: str = "", max_trades: int = 40) -> s
     else:
         L.append("- none")
     L.append("")
-    L.append("## Exits (1x run)")
+    L.append("## Exits (base scenario)")
     L.append("")
     exits = Counter(t.reason_out.split(" (")[0] for t in res.base.trades)
     for why, n in exits.most_common():
@@ -502,7 +521,7 @@ def render_report(res: RunResult, csv_name: str = "", max_trades: int = 40) -> s
     for f, n in flags.most_common(8):
         L.append(f"- {f}: {n}")
     L.append("")
-    L.append("## Trades (1x)")
+    L.append("## Trades (base scenario)")
     L.append("")
     if csv_name:
         L.append(f"All trades: `{csv_name}`.")

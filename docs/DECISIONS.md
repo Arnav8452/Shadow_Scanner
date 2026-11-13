@@ -4,6 +4,45 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Candle backtest model 2: measured spreads, stops on the trade-price credit (14 Nov 2026)
+
+Main-session review of the first runs found two bugs; both fixed, and every rerun counts as a new trial (`MODEL_VERSION` 2 in the trial hash: condor 19 trials, Log-3 2).
+
+- **Haircut was 12–60× the real spread.**
+  - **Measured** from our recorder (12–13 Nov, nearest weekly, snapshots, 10:00–15:10), median / 90th percentile half-spread: ₹0.05 / 0.05 at ₹10–25, ₹0.05 / 0.075 at ₹25–50, ₹0.10 / 0.125 at ₹50–100, 0.11% / 0.13% at ₹100–200.
+  - **New default:** `max(₹0.10, 0.5%)` per side, about 2–3× the median and at or above the 90th percentile. Stress is 2× that plus doubled charges.
+  - **Also reported:** the owner's plan haircut `max(₹1, 0.75%)` and the old `max(₹1.50, 1.5%)` as an "extreme" column.
+  - **New options:** `SPREADS=p90|median` uses the measured buckets as the haircut; `QUOTES=` points at the recordings. Every report prints the table.
+- **Stops were measured against a haircut-shrunk credit.**
+  - The take-profit, 2× stop, 2.2× side stop, adjustments and weekend booking now compare the cost to close at last trades with the credit at trade prices. The P&L still uses the haircut fills.
+  - Log-3's −10% / +30% are set from the entry's trade price.
+- **New variant:** no condor entries on the last session before a closure (v1 had 44 Friday entries; 19 were booked the same afternoon).
+- **Net at the base haircut, before → after** (model 1 used the ₹1.50 haircut and the shrunk credit):
+
+| Variant | Before | After | After: wins vs break-even, t |
+|---|---:|---:|---|
+| Iron condor, live config (Δ0.16, stop 2×) | −₹1,54,073 | −₹46,217 | 42% vs 77%, −3.6 |
+| Iron condor, Δ0.16, stop 1.5× | −₹1,53,902 | −₹49,025 | 41% vs 65%, −3.8 |
+| Iron condor, Δ0.20, stop 2× | −₹1,65,012 | −₹63,787 | 45% vs 74%, −3.4 |
+| Iron condor, Δ0.20, stop 1.5× | −₹1,64,804 | −₹67,619 | 44% vs 61%, −3.6 |
+| Trend-side spread, Δ0.16, stop 2× | −₹46,724 | −₹23,345 | 70% vs 78%, −2.4 |
+| Trend-side spread, Δ0.16, stop 1.5× | −₹56,812 | −₹24,547 | 55% vs 67%, −3.7 |
+| Trend-side spread, Δ0.20, stop 2× | −₹85,314 | −₹28,678 | 69% vs 75%, −2.0 |
+| Trend-side spread, Δ0.20, stop 1.5× | −₹91,954 | −₹26,729 | 55% vs 62%, −2.9 |
+| Iron condor, no per-side stop | −₹1,20,467 | −₹26,166 | 61% vs 77%, −1.8 |
+| Iron condor, no entry before a closure | — | −₹32,112 | 42% vs 77%, −2.9 |
+| Log-3 momentum rule | −₹4,75,555 | −₹3,02,491 | 22% wins, −7.2; −₹1.26 lakh gross even with the haircut added back |
+
+- **Reading:**
+  - The fixes cut the condor losses by about two-thirds, but every variant still loses after charges. Each win rate is below its break-even win rate, and DSR ≤ 0.1%.
+  - The 2× stress run loses −₹60k to −₹1.23 lakh; the extreme haircut loses −₹48k to −₹1.63 lakh.
+  - The least-bad rules are the trend-side spreads and the condor without the per-side stop. Even there, t is −1.8 to −2.4: no evidence of an edge, only a smaller loss.
+  - Log-3 still loses heavily, so the rule's signal itself does not work.
+- **Open:**
+  - The measured spreads come from 2 sessions in Nov 2026 and are assumed for 2025.
+  - The ≥ ₹200 bucket is wide (median ₹1.80) because the snapshots include deep strikes.
+  - Reports: `reports/candle_backtest/*.md`; model 1 is kept as `*_model1.md`.
+
 ## Candle backtest runner: condor and Log-3 over Jan 2025 – Nov 2026 (14 Nov 2026)
 
 - **Built:**

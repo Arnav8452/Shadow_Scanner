@@ -257,9 +257,33 @@ def _ctc(ctx: Ctx, tr: CandleTrade, px: dict[str, float], kind: str | None = Non
     return tot
 
 
-def _booked_debit(tr: CandleTrade) -> float:
+def _tin(ctx: Ctx, lg: LegTrade) -> float:
+    """A leg's entry price for the exit rules: the trade price it filled from (the mid-like
+    reference, ``entry_ref``), or the haircut fill with ``trigger_on_haircut``. Exit rules read
+    last trades, so their credit must be at last trades too; P&L always uses the fills."""
+    return lg.entry_px if ctx.trigger_on_haircut else lg.entry_ref
+
+
+def _tout(ctx: Ctx, lg: LegTrade) -> float:
+    return lg.exit_px if ctx.trigger_on_haircut else lg.exit_ref
+
+
+def _rule_credit(
+    ctx: Ctx, tr: CandleTrade, kind: str | None = None, open_only: bool = False
+) -> float:
+    """Per-unit credit the exit rules compare against (all legs, or one side's open legs)."""
+    return sum(
+        (_tin(ctx, lg) if lg.side == "SELL" else -_tin(ctx, lg))
+        for lg in tr.legs
+        if (kind is None or lg.kind == kind) and (lg.open or not open_only)
+    )
+
+
+def _booked_debit(ctx: Ctx, tr: CandleTrade) -> float:
     """Per unit, what closing already-closed legs cost (as ``booked_debit`` live)."""
-    return sum((lg.exit_px if lg.side == "SELL" else -lg.exit_px) for lg in tr.legs if not lg.open)
+    return sum(
+        (_tout(ctx, lg) if lg.side == "SELL" else -_tout(ctx, lg)) for lg in tr.legs if not lg.open
+    )
 
 
 def _mtm(tr: CandleTrade, ctx: Ctx, px: dict[str, float]) -> float:
@@ -284,12 +308,14 @@ class CondorVariant:
     cfg: CondorConfig = field(default_factory=CondorConfig)
     structure: str = "IRON_CONDOR"  # or "TREND_SPREAD"
     trend_lookback_min: int = 30
+    skip_pre_closure: bool = False  # no entries on the last session before a market closure
     label: str = "live config"
 
 
 def condor_variants(cfg: CondorConfig) -> list[CondorVariant]:
     """Main session, 13 Nov 2026: short delta 0.16 / 0.20 x stop 2.0x / 1.5x credit x iron
-    condor / trend-side 2-leg spread (take-profit as configured). The live config first."""
+    condor / trend-side 2-leg spread (take-profit as configured), the live config first; then
+    the live config without the per-side stop, and without entries before a closure."""
     from dataclasses import replace
 
     out = []
@@ -307,6 +333,15 @@ def condor_variants(cfg: CondorConfig) -> list[CondorVariant]:
                         label=label + (" (live config)" if live else ""),
                     )
                 )
+    # Owner 14 Nov: the live config without the 2.2x per-side stop; main session 14 Nov: no
+    # entries on a Friday / pre-holiday session (v1 had 44 Friday entries, 19 booked that
+    # afternoon by the weekend rule).
+    out.append(
+        CondorVariant(replace(cfg, side_stop_mult=0.0), label="iron condor, no per-side stop")
+    )
+    out.append(
+        CondorVariant(cfg, skip_pre_closure=True, label="iron condor, no entry before a closure")
+    )
     return out
 
 
@@ -403,8 +438,8 @@ def _condor_exit(
     dec = bar.start + timedelta(minutes=1)
     if hhmm(dec) < cfg.first_candle_end:
         return None
-    ctc = _ctc(ctx, tr, px) + _booked_debit(tr)
-    cr = tr.credit_pts
+    ctc = _ctc(ctx, tr, px) + _booked_debit(ctx, tr)
+    cr = _rule_credit(ctx, tr)
     if cr > 0:
         if ctc <= cr * (1 - cfg.take_profit_pct / 100):
             return f"take profit ({cfg.take_profit_pct:g}% of credit)"
@@ -436,9 +471,7 @@ def _condor_exit(
         legs = [lg for lg in tr.legs if lg.kind == kind and lg.open]
         if len(legs) < 2:
             continue
-        side_cr = sum(lg.entry_px for lg in legs if lg.side == "SELL") - sum(
-            lg.entry_px for lg in legs if lg.side == "BUY"
-        )
+        side_cr = _rule_credit(ctx, tr, kind, open_only=True)
         stop_x = cfg.side_stop_mult  # 0 or less = no per-side stop (a backtest variant)
         if stop_x > 0 and side_cr > 0 and _ctc(ctx, tr, px, kind) >= side_cr * stop_x:
             return f"{name} side stop ({cfg.side_stop_mult:g}x its credit)"
@@ -462,9 +495,7 @@ def _untested_side(
         legs = [lg for lg in tr.legs if lg.kind == kind and lg.open]
         if len(legs) < 2:
             return None
-        cr = sum(lg.entry_px for lg in legs if lg.side == "SELL") - sum(
-            lg.entry_px for lg in legs if lg.side == "BUY"
-        )
+        cr = _rule_credit(ctx, tr, kind, open_only=True)
         sides[kind] = (cr, _ctc(ctx, tr, px, kind))
     for k, other in (("PE", "CE"), ("CE", "PE")):
         cr, ctc = sides[k]
@@ -549,6 +580,9 @@ def simulate_condor(
             ):
                 continue
             if dec.minute % max(1, ctx.eval_every_min):
+                continue
+            if var.skip_pre_closure and not _is_trading_day(ctx.calendar, d + timedelta(days=1)):
+                day_skip.add("last session before a market closure")
                 continue
             if exp is None or (exp - d).days < cfg.min_days_to_expiry:
                 day_skip.add("nearest expiry closer than min_days_to_expiry")
@@ -740,8 +774,11 @@ def simulate_log3(ctx: Ctx, sessions: Sequence[date], p: Log3Params) -> SimOut:
                         day_skip.add("premium too dear for the per-trade limit")
                         continue
                     stop_pct = fit
-                stop = round(leg.entry_px * (1 - stop_pct / 100), 2)
-                target = round(leg.entry_px * (1 + p.target_pct / 100), 2)
+                # Levels from the entry's trade price (last-trade triggers) or from the fill
+                # (``trigger_on_haircut``); either way the fill pays the haircut.
+                basis = leg.entry_px if ctx.trigger_on_haircut else leg.entry_ref
+                stop = round(basis * (1 - stop_pct / 100), 2)
+                target = round(basis * (1 + p.target_pct / 100), 2)
                 at, ref, px, why = _long_exit(ctx, m.series(c), leg, stop, target, p.square_off)
                 leg.exit_at, leg.exit_ref, leg.exit_px = at, ref, px
                 leg.charges += ctx.costs.order("SELL", px, qty, at.date())
@@ -846,9 +883,10 @@ STRATEGIES: dict[str, StrategySpec] = {
             "Oct 2024), not the EOD bhavcopy history the cockpit loads; >= 20 sessions needed.",
             "Entry checked every 5 minutes (live: every update); the plan's prices must be "
             "<= 5 min old and every leg must trade within 3 min of the decision.",
-            "Exit rules (take-profit, stops, adjustments, weekend booking) read last trades; "
-            "the live rules read the ask of shorts and the bid of wings. Every fill pays the "
-            "haircut.",
+            "Exit rules (take-profit, stops, adjustments, weekend booking) compare the cost to "
+            "close at last trades with the credit at trade prices; the live rules read the ask "
+            "of shorts and the bid of wings against the credit actually received. Every fill "
+            "pays the haircut.",
             "Margin is the 13 Nov 2026 broker-quote table, not the margin of the day.",
         ),
     ),
@@ -860,9 +898,9 @@ STRATEGIES: dict[str, StrategySpec] = {
         lambda _ck: Log3Params(),
         deviations=(
             "Nifty only (the live account also trades Sensex).",
-            "Stop and target trigger on the bar's low/high (last trades) and fill at the level "
-            "less the haircut, or at the open less the haircut when a bar opens beyond it; a bar "
-            "that touches both counts as the stop.",
+            "Stop and target are set from the entry's trade price, trigger on the bar's low/high "
+            "(last trades) and fill at the level less the haircut, or at the open less the "
+            "haircut when a bar opens beyond it; a bar that touches both counts as the stop.",
             "The 2.5% per-trade limit, 2% daily loss limit, 15-min cool-off after a loss and the "
             "5-trade day cap are applied; the weekly loss limit and loss-streak sizing are not.",
         ),
