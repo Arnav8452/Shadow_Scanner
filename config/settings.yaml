@@ -363,6 +363,31 @@ analytics:
     non_trading_day: 0.31   # each weekend/holiday day = 0.31; 2020-01 to 2026-11, top 1% trimmed
                             # (engine/analytics/variance_clock.py; 13 Nov 2026). 0, 0 = trading minutes only.
 
+candle_backtest:          # tasks.py candle-backtest (engine/backtest/candles): a CANDLE APPROXIMATION
+  haircut_min_inr: 1.5    # owner checklist 13 Nov 2026: each leg pays max(₹1.50, 1.5% of price)
+  haircut_pct: 1.5        #   per side, on the NEXT bar's open (never the decision bar's close)
+  stress_mult: 2.0        # every run is repeated at 2x the haircut (SPEC 8: 2x slippage)...
+  stress_charges_mult: 2.0  # ...with every order's charges doubled too (main session, 13 Nov)
+  plan_haircut_min_inr: 1.0 # also reported: the owner's plan haircut max(₹1, 0.75%) per side
+  plan_haircut_pct: 0.75
+  costs_on: run_date      # run_date (rules in force today: what the rule earns now) | trade_date
+  broker: upstox_plus     # brokerage row (owner 13 Nov: Upstox Plus, ₹30 an order)
+  fallback_broker: upstox # for trade_date runs before the Plus row starts (11 Nov 2026)
+  fill_within_min: 3      # an entry leg must trade within this many minutes of the decision
+  stale_entry_min: 5      # plan prices (strike pick, credit) no older than this
+  stale_mark_min: 15      # open-leg marks older than this are counted in the report
+  eval_every_min: 5       # condor entry checks every 5 minutes
+  trigger_on_haircut: false # exits decided on last trades; every fill pays the haircut (true also
+                            # marks the triggers with it: the 2.2x side stop then fires on the
+                            # spread model itself, 14 Nov 2026)
+  iv_history_from: "2024-10-01"  # closing ATM IVs from here feed the IV percentile (point in time)
+  iv_min_history: 20      # sessions before the percentile is used (as the cockpit)
+  window_days: 14         # option candles fetched for [expiry - 14 days, expiry]
+  cache_dir: data/candles # downloads, gitignored
+  trials_file: data/backtest/candle_trials.jsonl  # every parameter set run, for the deflated Sharpe
+  walk_forward: {train: 60, test: 20}             # sessions
+  monte_carlo: {paths: 1000, block: 5, ruin_pct: 20}
+
 backup:                   # nightly, end of `tasks.py evening` (owner delegated 13 Nov 2026)
   enabled: true
   target: "C:/QuantBackup"  # other partition of the same disk: guards deletion/corruption only.

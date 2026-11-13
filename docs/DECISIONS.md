@@ -4,6 +4,27 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Candle backtest runner: condor and Log-3 over Jan 2025 – Nov 2026 (14 Nov 2026)
+
+- **Built:**
+  - `engine/backtest/candles/` and `tasks.py candle-backtest STRAT= FROM= TO=`. Upstox 1-minute candles: index (v3) and expired Nifty options with OI. About 4,900 contracts over 112 expiries are cached in `data/candles/`.
+  - **Fills:** at the next bar's open, paying a haircut on every fill: `max(₹1.50, 1.5%)` per side. Each run is repeated with 2× the haircut plus doubled charges, and with the plan haircut `max(₹1, 0.75%)`.
+  - **Statistics:** walk-forward, block-bootstrap Monte Carlo and deflated Sharpe. The trials are counted in `data/backtest/candle_trials.jsonl`.
+  - **Refused:** score, breakthrough, spoof_fade and zone_rider (they read the order book); oi_ignition and oi_credit (futures CVD needs trade side from the bid/ask).
+  - **Allowed but not built:** expiry gamma (5.10), 0DTE gamma, compression, iron fly.
+- **Results (candle approximation, 463 sessions):**
+  - **Log-3 rule:** 1,077 trades, 19% wins, **−₹4.76 lakh net** (t −11.3). It loses ₹96k even with the haircut added back. The mined push is true at 29% of minutes and fires about 2.3 times a session, so on its own it does not pick entries.
+  - **Live-config condor:** 143 trades, 19% wins vs a 79% break-even win rate, **−₹1.54 lakh net**. It makes +₹7k gross with the haircut added back.
+  - **Exits:** the 2.2× per-side stop closes 92 of the 143.
+  - **Variants:** all 8 lose at 1× (−₹47k to −₹1.65 lakh), with DSR 0%. The trend-side spreads lose least, but their stress runs keep only 6 trades because the credit filter rejects almost every entry. Take-profit on margin is 0.6–1.1%.
+- **Decisions:**
+  - Costs use today's rule tables (STT 0.15%, ₹30 Upstox Plus).
+  - Runs start 1 Jan 2025 because holidays, T-bill rates and lot sizes are not loaded for 2024. Late-2024 candles only warm up the IV percentile.
+  - Exit rules read last trades and every fill pays the haircut. The first run marked the triggers with the haircut too, and the ₹1.50 floor on ₹5–15 sides fired the side stop on the spread model itself. Those reports are kept as `*_haircut_triggers.md`; the results were similar.
+- **Open (owner):**
+  - Neither rule shows an edge on candles. The condor's 2.2× side stop (13 Nov) is what the grid did not vary; testing without it is a new trial.
+  - Recorded bid/ask spreads should replace the ₹1.50 floor once there are enough sessions.
+  - The event filter and the order-flow veto are not modelled: there is no event history before Nov 2026, and no depth.
 ## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)
 
 - **BSE F&O bhavcopy** (`bse_fo` in `engine/data/eod/download.py`): BSE's derivatives file at `https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{yyyymmdd}_F_0000.CSV`, verified by download. Same UDiFF layout as NSE's. Downloaded nightly by `tasks.py eod`; 275 sessions backfilled (Oct 2025 → 13 Nov 2026, 18 holidays missing).
