@@ -146,6 +146,7 @@ def build_cockpit(
         broker_name=sc.cost_broker,
         session_open=session.open_dt,
         journal=journal_dir / "paper_condor.jsonl",
+        entry_block=event_block,
     )
     restored = spread.load_journal(day)
     if restored or spread.positions:
@@ -178,6 +179,7 @@ def build_cockpit(
         broker_name=sc.cost_broker,
         session_open=session.open_dt,
         journal=journal_dir / "paper_debit.jsonl",
+        entry_block=event_block,
     )
     debit.load_journal(day)
     core.debit_acct = debit
@@ -261,6 +263,7 @@ def make_plays(
             broker_name=broker,
             session_open=session.open_dt,
             journal=journal_dir / f"paper_{name}.jsonl",
+            entry_block=event_block,
         )
         a.load_journal(day)
         return a

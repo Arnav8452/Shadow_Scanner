@@ -4,6 +4,13 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## User guide; event windows on multi-leg accounts (13 Nov 2026)
+
+- **Built:** `docs/guide/`, 13 pages for a first-time user. It covers what the system is, setup, the daily routine, every Quant Cockpit element, how each signal is computed, every strategy, paper trading and the risk gate, testing a new strategy, data and nightly jobs, risk and config, troubleshooting, and a glossary. The top-level README links to it.
+- **Bug found while documenting:** the macro-event window blocked new entries only on the single-leg (long-option) accounts. The multi-leg playbook strategies and the debit-spread account never checked it. `SpreadAccount` now takes the same `entry_block` and refuses `open_spread` inside a window; every spread account gets it. A test covers it.
+- **Registry:** the 5.4 calendar row is now `paper` (`CalendarPlay`), no longer "decision function only".
+- **Open:** DECISIONS above (12 Nov) gives the settlement window as 15:00–15:30. `market_sessions.csv` has NSE's F&O closing-price window at 15:10–15:40 since 3 Aug 2026 (primary). The 14:30/14:45 expiry rules still stand, but their reasoning should be re-checked against the current window.
+
 ## Every strategy in the owner's notes, on paper (12 Nov 2026, late night)
 
 **Owner decisions, superseding parts of the entry below:**

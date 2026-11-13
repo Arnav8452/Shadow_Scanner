@@ -134,7 +134,7 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     compression_pct: 0.45
     vol_mult: 1.8
     stop_pct: 30
-  user_pins_max: 3
+  user_pins_max: 3               # contracts the page may add to the 50-key live feed
   readings_until: "15:15"         # no new readings/setups after this (normal days)
   readings_until_expiry_day: "14:45"  # ...or after this for an index expiring today
   reading_min_abs_delta: 0.15     # options outside 0.15-0.85 |delta| carry no reading
@@ -142,7 +142,7 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   reading_min_time_value_pct: 5   # options with < 5% time value are settlement-locked
   expiry_day_last_entry: "14:30"  # long options expiring today: no entries after this
   expiry_day_exit: "14:45"        # ...and closed at this time (breaking_retail.md: 14:45)
-  paper_max_lots: 2               # owner 12 Nov: paper strategies may use 2 lots within limits                # contracts the page may add to the 50-key live feed
+  paper_max_lots: 2               # owner 12 Nov: paper strategies may use 2 lots within limits
   manual_default_stop_pct: 25     # Track C ticket default; editable on the page
   key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
   journal_dir: data/state          # paper_bot.jsonl, paper_manual.jsonl

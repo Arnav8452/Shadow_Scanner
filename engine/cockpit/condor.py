@@ -174,6 +174,7 @@ class SpreadAccount:
         broker_name: str,
         session_open: datetime,
         journal: Path | None,
+        entry_block: Callable[[datetime], str | None] | None = None,
     ) -> None:
         self.name = name
         self.book = book
@@ -181,6 +182,8 @@ class SpreadAccount:
         self.broker_name = broker_name
         self.session_open = session_open
         self.journal = journal
+        # Extra entry rule outside the risk gate, e.g. a macro-event window (returns the reason).
+        self.entry_block = entry_block
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: list[SpreadPosition] = []
         self.closed: list[ClosedSpread] = []
@@ -308,6 +311,10 @@ class SpreadAccount:
             for lg in legs
         ]
         sequence_entry_legs(intents)
+        if self.entry_block is not None:
+            why = self.entry_block(now)
+            if why:
+                return self._refuse(structure, now, why)
         wings = [lg for lg in legs if lg.side == "BUY"]
         shorts = [lg for lg in legs if lg.side == "SELL"]
         for lg in legs:

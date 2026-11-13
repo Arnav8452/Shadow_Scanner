@@ -4,6 +4,8 @@ Personal Indian F&O research, paper-trading and (gated) live-trading engine. Per
 Design: [`docs/SPEC.md`](docs/SPEC.md). Standing rules: [`CLAUDE.md`](CLAUDE.md).
 Build log and open questions: [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
+**New here? Start with the user guide: [`docs/guide/`](docs/guide/README.md)** — setup, the daily routine, every Quant Cockpit element, every signal and strategy, paper trading, and how to test a new strategy.
+
 ## Setup (Windows / macOS / Linux)
 
 ```bash

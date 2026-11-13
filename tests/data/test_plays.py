@@ -493,6 +493,27 @@ def test_married_short_future_round_trip(repo_root: Path, tmp_path: Path) -> Non
     assert 0 < t.net_inr < t.gross_inr
 
 
+def test_spread_entries_blocked_in_an_event_window(repo_root: Path, tmp_path: Path) -> None:
+    """Multi-leg strategies obey the macro-event window like the long-option accounts do."""
+    from engine.cockpit.condor import Leg
+
+    acct = _spread(repo_root, tmp_path, "oi_credit")
+    acct.entry_block = lambda now: "event window: RBI_MPC"
+    call, fut = opt_symbol(WEEKLY, 25000, Kind.CALL), "NSE:NIFTY26NOVFUT"
+    legs = [Leg(call, "CE", 25000.0, "BUY", 65), Leg(fut, "FUT", 0.0, "SELL", 65)]
+    books = {call: bk(100.0, 100.5), fut: bk(25020.0, 25020.5, qty=20_000)}
+    ok, text = acct.open_spread(structure="MARRIED_SHORT_FUTURE", underlying="NIFTY", expiry=WEEKLY,
+                                legs=legs, width_pts=0.0, books=books, now=D.replace(hour=11),
+                                spot=25000.0, reason="test", max_loss_inr=8_000.0)
+    assert not ok and "event window" in text
+    assert not acct.positions and not acct.broker.order_history
+    acct.entry_block = lambda now: None
+    ok, text = acct.open_spread(structure="MARRIED_SHORT_FUTURE", underlying="NIFTY", expiry=WEEKLY,
+                                legs=legs, width_pts=0.0, books=books, now=D.replace(hour=11),
+                                spot=25000.0, reason="test", max_loss_inr=8_000.0)
+    assert ok, text
+
+
 def test_married_future_triggers_both_ways(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
     def run(spot: float, pdh: float, pdl: float, basis_up: bool) -> MarriedFuturePlay:
         p = MarriedFuturePlay("mf", "Married", "F2", _spread(repo_root, tmp_path / str(spot), "mf"))

@@ -59,9 +59,11 @@ REGISTRY: tuple[StrategyItem, ...] = (
         "Needs >= 30 recorded sessions of 09:14-09:35 depth before any test.",
     ),
     StrategyItem(
-        "5.4", "Calendar spread", "research",
-        "engine/strategies/optional_sleeves.py (evaluate_calendar_spread)",
-        "Decision function only.",
+        "5.4", "Calendar spread (term structure)", "paper",
+        "engine/cockpit/plays_spread.py (CalendarPlay, owner notes spec C)",
+        "Sell near ATM, buy next-monthly ATM when the term spread is rich (> 2.5 vol pts, z > 2). "
+        "Needs 10 sessions of term-spread history before its first trade.",
+        "data/state/paper_calendar.jsonl",
     ),
     StrategyItem(
         "5.5", "Pre-earnings straddle (heavyweights)", "not built",

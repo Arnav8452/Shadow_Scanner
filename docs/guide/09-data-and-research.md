@@ -1,0 +1,137 @@
+# 9. Data, research and the nightly jobs
+
+## 9.1 The recorder (P1)
+
+Code: `engine/data/recorder/`. Settings: `recorder:` in `config/settings.yaml`.
+
+**What it records, 08:50 until a few minutes after the close:**
+- **Nifty:** spot, the front future, and options for the current weekly, next weekly, current monthly and **next monthly** expiries.
+- **Sensex:** spot, the front future, and current-weekly options.
+- **Context:** India VIX and the 8 largest Nifty members (for breadth and correlation).
+- **Strike band:** at least **±25 strikes** around ATM (more when ±3σ of the expected move is wider), plus 2 buffer strikes. Re-centred every 60 s; strikes that were recorded stay recorded for the day.
+- **Priority:** nearer strikes and nearer expiries come first, within the Upstox cap of 2,000 keys. On 12 Nov 2026 the set was 567 contracts.
+- **Every message** for every contract 09:00–09:35 (the opening study); 5-level depth all day.
+- **A 1-minute snapshot** of every chain (bid, ask, LTP, OI, volume). The engine, the option chain page and most strategies read these.
+
+**At the close** it writes the QC report and compacts the day's files. The contract file is refreshed every 30 minutes for newly listed strikes.
+
+## 9.2 Data quality checks
+
+Code: `engine/data/quality/checks.py`. Every recording is checked, and the flags travel with the data:
+
+| Check | Fails when |
+|---|---|
+| Gaps | Any feed gap over 5 s in session |
+| Snapshots | A 1-minute chain snapshot is missing |
+| Coverage | Fewer than ±25 strikes around ATM |
+| OI | No open interest |
+| Stale | A quote unchanged for 120 s |
+| Crossed / zero bid | Bid ≥ ask, or no bid |
+| Clock skew | Receive time ahead of exchange time by more than 1 s |
+
+```bash
+uv run python tasks.py qc DATE=2026-11-12
+```
+
+```bash
+uv run python tasks.py qc LAST=5
+```
+
+Reports go to `reports/qc/<date>.md`, also shown in Cockpit → Research → **Recorder QC**.
+
+## 9.3 Storage
+
+Parquet files queried through DuckDB (`engine/data/store.py`). Every query takes an `as_of` so research never sees data that wasn't known at the time.
+
+| Path | Contents |
+|---|---|
+| `data/parquet/quotes/` | Recorded quotes and 5-level depth, by date |
+| `data/parquet/depth30/` | The engine's 30-level books, by date |
+| `data/parquet/recorder_events/` | Feed connects, disconnects, re-subscriptions, limits |
+| `data/parquet/eod/` | End-of-day tables, `iv_history.parquet` |
+| `data/parquet/fundamentals/` | Quarterly results and shareholding |
+| `data/raw/` | Downloaded exchange files and contract masters |
+
+Field definitions: [DATA_DICTIONARY.md](../DATA_DICTIONARY.md).
+
+## 9.4 End-of-day files (20:00)
+
+`tasks.py eod` downloads, for the day (default today, after ~19:30):
+
+| Dataset | Used for |
+|---|---|
+| F&O bhavcopy | Previous-session OI for ΔOI and the OI read; IV history; the screener |
+| Cash bhavcopy and delivery | Delivery spikes, swing, fundamentals watchlist |
+| Participant OI and volume | Research → Flows (FII/DII/Pro/Client) |
+| Index closes | Trend sleeve, context |
+| F&O ban list, bulk/block deals | Exist only on the day; saved when run without `DATE` |
+
+**Point in time:** a day's bhavcopy is known at about 19:30 that evening. Participant OI is next-day data. The code never uses either before it was published.
+
+Related commands:
+- `eod-backfill FROM= TO= [DATASETS=delivery,fo]`: history.
+- `iv-history`: rebuilds our ATM IV per day from closes (tier C: EOD closes, not intraday).
+- `screener-history`: per-session screener summaries.
+
+## 9.5 The evening job
+
+`tasks.py evening` (after `eod`):
+1. **Delivery files** for the last 21 sessions, then the **delivery-spike watchlist** for tomorrow (`data/state/delivery_watchlist/<date>.json`):
+   - only F&O stocks with liquid options; ban-list names are dropped;
+   - classified as *LONG_ACCUMULATION* (delivery ≥ 2× average on a ≥ 1% up day) or *RETAIL_CHURN_FADE* (a ≥ 5% spike on below-average delivery %);
+   - up to 5 of them join the engine's 30-level feed the next day. They decide what to **watch**, not what to trade.
+2. **Results dates** for Nifty members from NSE board-meeting notices into `config/events/macro_calendar.csv` (rows tagged `[auto:nse-board-meetings]`; hand-entered rows win).
+3. **Fundamentals** from XBRL filings (`data/parquet/fundamentals/`) for the watchlist and the 10 heavyweights: revenue, PAT, EBITDA margin with YoY, and promoter/FII/DII holdings.
+4. **Swing** paper run (see [06-strategies.md §6.4](06-strategies.md#64-nightly-paper-strategies-not-in-the-cockpits-intraday-panel)). Nights must run in order; the account refuses a date it has already processed.
+
+## 9.6 Reference data
+
+| File | Contents | Maintained |
+|---|---|---|
+| `config/reference/nifty50_constituents.csv` | Members with `effective_from`/`effective_to` (no survivorship) and weights | Weights derived nightly; `index-weights-verify` monthly against the NSE factsheet; members after each semi-annual rebalance |
+| `config/events/macro_calendar.csv` | RBI MPC, Budget, CPI, FOMC, results dates, each with source URL and status | Monthly; results dates automatic |
+| `config/event_arb/events.yaml` | Curated corporate events | By hand from exchange filings |
+| Instrument master (`data/raw/`) | Every contract, lot size, expiry, tick | Downloaded daily (bitemporal: what was known when) |
+
+## 9.7 Research tools
+
+- **Cockpit → Research** ([04-cockpit.md §4.5](04-cockpit.md#45-research-tab)): the signal study, condition tables, paper results, flows, swing, event arbitrage, QC.
+- **Delivery event study:** do delivery spikes predict 1/3/5-session returns net of costs?
+
+  ```bash
+  uv run python tasks.py delivery-study
+  ```
+
+  The report goes to `reports/research/`. `delivery_watch.bias_in_score` stays false unless a setting passes (deflated Sharpe ≥ 90%, |t| ≥ 3) and the owner approves.
+- **Trade-log mining:** parse a reference trader's trade-history PDF to reverse-engineer their style (entry times, holds, MFE/MAE):
+
+  ```bash
+  uv run --extra mining python tasks.py mine-log FILE=data/private/log1.pdf LABEL=log1
+  ```
+
+  The PDF must live in `data/private/` (gitignored). Names and account IDs are stripped on import. Never put values from these logs into fixtures, outputs or commits.
+- **Self-review** of your own journal (behaviour: revenge trades, size after losses, time-of-day):
+
+  ```bash
+  uv run python tasks.py self-review FILE=<journal>
+  ```
+
+- **Backtest library** (`engine/backtest/`): costs, event replay, walk-forward, block-bootstrap Monte Carlo, probabilistic and deflated Sharpe. See [08-new-strategies.md](08-new-strategies.md#87-step-6--paper-sessions-and-the-verdict).
+- **Analytics library** (`engine/analytics/`): forward, IV, greeks, SVI surface, risk-neutral density, GEX/vanna/charm, realized vol, VRP, OI positioning, microstructure and order-flow mechanics.
+
+## 9.8 Event arbitrage
+
+Code: `engine/sidecars/event_arb/`. Information only; it never trades, tenders or applies.
+
+- **Screens** NSE announcements nightly at 23:30 for tender buybacks, open offers, rights issues and entitlements, and OFS. Each curated event gets a verdict (GREEN / AMBER / RED), the last buy day, a share count within the ₹2 lakh small-shareholder test (₹1.5 lakh buffer), a cushion at **pessimistic** acceptance, and flags.
+- **Curate** relevant candidates into `config/event_arb/events.yaml`, with terms from the exchange filing. Write `UNKNOWN` where a value isn't published; list secondary-sourced fields under `unverified_fields`.
+- **Before acting**, follow the manual checklist in [RUNBOOK.md](../RUNBOOK.md#event-arbitrage--manual-checklist-addendum-a5). It covers clubbed holdings across demat accounts, unpledging and the tender window.
+
+## 9.9 Alerts
+
+With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, the system sends:
+- the recorder's QC verdict;
+- A+ scanner alerts (labelled HYPOTHESIS, at most 10 a day, one per episode, 15-minute cool-down);
+- the event-arbitrage digest.
+
+Without them, alerts only print to the logs.
