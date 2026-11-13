@@ -244,6 +244,17 @@ class Market:
 # ------------------------------------------------------------------------------ long plays
 
 
+def last_bar_new(mg: Any, ot: Any) -> bool:
+    """True once per completed 1-minute bar (the 9-EMA exit judges closes, not ticks)."""
+    if len(ot.closes) < 2:
+        return False
+    stamp = ot.closes[-2][0]
+    if getattr(mg, "last_bar", None) == stamp:
+        return False
+    mg.last_bar = stamp
+    return True
+
+
 @dataclass
 class Managed:
     sym: str
@@ -259,6 +270,7 @@ class Managed:
     delta_exit: float | None = None
     spot_stop: float | None = None  # exit when the index crosses this (direction-aware)
     bullish: bool = True
+    last_bar: Any = None
 
 
 @dataclass
@@ -282,6 +294,7 @@ class LongPlay(Status):
     # Short-hold strategies: positions found open after a restart are put back under the
     # charges ratchet (initial stop, breakeven lock, 180-s scratch) and the candle rule.
     scalp: bool = False
+    gate2_mode: str = "volatility"  # cockpit.gate2_mode: "volatility" or "charges"
     awaiting: dict[str, dict[str, Any]] = field(default_factory=dict)  # orders not yet filled
 
     def _new_day(self, now: datetime) -> None:
@@ -311,8 +324,9 @@ class LongPlay(Status):
             mg = Managed(sym, und, pos.opened_at, pos.avg_price, true_be, be_pts, bullish=bullish)
             if self.scalp:
                 mg.ratchet = BreakevenRatchet.start(
-                    pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at
-                )
+                    pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at,
+                    mode=self.gate2_mode, atr=m.otape(sym).atr(),
+                )  # fmt: skip
                 mg.candle_stop_min = 15
                 pos.stop_price = max(pos.stop_price, mg.ratchet.stop)
             self.managed[sym] = mg
@@ -386,10 +400,14 @@ class LongPlay(Status):
         if stop_inr is not None and entry > 0:  # rupee risk per unit -> % of premium
             stop_pct = max(1.0, min(90.0, stop_inr / entry * 100))
         if ratchet and entry > 0:
-            # Owner protocol, initial risk window: -12% of premium or Rs 1,200 on the position,
-            # whichever is tighter, booked at entry so the risk gate sees the real planned loss.
-            rule = min(12.0, 1200.0 / max(qty, 1) / entry * 100)
-            stop_pct = max(1.0, min(stop_pct, rule))
+            # Gate 2, initial risk window: -12% of premium or Rs 1,200 on the position (and in
+            # volatility mode within 2 x the option's 1-minute ATR, never tighter than its
+            # charges breakeven), booked at entry so the risk gate sees the real planned loss.
+            dist = min(entry * 0.12, 1200.0 / max(qty, 1))
+            atr = m.otape(sym).atr() if self.gate2_mode == "volatility" else None
+            if atr:
+                dist = max(min(dist, 2.0 * atr), m.breakeven(entry, qty)[1])
+            stop_pct = max(1.0, min(stop_pct, dist / entry * 100))
         ok, text = self.account.open_long_option(
             sym,
             b,
@@ -446,8 +464,9 @@ class LongPlay(Status):
         )
         if spec["ratchet"]:
             mg.ratchet = BreakevenRatchet.start(
-                pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at
-            )
+                pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at,
+                mode=self.gate2_mode, atr=m.otape(sym).atr(),
+            )  # fmt: skip
             pos.stop_price = max(pos.stop_price, mg.ratchet.stop)
         self.managed[sym] = mg
 
@@ -465,8 +484,17 @@ class LongPlay(Status):
             why = None
             held_min = (now - mg.opened).total_seconds() / 60
             if mg.ratchet is not None:
-                why = mg.ratchet.on_bid(bid, now)
+                ot = m.otape(sym)
+                why = mg.ratchet.on_bid(bid, now, atr=ot.atr())
                 pos.stop_price = max(pos.stop_price, mg.ratchet.stop)
+                if (
+                    why is None
+                    and mg.ratchet.mode == "volatility"
+                    and mg.ratchet.state == "BREAKEVEN_LOCKED"
+                ):
+                    e, last = ot.ema(9), ot.last_close()
+                    if e and last is not None and last < e and last_bar_new(mg, ot):
+                        why = f"runner: 1-min close {last:.2f} under the 9-EMA {e:.2f}"
             if why is None and mg.time_stop and held_min >= mg.time_stop[0]:
                 if bid < mg.entry * (1 + mg.time_stop[1] / 100):
                     why = f"time stop: not +{mg.time_stop[1]:g}% in {mg.time_stop[0]:g} min"

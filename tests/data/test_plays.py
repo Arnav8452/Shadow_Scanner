@@ -111,11 +111,11 @@ def test_breakeven_impulse_and_ratchet(repo_root: Path) -> None:
     assert expected_impulse(10.0, 0.5, 0.001) == pytest.approx(10 * 3**0.5 * 0.5 + 0.5 * 0.001 * 300, rel=1e-6)
     assert impulse_ok(10.0, 0.5, 0.001, pts, 3.5)[0] is (expected_impulse(10.0, 0.5, 0.001) >= 3.5 * pts)
     assert impulse_ok(None, 0.5, 0.001, pts, 3.5) == (False, 0.0)
-    r = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    r = BreakevenRatchet.start(150.0, 65, be, pts, D, mode="charges")
     assert r.stop == pytest.approx(150 - min(18.0, 1200 / 65), abs=0.01)
     assert r.on_bid(150 + 2 * pts + 0.05, D + timedelta(seconds=10)) is None
     assert r.state == "BREAKEVEN_LOCKED" and r.stop == be
-    r2 = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    r2 = BreakevenRatchet.start(150.0, 65, be, pts, D, mode="charges")
     assert "scratch" in str(r2.on_bid(150.5, D + timedelta(seconds=181)))
 
 
@@ -641,7 +641,7 @@ def test_protocol_breakeven_matches_the_owner_formula_on_a_20_rupee_plan(repo_ro
 def test_ratchet_locks_at_2x_and_trails_only_beyond_3x(repo_root: Path) -> None:
     book = RuleBook.load(repo_root / "config" / "rules")
     be, pts = breakeven(book, "upstox", date(2026, 11, 11), 150.0, 65)
-    r = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    r = BreakevenRatchet.start(150.0, 65, be, pts, D, mode="charges")
     r.on_bid(150 + 2.6 * pts, D + timedelta(seconds=20))  # past 2x: locked at breakeven
     assert r.state == "BREAKEVEN_LOCKED" and r.stop == be
     r.on_bid(150 + 2.9 * pts, D + timedelta(seconds=30))  # under 3x: no trail yet
@@ -711,3 +711,35 @@ def test_spread_margin_is_quoted_in_the_background_and_journaled(repo_root: Path
     assert again.positions[0].margin["final"] == 42985.0
     # Simulated keys never reach the network.
     assert "error" in fetch_margin([("NSE:NIFTY26111725000PE", 65, "SELL")])
+
+
+def test_volatility_gate2_gives_room_then_locks_then_trails_on_atr(repo_root: Path) -> None:
+    """13 Nov gate-2 notes: stop within 12% / Rs 1,200 / 2 ATR (not under B), half risk at 2B,
+    breakeven at max(3.5B, 1.2 ATR), then 1.5 ATR behind the best bid."""
+    book = RuleBook.load(repo_root / "config" / "rules")
+    be, b = breakeven(book, "upstox_plus", date(2026, 11, 13), 150.0, 65)
+    atr = 4.0
+    r = BreakevenRatchet.start(150.0, 65, be, b, D, atr=atr)
+    assert r.stop == pytest.approx(150 - max(min(18.0, 1200 / 65, 2 * atr), b), abs=0.01)
+    dist = 150 - r.stop
+    r.on_bid(150 + 2.1 * b, D + timedelta(seconds=20))  # 2B: half the risk, not breakeven
+    assert r.state == "HALF_RISK" and r.stop == pytest.approx(150 - dist / 2, abs=0.01)
+    assert r.on_bid(150 + 1.0 * b, D + timedelta(seconds=30)) is None  # a pullback survives
+    r.on_bid(150 + max(3.5 * b, 1.2 * atr) + 0.1, D + timedelta(seconds=40))
+    assert r.state == "BREAKEVEN_LOCKED" and r.stop >= be
+    r.on_bid(170.0, D + timedelta(seconds=60))  # runner: trail 1.5 ATR behind the peak
+    assert r.stop == pytest.approx(170.0 - 1.5 * atr, abs=0.01)
+    assert "stop" in str(r.on_bid(170.0 - 1.5 * atr - 0.05, D + timedelta(seconds=70)))
+    r2 = BreakevenRatchet.start(150.0, 65, be, b, D, atr=atr)
+    r2.on_bid(150 + 2.1 * b, D + timedelta(seconds=20))  # half risk, but still under BE at 3 min
+    assert "scratch" in str(r2.on_bid(be - 0.5, D + timedelta(seconds=181)))
+
+
+def test_option_tape_atr_from_one_minute_ranges() -> None:
+    ot = OptionTape()
+    for i in range(12):
+        t0 = D + timedelta(minutes=i)
+        for k, px in enumerate((100.0, 102.0, 98.0, 100.0 + i * 0.1)):
+            ot.on_sample(t0 + timedelta(seconds=5 + 10 * k), px, 0)
+    a = ot.atr()
+    assert a is not None and 3.5 < a < 4.5  # ~4-pt bars

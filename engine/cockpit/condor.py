@@ -81,6 +81,12 @@ class CondorConfig:
     # ...and close the whole condor if either side's cost to close reaches this x that side's
     # credit (a combined stop lets the winning side hide the tested one).
     side_stop_mult: float = 2.2
+    # SPEC 5.1 adjustments: book the untested side once it has decayed this much while the
+    # other side is tested (costs at least its credit to close); at most one adjustment.
+    untested_decay_pct: float = 85.0
+    # SPEC 5.1 gap rule: no stop exits in the first 15-minute candle (a gap through a short
+    # strike is judged after it); the time exit still applies.
+    first_candle_end: str = "09:30"
 
 
 # ---------------------------------------------------------------------------- positions
@@ -151,6 +157,32 @@ class ClosedSpread:
     margin: dict[str, Any] = field(default_factory=dict)
 
 
+def booked_debit(pos: SpreadPosition) -> float:
+    """Per unit, what closed legs cost to close (shorts bought back minus wings sold)."""
+    return sum(lg.exit_px for lg in pos.legs if not lg.open and lg.side == "SELL") - sum(
+        lg.exit_px for lg in pos.legs if not lg.open and lg.side == "BUY"
+    )
+
+
+def _side_state(
+    pos: SpreadPosition, kind: str, books: Mapping[str, Book]
+) -> tuple[float, float] | None:
+    """(credit, cost to close now) of one open side of a structure, per unit."""
+    legs = [lg for lg in pos.legs if lg.kind == kind and lg.open]
+    sh = [lg for lg in legs if lg.side == "SELL"]
+    wg = [lg for lg in legs if lg.side == "BUY"]
+    if not sh or not wg:
+        return None
+    bs, bw = [books.get(lg.symbol) for lg in sh], [books.get(lg.symbol) for lg in wg]
+    if any(b is None or not b.asks for b in bs) or any(b is None or not b.bids for b in bw):
+        return None
+    credit = sum(lg.entry_px for lg in sh) - sum(lg.entry_px for lg in wg)
+    ctc = sum(b.asks[0][0] for b in bs if b is not None) - sum(
+        b.bids[0][0] for b in bw if b is not None
+    )
+    return credit, ctc
+
+
 def cost_to_close(pos: SpreadPosition, books: Mapping[str, Book]) -> float | None:
     """Per unit, at the touch: buy the open shorts at the ask, sell the open wings at the bid."""
     total = 0.0
@@ -202,6 +234,7 @@ class SpreadAccount:
         self.leg_gap_s = 0.0
         self.executions: list[dict[str, Any]] = []
         self.open_net = 0.0  # open structures' net at the cost to close, refreshed every step
+        self.liquidity: Any = None  # shared LiquidityMonitor, set by the cockpit
         # Credit structures: the take-profit must be worth this many round-trips of charges
         # (0 = off). Set from cockpit.credit_charges_mult.
         self.charges_mult = 0.0
@@ -424,6 +457,11 @@ class SpreadAccount:
                 return self._refuse(
                     structure, now, f"no two-sided book for {lg.strike:g} {lg.kind}"
                 )
+        if self.liquidity is not None:
+            for lg in legs:
+                vac = self.liquidity.vacuum(lg.symbol, books[lg.symbol])
+                if vac:
+                    return self._refuse(structure, now, f"{lg.strike:g} {lg.kind}: {vac}")
         est_credit = sum(books[s.symbol].bids[0][0] for s in shorts) - sum(
             books[w.symbol].asks[0][0] for w in wings
         )
@@ -532,6 +570,11 @@ class SpreadAccount:
         underlying, expiry, spot = ex["underlying"], ex["expiry"], ex["spot"]
         reason, context = ex["reason"], ex["context"]
         credit = sum(s.entry_px for s in shorts) - sum(w.entry_px for w in wings)
+        sold = sum(s.entry_px for s in shorts)
+        if sold > 0 and wings:
+            # SPEC 5.1: wing cost as % of the premium sold (far wings are often overpriced).
+            context = {**dict(context or {}), "wing_cost_pct": round(
+                sum(w.entry_px for w in wings) / sold * 100, 1)}  # fmt: skip
         self._seq += 1
         pos = SpreadPosition(
             id=f"{structure}-{now.astimezone(IST):%Y%m%d-%H%M%S}",
@@ -623,6 +666,33 @@ class SpreadAccount:
             f"credit {pos.credit_pts:.2f}, paid {debit:.2f}, net ₹{trade.net_inr:,.0f}"
         )
 
+    def close_side(
+        self, pos: SpreadPosition, kind: str, books: Mapping[str, Book], now: datetime, reason: str
+    ) -> tuple[bool, str]:
+        """Close one side (CE or PE legs) of a structure, short first; the rest stays open.
+        The booked legs keep their exit prices, so the final close totals every leg."""
+        legs = sorted(
+            (lg for lg in pos.legs if lg.open and lg.kind == kind), key=lambda x: x.side != "SELL"
+        )
+        if not legs:
+            return False, "nothing open on that side"
+        for lg in legs:
+            b = books.get(lg.symbol)
+            if b is None:
+                return False, f"no book for {lg.strike:g} {lg.kind}"
+            back = "BUY" if lg.side == "SELL" else "SELL"
+            q, px, ch, why = self._fill(lg.symbol, back, lg.qty, b, now, exit_=True, kind=lg.kind)
+            if q < lg.qty:
+                return False, f"{lg.strike:g} {lg.kind} exit not filled ({why})"
+            lg.open, lg.exit_px, lg.exit_charges = False, round(px, 4), ch
+        pos.context = {**pos.context, "adjustments": int(pos.context.get("adjustments", 0)) + 1}
+        self._write({"type": "adjust", "t": now.isoformat(), "id": pos.id, "reason": reason,
+                     "legs": [asdict(lg) for lg in pos.legs], "context": pos.context})  # fmt: skip
+        paid = sum(lg.exit_px for lg in legs if lg.side == "SELL") - sum(
+            lg.exit_px for lg in legs if lg.side == "BUY"
+        )
+        return True, f"booked the {kind} side of {_strikes(pos)} ({reason}): paid {paid:.2f}"
+
     # ------------------------------------------------------------------ journal
 
     def _refuse(self, what: str, now: datetime, why: str) -> tuple[bool, str]:
@@ -696,6 +766,9 @@ class SpreadAccount:
                 continue
             if kind == "open":
                 opens[rec["id"]] = rec
+            elif kind == "adjust" and rec.get("id") in opens:
+                opens[rec["id"]] = {**opens[rec["id"]], "legs": rec["legs"],
+                                    "context": rec.get("context") or {}}  # fmt: skip
             elif kind == "close":
                 opens.pop(rec["id"], None)
             if t.date() != day:
@@ -777,6 +850,9 @@ class SpreadAccount:
                     "reason": p.reason,
                     "legs": legs,
                     "margin": p.margin,
+                    "context": {
+                        k: p.context[k] for k in ("wing_cost_pct", "adjustments") if k in p.context
+                    },
                 }
             )
         return {
@@ -1231,6 +1307,12 @@ class CondorStrategy:
     ) -> list[str]:
         out: list[str] = []
         for pos in list(self.account.positions):
+            side = self.untested_side(pos, now, books)
+            if side is not None:
+                ok, text = self.account.close_side(pos, side[0], books, now, side[1])
+                out.append(text)
+                if ok:
+                    self.pin(self.legs_in_use())
             why = self.exit_reason(pos, now, books, spot, trend)
             if why is None:
                 continue
@@ -1239,6 +1321,29 @@ class CondorStrategy:
             if ok:
                 self.pin(self.legs_in_use())
         return out
+
+    def untested_side(
+        self, pos: SpreadPosition, now: datetime, books: Mapping[str, Book]
+    ) -> tuple[str, str] | None:
+        """SPEC 5.1 adjustment: (side to book, reason) when one side of an iron condor has
+        decayed ``untested_decay_pct`` while the other costs at least its credit to close."""
+        c = self.cfg
+        if pos.structure != "IRON_CONDOR" or int(pos.context.get("adjustments", 0)) >= 1:
+            return None
+        if now.astimezone(IST).strftime("%H:%M") < c.first_candle_end:
+            return None
+        sides = {k: _side_state(pos, k, books) for k in ("PE", "CE")}
+        if any(v is None for v in sides.values()):
+            return None
+        for k, other in (("PE", "CE"), ("CE", "PE")):
+            cr, ctc = sides[k]  # type: ignore[misc]
+            ocr, octc = sides[other]  # type: ignore[misc]
+            if cr > 0 and ctc <= cr * (1 - c.untested_decay_pct / 100) and octc >= ocr:
+                return k, (
+                    f"untested {'put' if k == 'PE' else 'call'} side decayed "
+                    f"{(1 - ctc / cr) * 100:.0f}% while the other side is tested"
+                )
+        return None
 
     def exit_reason(
         self,
@@ -1255,7 +1360,11 @@ class CondorStrategy:
             local.date() == exit_day and local.strftime("%H:%M") >= c.exit_time
         ):
             return f"time exit before expiry ({exit_day:%d %b} {c.exit_time})"
+        if local.strftime("%H:%M") < c.first_candle_end:
+            return None  # SPEC 5.1: a gap is judged after the first 15-minute candle
         ctc = cost_to_close(pos, books)
+        if ctc is not None:
+            ctc += booked_debit(pos)  # a side already booked counts at what it cost
         if ctc is not None and pos.credit_pts > 0:
             if ctc <= pos.credit_pts * (1 - c.take_profit_pct / 100.0):
                 return f"take profit ({c.take_profit_pct:.0f}% of credit)"

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
@@ -57,6 +58,68 @@ class PaperPosition:
     context: dict[str, Any] = field(default_factory=dict)  # market state at entry
     # When the bid first sat at/below the stop while the model price disagreed (air pocket?).
     stop_held_since: datetime | None = None
+    vacuum_since: datetime | None = None  # when a stop first met a liquidity vacuum
+
+
+class LiquidityMonitor:
+    """SPEC 7 liquidity-vacuum guard. Every contract's spread (% of mid) and top-5 depth are
+    sampled each step for ``window_s``; a book whose spread is ``spread_mult`` x its recent
+    median (and over ``min_spread_pct``), or whose depth fell under ``depth_frac`` of it, is in
+    a vacuum: market makers pulled quotes (news, a spike). Entries wait; stop exits wait a few
+    seconds instead of chasing, unless a hard risk limit is hit."""
+
+    def __init__(
+        self,
+        *,
+        window_s: float = 60.0,
+        spread_mult: float = 2.0,
+        depth_frac: float = 0.4,
+        min_spread_pct: float = 1.0,
+        min_samples: int = 20,
+    ) -> None:
+        self.window_s, self.spread_mult, self.depth_frac = window_s, spread_mult, depth_frac
+        self.min_spread_pct, self.min_samples = min_spread_pct, min_samples
+        self._hist: dict[str, deque[tuple[float, float, float]]] = {}
+        self._last: dict[str, float] = {}
+
+    @staticmethod
+    def _measure(book: Book) -> tuple[float, float] | None:
+        if not book.bids or not book.asks:
+            return None
+        b, a = book.bids[0][0], book.asks[0][0]
+        mid = (a + b) / 2
+        if mid <= 0 or a < b:
+            return None
+        depth = sum(q for _, q, *_ in book.bids[:5]) + sum(q for _, q, *_ in book.asks[:5])
+        return (a - b) / mid * 100, float(depth)
+
+    def observe(self, books: Mapping[str, Book], now: datetime) -> None:
+        ts = now.timestamp()
+        for sym, book in books.items():
+            if ts - self._last.get(sym, 0.0) < 0.5:
+                continue
+            m = self._measure(book)
+            if m is None:
+                continue
+            self._last[sym] = ts
+            h = self._hist.setdefault(sym, deque())
+            h.append((ts, m[0], m[1]))
+            while h and ts - h[0][0] > self.window_s:
+                h.popleft()
+
+    def vacuum(self, sym: str, book: Book) -> str | None:
+        h = self._hist.get(sym)
+        m = self._measure(book)
+        if not h or len(h) < self.min_samples or m is None:
+            return None
+        spreads = sorted(x[1] for x in h)
+        depths = sorted(x[2] for x in h)
+        ms, md = spreads[len(spreads) // 2], depths[len(depths) // 2]
+        if m[0] > max(self.min_spread_pct, self.spread_mult * ms):
+            return f"liquidity vacuum: spread {m[0]:.1f}% vs {ms:.1f}% median of the last minute"
+        if md > 0 and m[1] < self.depth_frac * md:
+            return f"liquidity vacuum: top-5 depth {m[1]:,.0f} vs {md:,.0f} median"
+        return None
 
 
 @dataclass(frozen=True)
@@ -125,6 +188,8 @@ class PaperAccount:
         # latency to the exchange); 0 = the decision's own book (tests, research).
         self.fill_latency_s = 0.0
         self.pending: dict[str, dict[str, Any]] = {}
+        self.liquidity: LiquidityMonitor | None = None  # shared, set by the cockpit
+        self.vacuum_wait_s = 3.0  # a stop exit waits this long for quotes to come back
         # Net P&L of open positions at the bid (after entry charges), refreshed every step:
         # an open loss counts toward the daily and weekly loss limits like a realized one.
         self.open_net = 0.0
@@ -197,6 +262,10 @@ class PaperAccount:
             why = self.entry_block(now)
             if why:
                 return self._refuse(symbol, now, why, signal_id)
+        if self.liquidity is not None:
+            vac = self.liquidity.vacuum(symbol, book)
+            if vac:
+                return self._refuse(symbol, now, vac, signal_id)
         if self._expires_today(symbol, now) and (
             now.astimezone(IST).strftime("%H:%M") >= self.expiry_day_last_entry
         ):
@@ -417,6 +486,13 @@ class PaperAccount:
                 ok, text = self.close(symbol, book, now=now, reason="target on premium")
             elif bid <= pos.stop_price:
                 why = "trailing stop" if pos.stop_price > pos.avg_price else "stop on premium"
+                vac = self.liquidity.vacuum(symbol, book) if self.liquidity is not None else None
+                if vac and not self._hard_limit(pos, bid):
+                    # SPEC 7: no chasing into an empty book; give quotes a few seconds back.
+                    pos.vacuum_since = pos.vacuum_since or now
+                    if (now - pos.vacuum_since).total_seconds() < self.vacuum_wait_s:
+                        continue
+                    why += f" (after waiting {self.vacuum_wait_s:g} s in a {vac})"
                 if self.stop_confirm is not None and not self.stop_confirm(
                     symbol, bid, pos.stop_price
                 ):
@@ -430,6 +506,14 @@ class PaperAccount:
                 continue
             out.append(text if ok else f"{symbol}: {text}")
         return out
+
+    def _hard_limit(self, pos: PaperPosition, bid: float) -> bool:
+        """Past 1.5x the stop distance or at the per-trade loss limit: exit regardless."""
+        dist = pos.avg_price - pos.stop_price
+        if dist > 0 and pos.avg_price - bid >= self.stop_override_mult * dist:
+            return True
+        cap = self.limits.inr(self.limits.per_trade_max_loss_pct.get("directional", 0.0))
+        return cap > 0 and (pos.avg_price - bid) * pos.qty >= cap
 
     def _stop_override(self, pos: PaperPosition, bid: float, now: datetime) -> str | None:
         """Why a model-price hold must give way now (None: keep holding for a moment)."""

@@ -4,6 +4,23 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Gate-2 notes vs our review: best of both built (13 Nov 2026, afternoon)
+
+Compared the owner's `new/gate2_volatility_and_spec_audit.md` with today's review and with the code and SPEC:
+
+| Suggestion | Verdict | Done |
+|---|---|---|
+| Volatility-aware Gate 2 (2 ATR stop, half risk at 2B, lock at max(3.5B, 1.2 ATR), ATR/9-EMA runner) | Right: the 2B lock / 1.5B trail sat inside 1-min noise | Built as `gate2_mode: volatility` (default), with our 180-s scratch and a floor of B on the stop; the old ratchet is the `charges` variant |
+| `(restored)` scratch bug, 20% stop | Already fixed this morning | — |
+| Upstox `currentTs` for latency | Already used (adapter takes `currentTs`, ms) | — |
+| QC clock-skew threshold too tight | Wrong: QC uses the median, warns under −1 s; our clock is 1.3 s slow, so the warning is correct | — |
+| Local NSE SPAN | Superseded: live Upstox margin quotes (SPAN + exposure + hedge benefit) plus a table | — |
+| Condor adjustments, wing cost (SPEC 5.1) | Right | Untested side booked at 85% decay while the other is tested (1 adjustment); first-candle gap rule; wing cost % recorded |
+| Liquidity-vacuum guard (SPEC 7) | Right | Spread/depth vs the last minute; entries wait, stops wait up to 3 s unless a hard limit |
+| Variance-time clock (SPEC 4) | Right that SPEC asks for it | Not yet: calibrate overnight/weekend weights from Upstox daily candles (since 2000) before switching, as it moves every IV |
+| Log-3 entry features (SPEC 5.2) | Right: 5.2 runs on our trigger, not the log's | Not yet: needs the private log and 1-min candles at its entries (Upstox has them since 2022) |
+| "Five things first": vol sizing (5.7), gap stress (6) | Right, not built | Next |
+
 ## Owner-approved fixes 1–4, slimmer header, history backfill, the paper-trade audit (13 Nov 2026, afternoon)
 
 - **Applied (owner):**

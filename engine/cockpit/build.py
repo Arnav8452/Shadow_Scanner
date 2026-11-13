@@ -212,6 +212,10 @@ def build_cockpit(
     for p in core.plays:
         if hasattr(p, "expiry_exit"):
             p.expiry_exit = ccfg.spread_expiry_exit
+        if hasattr(p, "gate2_mode"):
+            p.gate2_mode = ccfg.gate2_mode
+    for acct in [*spread_accts, *core.long_accounts()]:
+        acct.liquidity = core.liquidity
     for acct in spread_accts:
         acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
         acct.leg_gap_s = ccfg.paper_leg_gap_ms / 1000

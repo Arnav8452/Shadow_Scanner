@@ -117,6 +117,8 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     weekend_book_pct: 80          # owner 13 Nov: before a weekend/holiday, book at >= 80% of target...
     weekend_book_time: "15:10"    # ...from this time
     side_stop_mult: 2.2           # owner 13 Nov: close if either side costs >= 2.2x its credit to close
+    untested_decay_pct: 85        # SPEC 5.1: book the untested side at 85% decay while the other is tested (1 adjustment)
+    first_candle_end: "09:30"     # SPEC 5.1: no stop exits in the first 15-min candle (gap rule); time exit still applies
   debit:                          # debit spreads on confirmed setups (HYPOTHESIS; paper)
     enabled: true
     underlyings: [NIFTY, SENSEX]
@@ -155,6 +157,8 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   paper_margin_cap_pct: 100       # owner 13 Nov: each strategy's own broker margin <= 100% of
                                   # capital (Rs 2L), never blocked by another strategy (live: 50%)
   spread_expiry_exit: "15:00"     # short legs expiring today closed before the 15:10 settlement window
+  gate2_mode: volatility          # 13 Nov (owner's gate2 notes): ATR-aware stop/half-risk/lock/trail;
+                                  # "charges" = the 12 Nov 2x/3x-breakeven ratchet (a variant)
   manual_default_stop_pct: 25     # Track C ticket default; editable on the page
   key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
   journal_dir: data/state          # paper_bot.jsonl, paper_manual.jsonl

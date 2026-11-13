@@ -324,6 +324,7 @@ class OptionTape:
     """1-minute closes, volume and VWAP of one option (for EMA trails and writer VWAP)."""
 
     closes: list[tuple[datetime, float]] = field(default_factory=list)
+    ranges: list[tuple[float, float]] = field(default_factory=list)  # (high, low) per minute
     last_cum: float | None = None
     pv: float = 0.0
     vol: float = 0.0
@@ -336,8 +337,11 @@ class OptionTape:
         start = local.replace(second=0, microsecond=0)
         if not self.closes or self.closes[-1][0] != start:
             self.closes.append((start, ltp))
+            self.ranges.append((ltp, ltp))
         else:
             self.closes[-1] = (start, ltp)
+            hi, lo = self.ranges[-1]
+            self.ranges[-1] = (max(hi, ltp), min(lo, ltp))
         if self.open_920 is None and local.hour == 9 and local.minute >= 20:
             self.open_920 = ltp
         if cum_volume > 0:
@@ -352,3 +356,18 @@ class OptionTape:
 
     def ema(self, n: int = 9) -> float | None:
         return ema([c for _, c in self.closes[:-1]], n)
+
+    def atr(self, n: int = 14) -> float | None:
+        """Average true range of the last ``n`` completed 1-minute bars of the option (from the
+        traded prices sampled each step), or None with fewer than 5 bars."""
+        done = list(zip(self.closes[:-1], self.ranges[:-1], strict=False))[-(n + 1) :]
+        if len(done) < 6:
+            return None
+        trs = []
+        for ((_, prev_c), _prev_range), ((_, _c), (hi, lo)) in itertools.pairwise(done):
+            trs.append(max(hi - lo, abs(hi - prev_c), abs(lo - prev_c)))
+        return sum(trs) / len(trs) if trs else None
+
+    def last_close(self) -> float | None:
+        """The last completed 1-minute close."""
+        return self.closes[-2][1] if len(self.closes) >= 2 else None

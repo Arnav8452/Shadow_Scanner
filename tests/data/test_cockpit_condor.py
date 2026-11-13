@@ -351,3 +351,31 @@ def test_condor_books_before_a_weekend_near_its_target(repo_root: Path, tmp_path
     assert why is not None and "market closure" in why, why
     assert st.exit_reason(pos, fri.replace(hour=15, minute=5), books, None, {}) is None
     assert st.exit_reason(pos, thu, books, None, {}) is None  # Friday is a trading day
+
+
+def test_condor_books_the_untested_side_once_and_keeps_the_rest(repo_root: Path, tmp_path: Path) -> None:
+    """SPEC 5.1: the call side has decayed > 85% while the put side costs more than its
+    credit to close -> book the call side only; the take-profit/stop now count what it cost."""
+    st, _ = _strategy(repo_root, tmp_path)
+    assert _open(st.account)[0]
+    pos = st.account.positions[0]
+    assert pos.context["wing_cost_pct"] == pytest.approx(10 / 60 * 100, abs=0.1)
+    books = {WP: _bk(8.0, 8.05), SP: _bk(34.0, 34.05), SC: _bk(2.0, 2.05), WC: _bk(0.05, 0.1)}
+    assert st.untested_side(pos, T, books) == ("CE", st.untested_side(pos, T, books)[1])
+    out = st.check_exits(T, books, 24950.0, {})
+    assert any("booked the CE side" in x for x in out), out
+    assert [lg.open for lg in pos.legs if lg.kind == "CE"] == [False, False] and st.account.positions
+    assert st.untested_side(pos, T, books) is None  # one adjustment only
+    from engine.cockpit.condor import booked_debit
+
+    assert booked_debit(pos) == pytest.approx(2.05 - 0.05)
+
+
+def test_condor_waits_out_the_first_candle_on_a_gap(repo_root: Path, tmp_path: Path) -> None:
+    st, _ = _strategy(repo_root, tmp_path)
+    assert _open(st.account)[0]
+    pos = st.account.positions[0]
+    gap = {WP: _bk(40.0, 40.05), SP: _bk(120.0, 120.05), SC: _bk(1.0, 1.05), WC: _bk(0.05, 0.1)}
+    early = T.replace(hour=9, minute=20)
+    assert st.exit_reason(pos, early, gap, 24700.0, {}) is None  # judged after 09:30
+    assert st.exit_reason(pos, T.replace(hour=9, minute=31), gap, 24700.0, {}) is not None

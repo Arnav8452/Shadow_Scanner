@@ -239,12 +239,18 @@ Code: `engine/cockpit/gates.py`. Owner rule (12 Nov 2026): a short hold ("scalp"
 
 - **True breakeven:** the exit price at which a long option bought at the ask nets zero after the full round trip's charges (brokerage, STT, exchange fees, SEBI fee, stamp duty, GST, all from `config/rules`), plus a 1-point slippage buffer, rounded up to the tick.
 - **Gate 1, impulse:** the option's expected 3-minute move, `ATR₁ₘ·√3·|Δ| + ½·Γ·(ATR₁ₘ·√3)²`, must be at least **3.5×** the breakeven points (**2.5×** for the 5-pillar breakthrough scalper). Otherwise there is no entry.
-- **Gate 2, breakeven ratchet:**
-  1. The initial stop is **−12% of premium or ₹1,200 on the position**, whichever is tighter. It is booked at entry, so the risk gate sees the real planned loss.
-  2. When the bid clears entry + **2×** breakeven points, the stop moves to true breakeven: the trade can no longer lose money after costs.
-  3. Once the bid is beyond **3×** breakeven points, the stop trails **1.5×** breakeven points behind it.
-  4. If the trade is still below breakeven after **180 s**, it is scratched.
-  5. **After an engine restart**, open scalps are put back under the ratchet using their real open time, so a scalp held past 180 s below breakeven is scratched on the first step.
+- **Gate 2, the in-trade manager** (`cockpit.gate2_mode: volatility`, since 13 Nov 2026; owner's gate-2 notes merged with the charges protocol). Cost protection is measured in breakeven points **B**; room is measured in the option's own **1-minute ATR**, from the ranges the engine samples:
+  1. **Initial stop:** the tightest of −12% of premium, ₹1,200 on the position, and **2 × ATR**, but never tighter than B (a stop inside the round-trip cost is noise). It is booked at entry.
+  2. **Half risk:** at bid ≥ entry + **2B** the stop moves halfway to the entry. The first pullback survives.
+  3. **Breakeven lock:** at bid ≥ entry + **max(3.5B, 1.2 ATR)**, the expected impulse Gate 1 asked for, the stop goes to true breakeven.
+  4. **Runner:** then trail **1.5 ATR** behind the best bid, and exit on a completed 1-minute close under the option's **9-EMA**.
+  5. **180-s scratch:** still under true breakeven after 180 s and not yet locked → out.
+  6. **After an engine restart**, open scalps are put back under this manager from their real open time.
+  - **Why it changed:** the 12 Nov version locked at 2B and trailed 1.5B, tighter than 1-minute option noise, which turned most trades into +₹13–40 scratches. That version stays available as `gate2_mode: charges`, a variant.
+- **Liquidity-vacuum guard** (SPEC §7): every contract's spread and top-5 depth are sampled each step for a minute.
+  - **Vacuum:** a spread over **2×** its median (and over 1%), or depth under **40%** of its median, means makers pulled quotes.
+  - **Entries:** they wait, on every account, spreads included.
+  - **Stop exits:** they wait up to **3 s** for quotes to return, then exit anyway. They exit at once past 1.5× the stop distance or at the per-trade limit.
 - **Strike band:** scalps trade only **0.55–0.65 delta** options (target 0.60), so intrinsic movement dominates theta. 0DTE keeps its ATM spec and is the one exception.
 - **Rule 2, the vacuum score:** a scalp also needs the rules.md 5-pillar confidence (book, volume delta, writer pain + OI unwinding, gamma impulse vs breakeven, IV velocity) at **65+**, and no absorption on the trigger bar. The breakthrough scalper is that score; spoof fade now checks it too.
 - **Charges plan:** the breakeven uses the configured brokerage plan (`shadow_scanner.cost_broker`). On Upstox Plus (₹30 an order) a ₹150 Nifty lot needs about 2.6 points. The owner's worked example of 2.10 points assumes ₹20 an order, which the tests reproduce to within a few paise.

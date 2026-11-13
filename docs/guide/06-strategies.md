@@ -83,7 +83,12 @@ Code: `engine/cockpit/condor.py`. Settings: `cockpit.condor`. Checked once a min
 - **Either side** costing **2.2×** its own credit to close. A combined stop lets the winning side hide the tested one.
 - **Before a weekend or holiday**, from 15:10: book the structure if it has captured **≥ 80%** of its take-profit, rather than carry gap risk for the last few rupees.
 
-Held overnight. SPAN margin is not modelled; the worst-case loss is used for the gate.
+**Adjustments (SPEC 5.1):**
+- **Untested side booked:** when one side has decayed **85%** and the other costs at least its credit to close, that side is closed and the tested side stays on. At most one adjustment per condor. Take-profit and stops then count what the booked side cost.
+- **Gap at the open:** no stop exits in the first 15-minute candle, so a gap through a short strike is judged from 09:30. The time exit still applies.
+- **Wing cost:** recorded as a % of the premium sold and shown on the card (far wings are often overpriced).
+
+Held overnight. Margin is the live broker quote (≈ ₹74k for one lot with 150-pt wings).
 
 ### Directional — `bot` (SPEC 5.2)
 Code: `engine/cockpit/core.py` (`_directional_entry`). Settings: `cockpit.directional`.

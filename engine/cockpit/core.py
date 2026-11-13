@@ -167,6 +167,9 @@ class CockpitCore:
         self.plays: list[Any] = []  # playbook strategies (build_cockpit)
         self.tapes: dict[str, IndexTape] = {}
         self._event_seen: dict[tuple[str, str], datetime] = {}
+        from engine.cockpit.paper import LiquidityMonitor
+
+        self.liquidity: LiquidityMonitor | None = LiquidityMonitor()
         self.otapes: dict[str, OptionTape] = {}
         self.otape_watch: set[str] = set()
         self._chain_rev_seen = -1
@@ -759,6 +762,8 @@ class CockpitCore:
             books = self.books()
             spots = self.runner.spots()
             self._check_feed(now_ns, now)
+            if self.liquidity is not None:
+                self.liquidity.observe(books, now)
             if not self.feed_frozen:
                 for sacct in self.spread_accounts():
                     for text in sacct.process_executions(books, now):

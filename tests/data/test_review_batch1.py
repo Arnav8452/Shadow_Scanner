@@ -236,3 +236,27 @@ def test_breakthrough_needs_writer_pain_and_oi_unwinding(repo_root: Path, tmp_pa
     p.step(now, m)
     assert not p.account.positions and not p.account.pending
     assert "writer pain + OI unwinding is 0 (needs 30)" in p.decision
+
+
+def test_liquidity_vacuum_blocks_entries_and_delays_stops(repo_root: Path, tmp_path: Path) -> None:
+    from engine.cockpit.paper import LiquidityMonitor
+
+    mon = LiquidityMonitor(min_samples=10)
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    for i in range(30):  # a normal minute: 0.5% spread, deep book
+        mon.observe({sym: bk(99.75, 100.25, qty=2000)}, T + timedelta(seconds=i))
+    pulled = bk(97.0, 103.0, qty=300)  # makers pulled: 6% spread, thin
+    assert mon.vacuum(sym, bk(99.75, 100.25, qty=2000)) is None
+    assert "liquidity vacuum" in str(mon.vacuum(sym, pulled))
+    acct = _account(repo_root, tmp_path)
+    acct.liquidity = mon
+    ok, why = acct.open_long_option(sym, pulled, now=T + timedelta(seconds=31), lots=1,
+                                    stop_pct=10, reason="t")
+    assert not ok and "liquidity vacuum" in why
+    acct.liquidity = None
+    acct.open_long_option(sym, bk(99.75, 100.25, qty=2000), now=T, lots=1, stop_pct=10, reason="t")
+    acct.liquidity = mon
+    gap = bk(89.0, 95.0, qty=300)  # under the 90.25 stop, in a vacuum, not past 1.5x
+    assert acct.check_exits({sym: gap}, T + timedelta(seconds=40)) == []  # waits
+    out = acct.check_exits({sym: gap}, T + timedelta(seconds=44))  # then exits anyway
+    assert sym not in acct.positions and "after waiting" in acct.closed[-1].reason, out

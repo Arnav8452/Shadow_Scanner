@@ -8,10 +8,9 @@ Charges come from ``config/rules`` through ``fno_charges`` (never the notes' har
   + 0.5 * gamma * (ATR_1m * sqrt(3))^2``, must be at least ``mult`` x the breakeven points.
   This is what lets a short-hold ("scalp") strategy trade at all: owner rule, scalping only
   where the expected move clears charges by a margin.
-- ``BreakevenRatchet`` (Gate 2): initial stop (12% of premium or the rupee cap), stop moved
-  to true breakeven once the bid clears 2x breakeven points, and trailed 1.5x breakeven
-  points behind the bid once it clears 3x; a scratch exit if still below breakeven after
-  ``scratch_s``.
+- ``BreakevenRatchet`` (Gate 2): volatility-aware by default (initial stop within 12% / Rs 1,200
+  / 2 ATR, half risk at 2B, breakeven at max(3.5B, 1.2 ATR), ATR trail and 9-EMA exit), with
+  the 180-s scratch; the 12 Nov charges-only ratchet stays as the ``charges`` mode.
 - ``model_price``: Black-76 fair value from the forward and a smoothed IV, so a stop is not
   triggered by a quote air-pocket the index never made (breaking_retail.md).
 - ``absorption`` and ``off_cycle``: effort-vs-result on the trigger bar, and no entries in the
@@ -74,6 +73,24 @@ def impulse_ok(
 
 @dataclass
 class BreakevenRatchet:
+    """Gate 2, the in-trade manager of a short-hold trade. Two modes:
+
+    ``volatility`` (default since 13 Nov 2026; owner's notes ``gate2_volatility_and_spec_audit``
+    merged with the charges-breakeven protocol). Cost protection is measured in breakeven points
+    B, room in the option's own 1-minute ATR:
+
+    1. Initial stop: min(12% of premium, Rs 1,200 on the position, 2 x ATR), never tighter
+       than B (a stop inside the cost of the round trip is noise).
+    2. Half risk: at bid >= entry + 2B the stop moves halfway to the entry.
+    3. Breakeven lock: at bid >= entry + max(3.5B, 1.2 x ATR) the stop goes to true breakeven.
+    4. Runner: then trail 1.5 x ATR behind the best bid (1.5B without an ATR); the manager
+       also exits on a completed 1-minute close under the option's 9-EMA.
+    The 180-s scratch stays: still under true breakeven after 180 s and not locked -> out.
+
+    ``charges`` (the 12 Nov protocol, kept as a variant): stop to true breakeven at 2B, trail
+    1.5B behind the bid beyond 3B.
+    """
+
     entry: float
     true_be: float
     be_points: float
@@ -82,8 +99,12 @@ class BreakevenRatchet:
     scratch_s: float = 180.0
     lock_mult: float = 2.0
     trail_mult: float = 1.5
-    trail_from_mult: float = 3.0  # owner protocol: trail only beyond 3x breakeven points
+    trail_from_mult: float = 3.0
     state: str = "INITIAL_RISK"
+    mode: str = "volatility"
+    atr: float | None = None  # the option's 1-minute ATR, refreshed by the manager
+    initial_dist: float = 0.0
+    peak: float = 0.0
 
     @classmethod
     def start(
@@ -97,23 +118,43 @@ class BreakevenRatchet:
         stop_pct: float = 12.0,
         max_risk_inr: float = 1200.0,
         scratch_s: float = 180.0,
+        mode: str = "volatility",
+        atr: float | None = None,
     ) -> BreakevenRatchet:
-        stop = round(entry - min(entry * stop_pct / 100.0, max_risk_inr / max(qty, 1)), 2)
-        return cls(entry, true_be, be_points, stop, opened_at, scratch_s)
+        dist = min(entry * stop_pct / 100.0, max_risk_inr / max(qty, 1))
+        if mode == "volatility" and atr:
+            dist = max(min(dist, 2.0 * atr), be_points)
+        r = cls(entry, true_be, be_points, round(entry - dist, 2), opened_at, scratch_s)
+        r.mode, r.atr, r.initial_dist, r.peak = mode, atr, dist, entry
+        return r
 
-    def on_bid(self, bid: float, now: datetime) -> str | None:
+    def on_bid(self, bid: float, now: datetime, atr: float | None = None) -> str | None:
         """Updates the stop; returns an exit reason when the trade should close now."""
+        if atr:
+            self.atr = atr
+        self.peak = max(self.peak, bid)
         if bid <= self.stop:
             return f"stop ({self.state.lower().replace('_', ' ')})"
         held = (now - self.opened_at).total_seconds()
-        if self.state == "INITIAL_RISK" and held >= self.scratch_s and bid < self.true_be:
+        unlocked = self.state in ("INITIAL_RISK", "HALF_RISK")
+        if unlocked and held >= self.scratch_s and bid < self.true_be:
             return f"scratch: below charges breakeven after {self.scratch_s:.0f} s"
-        if self.state == "INITIAL_RISK" and bid >= self.entry + self.lock_mult * self.be_points:
-            self.stop, self.state = self.true_be, "BREAKEVEN_LOCKED"
-        elif self.state == "BREAKEVEN_LOCKED" and bid >= (
-            self.entry + self.trail_from_mult * self.be_points
-        ):
-            self.stop = max(self.stop, round(bid - self.trail_mult * self.be_points, 2))
+        b = self.be_points
+        if self.mode == "charges":
+            if self.state == "INITIAL_RISK" and bid >= self.entry + self.lock_mult * b:
+                self.stop, self.state = self.true_be, "BREAKEVEN_LOCKED"
+            elif self.state == "BREAKEVEN_LOCKED" and bid >= self.entry + self.trail_from_mult * b:
+                self.stop = max(self.stop, round(bid - self.trail_mult * b, 2))
+            return None
+        lock_at = self.entry + max(3.5 * b, 1.2 * (self.atr or 0.0))
+        if self.state == "INITIAL_RISK" and bid >= self.entry + 2.0 * b:
+            self.stop = max(self.stop, round(self.entry - self.initial_dist / 2, 2))
+            self.state = "HALF_RISK"
+        if self.state in ("INITIAL_RISK", "HALF_RISK") and bid >= lock_at:
+            self.stop, self.state = max(self.stop, self.true_be), "BREAKEVEN_LOCKED"
+        if self.state == "BREAKEVEN_LOCKED":
+            room = 1.5 * self.atr if self.atr else self.trail_mult * b
+            self.stop = max(self.stop, round(self.peak - room, 2))
         return None
 
 
