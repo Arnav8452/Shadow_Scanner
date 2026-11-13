@@ -4,6 +4,13 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Mechanism-first research; event IV crush pre-registered (14 Nov 2026)
+
+The owner asked for strategies with a cause ("if this is the data, this must happen"), tested on paper, not mined patterns; any market, executable within ₹1-2L.
+- **Candidates:** published evidence reviewed and ranked in `docs/research/mechanisms.md`: event IV crush, overnight VRP, forced index flows, anchor lock-ins, trend, turn-of-month, factors.
+- **Pre-registration:** the event IV crush hypotheses (H1 the crush exists; H2 the event move is overpriced; H3 index events, descriptive) were written there **before the study ran**, with fixed thresholds.
+- **Data:** results dates for the past year come from NSE's board-meeting API, which also serves past ranges (Apr-May 2026: 5,382 results meetings).
+
 ## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)
 
 - **BSE F&O bhavcopy** (`bse_fo` in `engine/data/eod/download.py`): BSE's derivatives file at `https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{yyyymmdd}_F_0000.CSV`, verified by download. Same UDiFF layout as NSE's. Downloaded nightly by `tasks.py eod`; 275 sessions backfilled (Oct 2025 → 13 Nov 2026, 18 holidays missing).
