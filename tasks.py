@@ -583,6 +583,240 @@ def task_event_iv_study(params: dict[str, str]) -> int:
     return 0
 
 
+def task_results_fly_test(params: dict[str, str]) -> int:
+    """H4, pre-registered in docs/research/mechanisms.md: a results iron fly on NSE bhavcopy
+    closes (sell ATM call+put at D-1's close, wings W away, exit at D+1's close), 1 lot, max loss
+    <= Rs 5,000, <= Rs 1 lakh of max loss open at once, full charges, haircut max(Rs 0.20, 1.5%)
+    per leg per side and 2x. Report: reports/research/results_fly_<date>.md."""
+    raw_dir, book, _ = _eod_common()
+    from collections import defaultdict
+
+    import pyarrow.parquet as pq
+
+    from engine.backtest.costs import fno_charges
+    from engine.backtest.deflated_sharpe import compute_deflated_sharpe
+    from engine.data.eod.bhavcopy import parse_fno_bhavcopy_csv
+    from engine.data.eod.download import eod_path, read_eod_text
+    from engine.data.fundamentals.nse import parse_board_meetings
+    from engine.research.results_fly import base_haircut, build_fly, select_concurrent, stats
+
+    cap, budget, capital, trials = 5000.0, 100_000.0, 100_000.0, 3
+    stock = pq.read_table(raw_dir.parent / "parquet" / "eod" / "stock_iv.parquet").to_pylist()
+    names = {r["underlying"] for r in stock}
+    sessions = sorted({r["trade_date"] for r in stock})
+    first, last = sessions[0], sessions[-1]
+    hist = raw_dir / "fundamentals" / "lists" / "board_meetings_history"
+    meetings = [m for f in sorted(hist.glob("*.json")) if not f.name.endswith(".meta.json")
+                for m in parse_board_meetings(f.read_text("utf-8"))]  # fmt: skip
+    events = sorted(
+        {
+            (m.symbol, m.meeting_date)
+            for m in meetings
+            if m.is_results and m.symbol in names and first < m.meeting_date < last
+        }
+    )
+    if not events:
+        print("no results events: run tasks.py event-iv-study first (it caches the lists)")
+        return 1
+
+    def around(d: date) -> tuple[date, date] | None:
+        prev = [x for x in sessions if x < d]
+        nxt = [x for x in sessions if x > d]
+        return (prev[-1], nxt[0]) if prev and nxt else None
+
+    wanted: dict[date, set[str]] = defaultdict(set)
+    windows = {}
+    for sym, d in events:
+        w = around(d)
+        if w:
+            windows[(sym, d)] = w
+            wanted[w[0]].add(sym)
+            wanted[w[1]].add(sym)
+    chains: dict[tuple[date, str], list] = defaultdict(list)
+    for day, syms in sorted(wanted.items()):
+        path = eod_path(raw_dir, "fo", day)
+        if not path.exists():
+            continue
+        for r in parse_fno_bhavcopy_csv(read_eod_text(path)):
+            if r.trade_date == day and r.symbol in syms and r.option_type in ("CE", "PE"):
+                chains[(day, r.symbol)].append(r)
+
+    charge_cache: dict[tuple[date, str, int], float] = {}
+    today = _today_ist()
+
+    def charges(day: date, side: str, turnover: float) -> float:
+        # Today's fee schedule (what the trade would cost now): the Upstox Plus brokerage row
+        # only starts in Nov 2026, and the question is whether this pays at current costs.
+        day = today
+        key = (day, side, round(turnover))
+        if key not in charge_cache:
+            charge_cache[key] = fno_charges(
+                book, day, segment="options", side=side,  # type: ignore[arg-type]
+                turnover_inr=turnover, broker="upstox_plus",
+            ).total  # fmt: skip
+        return charge_cache[key]
+
+    def flies(mult: float) -> tuple[list, int]:
+        def hc(px: float) -> float:
+            return base_haircut(px, mult)
+
+        out, skipped = [], 0
+        for (sym, d), (b, a) in windows.items():
+            rb, ra = chains.get((b, sym), []), chains.get((a, sym), [])
+            exps = sorted({r.expiry for r in rb if r.expiry > a} & {r.expiry for r in ra})
+            if not exps:
+                skipped += 1
+                continue
+            exp = exps[0]
+            qb = {(float(r.strike), r.option_type): {"close": r.close, "contracts": r.contracts}
+                  for r in rb if r.expiry == exp}  # fmt: skip
+            qa = {(float(r.strike), r.option_type): {"close": r.close, "contracts": r.contracts}
+                  for r in ra if r.expiry == exp}  # fmt: skip
+            lot = next((r.lot_size for r in rb if r.lot_size), 0)
+            s_in = next((r.underlying_price for r in rb if r.underlying_price > 0), 0.0)
+            s_out = next((r.underlying_price for r in ra if r.underlying_price > 0), 0.0)
+            t = build_fly(sym, d, b, a, exp, lot, s_in, s_out, qb, qa, cap_inr=cap, hc=hc)
+            if t is None:
+                skipped += 1
+            else:
+                out.append(t)
+        return select_concurrent(out, hc, budget), skipped
+
+    res = {}
+    for mult in (1.0, 2.0):
+        trades, skipped = flies(mult)
+
+        def hcm(px: float, m: float = mult) -> float:
+            return base_haircut(px, m)
+
+        nets = [t.net(charges, hcm) for t in trades]
+        daily: dict[date, float] = defaultdict(float)
+        for t, x in zip(trades, nets, strict=True):
+            daily[t.after] += x
+        series = [daily.get(d, 0.0) / capital for d in sessions]
+        dsr = compute_deflated_sharpe(series, n_trials=trials)
+        run, peak, dd = 0.0, 0.0, 0.0
+        for d in sessions:
+            run += daily.get(d, 0.0)
+            peak = max(peak, run)
+            dd = max(dd, peak - run)
+        res[mult] = {"trades": trades, "nets": nets, "skipped": skipped, "stats": stats(nets),
+                     "dsr": dsr, "max_dd": round(dd, 0)}  # fmt: skip
+
+    base = res[1.0]
+    trades = base["trades"]
+
+    def total_at(m: float) -> float:
+        return sum(t.net(charges, lambda px, m=m: base_haircut(px, m)) for t in trades)
+
+    lo, hi = 0.0, 20.0
+    if total_at(lo) <= 0:
+        be = 0.0
+    elif total_at(hi) > 0:
+        be = hi
+    else:
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if total_at(mid) > 0 else (lo, mid)
+        be = lo
+    s1, s2 = base["stats"], res[2.0]["stats"]
+    ok1 = s1.get("n", 0) > 0 and s1["mean"] > 0 and (s1.get("t") or 0) >= 2
+    ok2 = s2.get("n", 0) > 0 and s2["mean"] > 0
+    ok3 = base["dsr"].deflated_sharpe_pct >= 95
+    verdict = "PASS" if ok1 and ok2 and ok3 else "FAIL"
+    by_month: dict[str, list[float]] = defaultdict(list)
+    for t, x in zip(trades, base["nets"], strict=True):
+        by_month[t.after.strftime("%Y-%m")].append(x)
+
+    def row(name: str, r: dict) -> str:
+        st = r["stats"]
+        return (f"| {name} | {st.get('n')} | {st.get('win_pct')}% | ₹{st.get('total', 0):,.0f} | "
+                f"₹{st.get('mean', 0):,.1f} | {st.get('t')} | ₹{st.get('avg_win') or 0:,.0f} / "
+                f"₹{st.get('avg_loss') or 0:,.0f} | ₹{st.get('worst', 0):,.0f} | "
+                f"{st.get('profit_factor')} | ₹{r['max_dd']:,.0f} | "
+                f"{r['dsr'].deflated_sharpe_pct:.1f}% |")  # fmt: skip
+
+    lines = [
+        f"# Results iron fly (H4), {_today_ist():%d %b %Y}",
+        "",
+        "Pre-registered in `docs/research/mechanisms.md` (commit dd3c26a) before this ran. NSE "
+        "bhavcopy closes, 1 lot, max loss ≤ ₹5,000 a trade, ≤ ₹1 lakh of max loss open at once, "
+        "Upstox Plus charges at today's rates, haircut max(₹0.20, 1.5%) per leg per side. "
+        "Deflated Sharpe counts "
+        f"{trials} trials.",
+        "",
+        f"Sample {first} to {last}: {len(events)} results meetings; built and taken "
+        f"{s1.get('n')} (skipped {base['skipped']}: no expiry after D+1, an untraded leg, or no "
+        "wing within the cap).",
+        "",
+        "| Haircut | Trades | Win | Net total | Net / trade | t | Avg win / loss | Worst | "
+        "Profit factor | Max DD | DSR |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+        row("1x max(₹0.20, 1.5%)", base),
+        row("2x", res[2.0]),
+        "",
+        f"Break-even haircut: **{be:.2f}x** the base (the haircut at which the base trades "
+        "net zero).",
+        "",
+        f"**H4: {verdict}** (mean > 0 with t ≥ 2 at 1x: {'yes' if ok1 else 'no'}; > 0 at 2x: "
+        f"{'yes' if ok2 else 'no'}; DSR ≥ 95%: {'yes' if ok3 else 'no'}).",
+        "",
+        "## By month (1x)",
+        "",
+        "| Month | Trades | Net |",
+        "|---|---|---|",
+        *[f"| {k} | {len(v)} | ₹{sum(v):,.0f} |" for k, v in sorted(by_month.items())],
+        "",
+        "## Ten worst and best trades (1x)",
+        "",
+        "| Symbol | D-1 → D+1 | Lot | ATM / wing | Spot move | Net |",
+        "|---|---|---|---|---|---|",
+    ]
+    ranked = sorted(zip(trades, base["nets"], strict=True), key=lambda x: x[1])
+    for t, x in [*ranked[:10], *ranked[-10:]]:
+        mv = (t.spot_out / t.spot_in - 1) * 100 if t.spot_in else 0.0
+        lines.append(f"| {t.symbol} | {t.before} → {t.after} | {t.lot} | {t.atm:g} / ±{t.wing:g} "
+                     f"| {mv:+.1f}% | ₹{x:,.0f} |")  # fmt: skip
+    lines += [
+        "",
+        "## Caveats",
+        "",
+        "- Closing prices are last trades; a leg's close can sit anywhere in its spread. The "
+        "haircut and its 2x run are the guard, and stock-option spreads have not been measured.",
+        "- Margin is not modelled: a defined-risk fly blocks roughly its max loss plus exposure "
+        "margin; quote it with the broker before any paper trade.",
+        "- One year of events; RBI days are excluded (no crush). Any further split is a new trial.",
+    ]
+    import csv as _csv
+
+    def zero_hc(px: float) -> float:
+        return 0.0
+
+    tcsv = ROOT / "reports" / "research" / f"results_fly_{_today_ist().isoformat()}_trades.csv"
+    tcsv.parent.mkdir(parents=True, exist_ok=True)
+    with tcsv.open("w", newline="", encoding="utf-8") as fh:
+        wr = _csv.writer(fh)
+        wr.writerow(["symbol", "before", "after", "lot", "atm", "wing", "credit_close",
+                     "exit_cost_close", "gross_no_haircut", "haircut_cost", "charges", "net_1x",
+                     "spot_move_pct", "exit_above_wing"])  # fmt: skip
+        for t, x in zip(trades, base["nets"], strict=True):
+            exit_cost = sum(lg.px_out if lg.side == "SELL" else -lg.px_out for lg in t.legs)
+            g0 = t.gross(zero_hc)
+            g1 = t.gross(lambda px: base_haircut(px))
+            mv = (t.spot_out / t.spot_in - 1) * 100 if t.spot_in else 0.0
+            wr.writerow([t.symbol, t.before, t.after, t.lot, t.atm, t.wing,
+                         round(t.credit(zero_hc), 2), round(exit_cost, 2), round(g0, 0),
+                         round(g0 - g1, 0),
+                         round(t.charges(charges, lambda px: base_haircut(px)), 0),
+                         round(x, 0), round(mv, 2), exit_cost > t.wing + 1e-9])  # fmt: skip
+    out = ROOT / "reports" / "research" / f"results_fly_{_today_ist().isoformat()}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines[:22]))
+    print(f"-> {out}")
+    return 0
+
+
 def task_scorecard(params: dict[str, str]) -> int:
     """Promotion scorecard over every paper journal: sessions, trades, net, net with charges
     doubled, t-statistic, deflated Sharpe over all strategies tried, kill rules, and a verdict

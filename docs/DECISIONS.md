@@ -11,6 +11,7 @@ The owner asked for strategies with a cause ("if this is the data, this must hap
 - **Pre-registration:** the event IV crush hypotheses (H1 the crush exists; H2 the event move is overpriced; H3 index events, descriptive) were written there **before the study ran**, with fixed thresholds.
 - **Data:** results dates for the past year come from NSE's board-meeting API, which also serves past ranges (Apr-May 2026: 5,382 results meetings).
 - **Result (same day, after the pre-registration commit `dd0eb65`):** H1 PASS (IV fell in 95.7% of 808 results events, median −6.0 vol pts; control −0.16). H2 PASS (realized < implied in 70.7%, mean ratio 0.84, t −16.9). Heavy right tail (median ratio 0.60): defined risk only. RBI days do not crush (IV rose in 7 of 12). Next is a new trial: a defined-risk results iron fly on bhavcopy closes with costs and margin within ₹1 lakh. Details in `docs/research/mechanisms.md`.
+- **H4, the trade test (pre-registered in `dd3c26a`):** a results iron fly on bhavcopy closes, 1 lot, ₹5,000 max loss, full charges. **FAIL.** Before costs it made +₹34 a trade (826 trades); charges are ₹451. It loses even with zero spread cost. The crush is real but not tradable this way at our size; it stays research. Data fix while checking: 47 stale exits above the wing are now capped (LAURUSLABS calls closed 31.6 apart on a 20-wide spread).
 
 ## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)
 
