@@ -159,6 +159,9 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
             )
         ),
         hold_earnings_weight_pct=float(c_raw.get("hold_earnings_weight_pct", 10)),
+        weekend_book_pct=float(c_raw.get("weekend_book_pct", 80)),
+        weekend_book_time=str(c_raw.get("weekend_book_time", "15:10")),
+        side_stop_mult=float(c_raw.get("side_stop_mult", 2.2)),
     )
     if not 0.05 <= condor.short_delta <= 0.40:
         raise ValueError("cockpit.condor.short_delta must be between 0.05 and 0.40")

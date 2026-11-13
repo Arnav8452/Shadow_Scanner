@@ -10,13 +10,20 @@ The page has four tabs: **Desk**, **Option chain**, **Screener** and **Research*
 
 ## 4.1 Header (always visible)
 
+The header is kept to what you use. It is paper-only by construction: the page cannot place a live order.
+
 | Element | What it shows | How to use it |
 |---|---|---|
-| **Quant Cockpit · PAPER ONLY** | Name and the paper-only badge. | — |
 | **Desk / Option chain / Screener / Research** | Tab switch. | — |
 | **Live / Replay** | Which engine the page shows. **Live** is today's engine; **Replay** shows the replay bar and the replay engine. | Switch to Replay in the evening to practise on a recorded day. |
-| **Dots: page · live engine · replay engine** | Green = connected. *page* is your browser's link to the gateway; *live engine* and *replay engine* are the processes publishing to it. | If *live engine* is red during market hours, the engine is not running: start `tasks.py shadow-live`. |
-| **Clock line** (right) | `LIVE <date> <time> · feed <status> · lag <ms> · <n> contracts live · <n> readings today`, plus `DROPPED <n>` or `cockpit errors <n>` when something is wrong. | *Lag* is receive time minus exchange time; the exchange stamps whole seconds, so ±1 s is normal. *Contracts live* is the engine's 30-level watchlist (up to 50). *Readings today* counts confirmed scanner episodes. |
+| **Status line** (right) | `LIVE <date> <time> · feed <status> · lag <ms> · <n> contracts live · <n> readings today`, plus `DROPPED <n>` or `cockpit errors <n>` when something is wrong. | See below. |
+
+**Status line:**
+- **Lag** is receive time minus the exchange's timestamp. The exchange stamps whole seconds, and on 13 Nov this PC's clock was 1.3 s slow and had never synced. A steady negative lag of about −700 ms therefore means the PC clock, not the feed. Fix it in **Settings → Time & language → Date & time → Set time automatically → Sync now**.
+- **Contracts live** is the engine's 30-level watchlist (up to 50).
+- **Readings today** counts confirmed scanner episodes.
+
+A line under the header appears when something is down: the page lost its link to the gateway (it reconnects by itself), the live engine is offline, or the feed is stale.
 
 ### Replay bar (Replay selected)
 

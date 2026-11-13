@@ -441,6 +441,9 @@ class BreakthroughPlay(LongPlay):
     delta: float = 0.60  # protocol band 0.55-0.65
     min_score: float = 65.0
     two_lot_score: float = 80.0
+    # 13 Nov 2026 (owner): the writer-pain + OI-unwinding pillar is the thesis; a score made of
+    # book, volume and the direction-blind gamma pillar alone does not qualify.
+    min_oi_pillar: float = 30.0
     charges_mult: float = 2.5
     last: dict[str, Any] = field(default_factory=dict)
 
@@ -476,6 +479,12 @@ class BreakthroughPlay(LongPlay):
                 + ("" if s["passes_charges_gate"] else ", x0.4: impulse under 2.5x charges")
             )
             if s["score"] < self.min_score:
+                continue
+            if s["sub"]["oi"] < self.min_oi_pillar:
+                self.renote(
+                    f"{und}: score {s['score']:.0f}, but writer pain + OI unwinding is "
+                    f"{s['sub']['oi']} (needs {self.min_oi_pillar:g})"
+                )
                 continue
             d = abs(float(m.detail(s["symbol"]).get("delta") or 0))
             if not 0.55 <= d <= 0.65:

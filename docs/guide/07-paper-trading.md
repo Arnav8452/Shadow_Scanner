@@ -21,8 +21,8 @@ Code: `engine/risk/limits.py` (`check_pre_trade_risk_gate`). Every paper entry, 
 | Check | Limit | Refusal reason |
 |---|---|---|
 | Whole lots, within the lot cap | 1 lot live; up to 2 on paper (`cockpit.paper_max_lots`) | `no_whole_lot`, `max_lots_per_strategy_exceeded` |
-| Daily loss limit | 2% = ₹4,000 realized loss | `daily_loss_limit_hit` |
-| Weekly loss limit | 5% = ₹10,000 | `weekly_loss_limit_hit` |
+| Daily loss limit | 2% = ₹4,000, **realized plus open losses** (marked at the bid / cost to close) | `daily_loss_limit_hit` |
+| Weekly loss limit | 5% = ₹10,000, realized plus open losses | `weekly_loss_limit_hit` |
 | Trades per day | 5 per account | `max_trades_per_day_reached` |
 | Losing streak | Halt for the day after 4 losses in a row; size × 0.5 after 3 | `consecutive_loss_circuit_breaker` |
 | Cool-off after a loss | 15 minutes | `in_loss_cooloff` |

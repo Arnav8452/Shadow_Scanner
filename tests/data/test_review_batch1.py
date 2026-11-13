@@ -196,3 +196,43 @@ def test_short_legs_expiring_today_close_at_15_00(repo_root: Path, tmp_path: Pat
     m.now = expiry_day.replace(hour=15, minute=0, second=1)
     out = play.manage(m.now, m)
     assert not acct.positions and "expiry-day exit 15:00" in acct.closed[-1].reason, out
+
+
+def test_an_open_loss_counts_toward_the_daily_limit(repo_root: Path, tmp_path: Path) -> None:
+    acct = _account(repo_root, tmp_path)
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    acct.open_long_option(sym, bk(99.5, 100.0), now=T, lots=1, stop_pct=70, reason="t")
+    acct.check_exits({sym: bk(40.0, 40.5)}, T + timedelta(seconds=5))  # down ~Rs 3,900 open
+    st = acct.risk_state()
+    assert st.realized_daily_pnl_inr < -3800  # not 0: the open loss counts
+    other = opt_symbol(WEEKLY, 25050, Kind.CALL)
+    ok, why = acct.open_long_option(other, bk(19.9, 20.0), now=T + timedelta(seconds=6), lots=1,
+                                    stop_pct=20, reason="t")
+    assert ok, why  # Rs 4,000 limit not yet reached
+    acct.check_exits({sym: bk(30.0, 30.5), other: bk(19.9, 20.0)}, T + timedelta(seconds=7))
+    ok, why = acct.open_long_option(opt_symbol(WEEKLY, 25100, Kind.CALL), bk(19.9, 20.0),
+                                    now=T + timedelta(seconds=8), lots=1, stop_pct=20, reason="t")
+    assert not ok and "daily_loss_limit_hit" in why
+
+
+def test_breakthrough_needs_writer_pain_and_oi_unwinding(repo_root: Path, tmp_path: Path) -> None:
+    from engine.cockpit.plays_long import BreakthroughPlay
+    from tests.data.test_plays import FakeMarket, build_master, chain
+
+    m = FakeMarket(T, build_master(range(24300, 25800, 50)))
+    m.rows = chain()
+    for r in m.rows:
+        for key in ("ce", "pe"):
+            m._books[r[key]["sym"]] = bk(r[key]["bid"], r[key]["ask"])
+    p = BreakthroughPlay("breakthrough", "Breakthrough", "rules.md", _account(repo_root, tmp_path, "bt"))
+    sym = opt_symbol(WEEKLY, 24900, Kind.CALL)
+    p.score = lambda m_, und, s, bull: {  # type: ignore[method-assign]
+        "symbol": sym, "label": sym, "score": 70.0, "passes_charges_gate": True,
+        "sub": {"book": 90, "volume": 90, "oi": 0, "gamma": 100, "iv": 60},
+        "writer_pain_pct": 0.0, "impulse_pts": 9.0, "breakeven_pts": 2.6, "sl_25": None, "sl_30": None,
+    }
+    now = T.replace(minute=40, second=50)
+    m.now = now
+    p.step(now, m)
+    assert not p.account.positions and not p.account.pending
+    assert "writer pain + OI unwinding is 0 (needs 30)" in p.decision

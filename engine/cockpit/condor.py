@@ -74,6 +74,13 @@ class CondorConfig:
     # SPEC 5.1: no RBI / Budget / election / heavyweight results cluster while the trade is on.
     hold_block_categories: tuple[str, ...] = ("RBI_MPC", "UNION_BUDGET", "ELECTION_EXIT_POLL")
     hold_earnings_weight_pct: float = 10.0
+    # 13 Nov 2026 (owner): before a weekend or holiday, book a structure that has captured at
+    # least this % of its take-profit (do not carry gap risk for the last few rupees).
+    weekend_book_pct: float = 80.0
+    weekend_book_time: str = "15:10"
+    # ...and close the whole condor if either side's cost to close reaches this x that side's
+    # credit (a combined stop lets the winning side hide the tested one).
+    side_stop_mult: float = 2.2
 
 
 # ---------------------------------------------------------------------------- positions
@@ -194,6 +201,7 @@ class SpreadAccount:
         self.fill_latency_s = 0.0
         self.leg_gap_s = 0.0
         self.executions: list[dict[str, Any]] = []
+        self.open_net = 0.0  # open structures' net at the cost to close, refreshed every step
         # Credit structures: the take-profit must be worth this many round-trips of charges
         # (0 = off). Set from cockpit.credit_charges_mult.
         self.charges_mult = 0.0
@@ -221,9 +229,10 @@ class SpreadAccount:
         open_risk = sum(p.max_loss_inr for p in self.positions) + sum(
             float(x["max_loss"]) for x in self.executions
         )
+        open_loss = min(0.0, self.open_net)  # an open loss counts toward the loss limits
         return AccountRiskState(
-            realized_daily_pnl_inr=self.realized_net,
-            realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net,
+            realized_daily_pnl_inr=self.realized_net + open_loss,
+            realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net + open_loss,
             open_risk_inr=open_risk,
             # Broker margin: the live quote for a position's legs, else the paper margin table.
             margin_used_inr=sum(self.margin_of(p) for p in self.positions)
@@ -464,6 +473,12 @@ class SpreadAccount:
         """Advance orders on their way: at most one leg per order per step once its time has
         come, against the books of that moment."""
         out: list[str] = []
+        net = 0.0
+        for p in self.positions:
+            ctc = cost_to_close(p, books)
+            if ctc is not None:
+                net += (p.credit_pts - ctc) * p.qty - p.entry_charges
+        self.open_net = net
         for ex in list(self.executions):
             if now.timestamp() < float(ex["next_at"]):
                 continue
@@ -1246,6 +1261,44 @@ class CondorStrategy:
                 return f"take profit ({c.take_profit_pct:.0f}% of credit)"
             if ctc >= pos.credit_pts * c.stop_mult:
                 return f"stop ({c.stop_mult:g}x credit)"
+            target = pos.credit_pts * c.take_profit_pct / 100.0
+            got = pos.credit_pts - ctc
+            tomorrow_closed = self.trading_day_before(local.date() + timedelta(days=2)) == (
+                local.date()
+            )
+            if (
+                tomorrow_closed
+                and local.strftime("%H:%M") >= c.weekend_book_time
+                and target > 0
+                and got >= target * c.weekend_book_pct / 100.0
+            ):
+                return (
+                    f"booked before the market closure: {got / target * 100:.0f}% of the "
+                    f"take-profit captured (>= {c.weekend_book_pct:g}%)"
+                )
+        for side, kind in (("put", "PE"), ("call", "CE")):
+            legs = [lg for lg in pos.legs if lg.kind == kind and lg.open]
+            sh = [lg for lg in legs if lg.side == "SELL"]
+            wg = [lg for lg in legs if lg.side == "BUY"]
+            if not sh or not wg:
+                continue
+            credit = sum(lg.entry_px for lg in sh) - sum(lg.entry_px for lg in wg)
+            bs = [books.get(lg.symbol) for lg in sh]
+            bw = [books.get(lg.symbol) for lg in wg]
+            if (
+                credit <= 0
+                or any(b is None or not b.asks for b in bs)
+                or any(b is None or not b.bids for b in bw)
+            ):
+                continue
+            side_ctc = sum(b.asks[0][0] for b in bs if b is not None) - sum(
+                b.bids[0][0] for b in bw if b is not None
+            )
+            if side_ctc >= credit * c.side_stop_mult:
+                return (
+                    f"{side} side stop: costs {side_ctc:.2f} to close vs {credit:.2f} credit "
+                    f"(>= {c.side_stop_mult:g}x)"
+                )
         if spot:
             sp, sc = pos.short_put, pos.short_call
             if c.exit_on_short_touch and ((sp and spot <= sp) or (sc and spot >= sc)):

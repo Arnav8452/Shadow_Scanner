@@ -114,6 +114,9 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     max_per_day: 1
     hold_block_categories: [RBI_MPC, UNION_BUDGET, ELECTION_EXIT_POLL]  # none before the exit
     hold_earnings_weight_pct: 10  # results of this much index weight before the exit blocks
+    weekend_book_pct: 80          # owner 13 Nov: before a weekend/holiday, book at >= 80% of target...
+    weekend_book_time: "15:10"    # ...from this time
+    side_stop_mult: 2.2           # owner 13 Nov: close if either side costs >= 2.2x its credit to close
   debit:                          # debit spreads on confirmed setups (HYPOTHESIS; paper)
     enabled: true
     underlyings: [NIFTY, SENSEX]

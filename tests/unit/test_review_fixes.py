@@ -98,3 +98,45 @@ def test_backup_copies_new_files_and_never_deletes(tmp_path: Path) -> None:
     (root / "data" / "state" / "j.jsonl").unlink()  # an accidental delete on the source...
     run_backup(root, ["data/state"], target, min_free_gb=0)
     assert (target / "data" / "state" / "j.jsonl").exists()  # ...does not reach the backup
+
+
+def test_audit_flags_rule_breaches_in_journals(tmp_path: Path) -> None:
+    import json as _json
+
+    from engine.cockpit.audit import audit_journals
+
+    def w(name: str, recs: list[dict]) -> None:
+        (tmp_path / f"paper_{name}.jsonl").write_text(
+            "".join(_json.dumps(r) + "\n" for r in recs), encoding="utf-8"
+        )
+
+    w("breakthrough", [
+        {"type": "open", "t": "2026-11-13T09:37:11+05:30", "symbol": "NSE_FO|1", "qty": 65,
+         "price": 204.0, "stop": 163.0},
+        {"type": "close", "t": "2026-11-13T10:34:58+05:30", "symbol": "NSE_FO|1",
+         "opened_at": "2026-11-13T09:37:11+05:30", "gross_inr": -2700.0, "charges_inr": 101.0,
+         "net_inr": -2801.0, "reason": "stop on premium"},
+    ])  # fmt: skip
+    w("oi_credit", [
+        {"type": "open", "t": "2026-11-13T09:20:00+05:30", "id": "X", "qty": 65, "max_loss_inr": 12000,
+         "legs": [{"side": "SELL", "kind": "PE", "strike": 25000.0, "qty": 65},
+                  {"side": "BUY", "kind": "PE", "strike": 24800.0, "qty": 65}]},
+    ])  # fmt: skip
+    finds, stats = audit_journals(tmp_path, capital_inr=200000, directional_pct=2.5,
+                                  spread_pct=5, daily_loss_pct=2, max_trades=5, max_lots=2,
+                                  lot_of=lambda s: 65)  # fmt: skip
+    rules = sorted({f.rule for f in finds})
+    assert "R8 scalp discipline" in rules  # a losing scalp held 58 min
+    assert "R2 per-trade risk" in rules  # a Rs 12,000 spread max loss > the Rs 10,000 limit
+    assert "R4 entry window" in rules  # the 09:20 spread entry
+    assert "R1 defined risk" in rules  # the short was filled before its wing
+    assert stats["opens"] == 2 and stats["closes"] == 1
+
+
+def test_band_widths_from_minute_candles_match_the_live_tape() -> None:
+    from engine.cockpit.backfill import widths_from_candles
+
+    candles = [[f"2026-11-12T{9 + (15 + i) // 60:02d}:{(15 + i) % 60:02d}:00+05:30",
+                25000 + i, 25001 + i, 24999 + i, 25000.5 + i, 0, 0] for i in range(120)]  # fmt: skip
+    ws = widths_from_candles("NIFTY", candles)
+    assert len(ws) > 10 and all(w > 0 for w in ws)

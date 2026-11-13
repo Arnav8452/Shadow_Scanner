@@ -4,6 +4,27 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Owner-approved fixes 1–4, slimmer header, history backfill, the paper-trade audit (13 Nov 2026, afternoon)
+
+- **Applied (owner):**
+  1. The daily and weekly loss limits count open losses (realized + min(0, open net)). Before, a strategy down ₹3,900 unrealized could still open a trade.
+  2. Breakthrough needs its writer-pain + OI-unwinding pillar ≥ 30.
+  3. The condor books ≥ 80% of target from 15:10 before a market closure.
+  4. The condor closes when either side costs ≥ 2.2× its own credit.
+  - Delta shows per unit and per position, and the condor banner says exits run on every update.
+  - Rules 2–4 are new strategy variants, counted as trials.
+- **Header:** the title, PAPER ONLY badge and status dots are gone; a notice appears when the page or an engine is down.
+- **Lag:** the steady −700 ms is the PC clock, measured 1.3 s slow and never synced ("Local CMOS Clock"). The owner should enable automatic time; a system setting, not changed by us.
+- **History instead of waiting:**
+  - Upstox Plus serves 1-minute index candles since 2022 and expired-option 1-minute candles with OI back to Oct 2024. No source sells historical bid/ask depth.
+  - Compression's band-width history is backfilled (`tasks.py backfill-history`).
+  - The calendar's term spread could not be: far-month bhavcopy closes are stale (IV 27.7% vs ~14% live).
+  - A candle-based backtest runner is proposed.
+- **Audit:** `tasks.py audit` checks nine hard rules over every journaled trade, nightly too. The first run found one breach, which corrects an earlier note. Breakthrough's 09:37 put was **not** scratched at the 11:43 restart: it hit its old 20% stop at 10:34 for **−₹2,801** while unmanaged after the 09:39 restart. The −₹834 scratch was a 10:51 Sensex trade.
+- **Assessment of the external reviews:**
+  - Of about 25 points, roughly half were real. The real ones were mostly at the boundaries (restarts, latency, margin, multi-leg exits), not in the core maths (costs, IV, greeks, which held up against Sensibull and contract formulas).
+  - About a quarter were already fixed, and several were wrong: the gamma ramp, the exit polling, the 15:20 square-off, and the margin estimates.
+
 ## Owner decisions: margin per strategy, ₹30 plan, expiry exit, backup (13 Nov 2026, noon)
 
 - **Margin:**
@@ -23,7 +44,7 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
   - **Now:** it adds the contract to the feed and retries in 10 s, divergence fires once per 30 min, and the events log drops a repeated strategy line within 30 s.
 - **Restart at 11:43:**
   - **Rebuilt:** opening range and tapes, from the recording.
-  - **Breakthrough's 09:37 trade:** adopted and scratched for **−₹834**. It had run unmanaged since the 09:39 restart; with its rules it would have been scratched around 09:40.
+  - **Breakthrough's 09:37 trade:** *corrected later the same day:* it hit its old 20% stop at 10:34 for −₹2,801 while unmanaged after the 09:39 restart. The −₹834 scratch was a different, 10:51 Sensex trade.
   - **Married future:** its 30-min futures OI and basis history restarts, so it can trade again from about 12:15.
 
 ## External review (Gemini) assessed; batch 1 applied (13 Nov 2026, midday)

@@ -125,6 +125,9 @@ class PaperAccount:
         # latency to the exchange); 0 = the decision's own book (tests, research).
         self.fill_latency_s = 0.0
         self.pending: dict[str, dict[str, Any]] = {}
+        # Net P&L of open positions at the bid (after entry charges), refreshed every step:
+        # an open loss counts toward the daily and weekly loss limits like a realized one.
+        self.open_net = 0.0
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: dict[str, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
@@ -150,9 +153,10 @@ class PaperAccount:
 
     def risk_state(self) -> AccountRiskState:
         losses = [t for t in self.closed if t.net_inr < 0]
+        open_loss = min(0.0, self.open_net)  # open gains do not widen the limit
         return AccountRiskState(
-            realized_daily_pnl_inr=self.realized_net,
-            realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net,
+            realized_daily_pnl_inr=self.realized_net + open_loss,
+            realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net + open_loss,
             # Orders still on their way count as if filled at the price they were sent at.
             open_risk_inr=sum(
                 max(0.0, p.avg_price - p.stop_price) * p.qty for p in self.positions.values()
@@ -384,6 +388,11 @@ class PaperAccount:
     def check_exits(self, books: Mapping[str, Book], now: datetime) -> list[str]:
         """Stops on premium and the square-off time. Returns what happened."""
         out: list[str] = self.fill_pending(books, now)
+        self.open_net = sum(
+            (b.bids[0][0] - p.avg_price) * p.qty - p.entry_charges
+            for s, p in self.positions.items()
+            if (b := books.get(s)) is not None and b.bids
+        )
         for symbol in list(self.positions):
             book = books.get(symbol)
             if book is None or not book.bids:

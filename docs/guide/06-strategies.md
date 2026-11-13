@@ -74,12 +74,14 @@ Code: `engine/cockpit/condor.py`. Settings: `cockpit.condor`. Checked once a min
 6. **Hedge first:** wings bought, then shorts sold, one leg at a time (300 ms apart); a failed short unwinds the filled legs.
 7. **Charges and margin:** the 50% take-profit must be worth at least **3×** the round-trip charges. At ₹30 an order a typical 16-point credit doesn't qualify, so expect fewer condors. The broker margin, about ₹74k live for 150-pt wings, must fit the 50% headroom.
 
-**Exits** (checked every publish):
+**Exits** (checked on every update, about 5 times a second; entries are checked once a minute):
 - **50%** of the credit captured;
 - cost to close ≥ **2×** the credit;
 - the index touches a short strike;
 - a confirmed setup toward a short strike with the index within **0.5%** of it;
 - **15:00 on the day before expiry**.
+- **Either side** costing **2.2×** its own credit to close. A combined stop lets the winning side hide the tested one.
+- **Before a weekend or holiday**, from 15:10: book the structure if it has captured **≥ 80%** of its take-profit, rather than carry gap risk for the last few rupees.
 
 Held overnight. SPAN margin is not modelled; the worst-case loss is used for the gate.
 
@@ -163,6 +165,7 @@ Code: `engine/cockpit/plays_long.py`. These may hold for minutes only because ea
 
   The score is multiplied by **0.4** unless the impulse clears **2.5×** breakeven.
 - **Size:** **65–79 → 1 lot**, **80+ → 2 lots** (with an EMA trail).
+- **Thesis floor** (owner, 13 Nov 2026): the writer-pain + OI-unwinding pillar must be **≥ 30**. A 65 made of book, volume and the direction-blind gamma pillar alone does not qualify.
 - **Page extras:** its detail view shows the latest scores, writer pain, and the **25% / 30% stop-cluster levels**: where writers who sold at the anchor would be stopped out, a projected fuel level.
 
 ### Spoof rug-pull / eaten wall — `spoof_fade` (spoofing notes)

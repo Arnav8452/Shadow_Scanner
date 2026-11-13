@@ -368,7 +368,70 @@ def task_evening(params: dict[str, str]) -> int:
         print("  " + line)
     print(f"{rep.errors} problem(s)")
     backup_rc = task_backup({}) if "backup" not in params.get("SKIP", "") else 0
+    task_audit({})  # nightly rule audit of the day's paper trades (report only)
     return 1 if rep.errors or backup_rc else 0
+
+
+def task_backfill_history(params: dict[str, str]) -> int:
+    """Seed the calendar's term-spread history (NSE bhavcopy closes) and the compression
+    strategy's 15-min band widths (Upstox 1-minute index candles) for the last SESSIONS=20
+    sessions before today, instead of waiting for them to accumulate. Safe to rerun."""
+    raw_dir, book, cal = _eod_common()
+    from engine.cockpit.backfill import backfill
+    from engine.core.config import load_settings
+    from engine.core.env import load_dotenv
+
+    load_dotenv(ROOT / ".env")
+    n = int(params.get("SESSIONS", "20"))
+    sessions: list[date] = []
+    d = _today_ist()
+    while len(sessions) < n:
+        d = cal.previous_trading_day(d)
+        sessions.append(d)
+    sessions.reverse()
+    settings = load_settings()
+    journal_dir = ROOT / str((settings.raw.get("cockpit") or {}).get("journal_dir", "data/state"))
+    for line in backfill(
+        ROOT, raw_dir=raw_dir, book=book, calendar=cal, sessions=sessions,
+        index_keys={"NIFTY": "NSE_INDEX|Nifty 50", "SENSEX": "BSE_INDEX|SENSEX"},
+        journal_dir=journal_dir,
+    ):  # fmt: skip
+        print(line)
+    return 0
+
+
+def task_audit(params: dict[str, str]) -> int:
+    """Check every paper trade in the journals against the hard rules (defined risk, per-trade
+    risk, lots, entry window, trades per day, daily loss, square-off, scalp discipline,
+    accounting). Report in reports/audit/<date>.md. DIR= another journal folder (e.g. a replay).
+    Exit 1 when anything breaks a rule."""
+    sys.path.insert(0, str(ROOT))
+    from engine.cockpit.audit import audit_journals, render
+    from engine.core.config import load_settings
+
+    settings = load_settings()
+    raw = settings.raw
+    ck = raw.get("cockpit") or {}
+    rk = raw.get("risk") or {}
+    jdir = ROOT / (params.get("DIR") or str(ck.get("journal_dir", "data/state")))
+    finds, stats = audit_journals(
+        jdir,
+        capital_inr=float((raw.get("capital") or {}).get("inr", 200000)),
+        directional_pct=float(rk["per_trade_max_loss_pct"]["directional"]),
+        spread_pct=float(rk["per_trade_max_loss_pct"]["defined_risk_spread"]),
+        daily_loss_pct=float(rk["daily_loss_limit_pct"]),
+        max_trades=int(rk["max_trades_per_day"]),
+        max_lots=int(ck.get("paper_max_lots", 2)),
+        lot_of=lambda sym: 20 if sym.startswith("BSE_") else 65,
+    )
+    now = datetime.now(IST)
+    out = ROOT / "reports" / "audit" / f"{now:%Y-%m-%d}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    text = render(finds, stats, now)
+    out.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"-> {out}")
+    return 1 if finds else 0
 
 
 def task_backup(params: dict[str, str]) -> int:

@@ -320,3 +320,34 @@ def test_condor_exit_rules(repo_root: Path, tmp_path: Path) -> None:
     assert "time exit" in str(st.exit_reason(pos, eve, books(25.0, 3.0), 25000.0, quiet))
     out = st.check_exits(later, books(14.0, 2.0), 25000.0, quiet)
     assert out and out[0].startswith("closed iron condor") and not st.account.positions
+
+
+# ---------------------------------------------------------------- 13 Nov 2026 owner rules
+
+
+def test_condor_side_stop_catches_one_tested_side(repo_root: Path, tmp_path: Path) -> None:
+    """Credit 50 = 25 per side. The put side now costs 57 to close (>= 2.2 x 25) while the call
+    side has decayed to 1: the combined 58 is far under the 2x-credit stop (100), but the
+    tested side alone triggers the exit."""
+    st, _ = _strategy(repo_root, tmp_path)
+    assert _open(st.account)[0]
+    pos = st.account.positions[0]
+    books = {WP: _bk(3.0, 3.05), SP: _bk(59.95, 60.0), SC: _bk(1.95, 2.0), WC: _bk(1.0, 1.05)}
+    why = st.exit_reason(pos, T, books, None, {})
+    assert why is not None and why.startswith("put side stop"), why
+
+
+def test_condor_books_before_a_weekend_near_its_target(repo_root: Path, tmp_path: Path) -> None:
+    from datetime import datetime as _dt
+
+    st, _ = _strategy(repo_root, tmp_path)
+    assert _open(st.account)[0]
+    pos = st.account.positions[0]
+    # cost to close 28 of a 50 credit: 22 captured = 88% of the 25-pt take-profit
+    books = {WP: _bk(0.05, 0.1), SP: _bk(13.95, 14.0), SC: _bk(13.95, 14.0), WC: _bk(0.05, 0.1)}
+    fri = _dt(2026, 11, 13, 15, 12, tzinfo=T.tzinfo)
+    thu = _dt(2026, 11, 12, 15, 12, tzinfo=T.tzinfo)
+    why = st.exit_reason(pos, fri, books, None, {})
+    assert why is not None and "market closure" in why, why
+    assert st.exit_reason(pos, fri.replace(hour=15, minute=5), books, None, {}) is None
+    assert st.exit_reason(pos, thu, books, None, {}) is None  # Friday is a trading day

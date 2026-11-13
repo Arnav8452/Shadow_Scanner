@@ -99,6 +99,12 @@ Replays stream the day in 5-minute windows and start within a second. If one is 
 
 ## Development
 
+**The lag in the status line is about −700 ms.**
+That is the PC clock, not the feed: turn on automatic time and press Sync now (§4.1 of the cockpit guide).
+
+**Did every strategy follow its rules today?**
+Run `uv run python tasks.py audit` (it also runs nightly) and read `reports/audit/<date>.md`.
+
 **Tests or lint fail after a change.**
 
 ```bash

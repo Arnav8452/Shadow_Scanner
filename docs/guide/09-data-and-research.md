@@ -146,3 +146,35 @@ Recorded option books cannot be bought back, so the last step of the nightly `ev
 - **No cloud upload by default:** the private trade logs and personal data stay on this machine.
 - **Space:** the run warns when the source or target drive has under 5 GB free. On 13 Nov D: had 16 GB and C: 40 GB free, and a full recording day adds several hundred MB, so plan an external drive within weeks.
 - **By hand:** `uv run python tasks.py backup`, or `TARGET=E:/QuantBackup` for a one-off copy elsewhere.
+
+## 9.11 History you can fetch instead of waiting for
+
+Checked on 13 Nov 2026 with the read-only analytics token (Upstox Plus):
+
+| Data | Source | Depth | Usable for |
+|---|---|---|---|
+| Index 1-minute candles | Upstox `GET /v3/historical-candle/…/minutes/1/…` | Since Jan 2022 | Tapes, opening ranges, band widths, realized vol |
+| Expired Nifty/Sensex options and futures, 1-minute OHLC **with OI** | Upstox `GET /v2/expired-instruments/…` (Plus only) | 111 Nifty expiries, back to Oct 2024 | OI velocity, writer pain, straddles, breakouts: research backtests |
+| End-of-day bhavcopies | NSE (already downloaded nightly) | Years | IV percentile, screener, swing |
+| Historical **bid/ask and order-book depth** | **Nowhere**, at retail prices | — | Only what our recorder has captured |
+
+What this means:
+- **Done:** `tasks.py backfill-history` seeded the compression strategy's 20 sessions of 15-minute band widths from index 1-minute candles. Re-running it is safe.
+- **Not backfillable from end-of-day files:** the calendar's term spread. Far-month closes are stale (12 Nov: forward 25,600 vs spot 25,290, IV 27.7% vs ~14% live). It keeps building from the live chain at each close.
+- **Possible next:** a backtest runner on the expired-option 1-minute candles, giving about two years of OI and price history for the OI, straddle and breakout strategies. Candles have no bid/ask, so fills would use a spread model taken from our recorded spreads, doubled. That is a documented exception to "fills at recorded bid/ask", fit for screening ideas, not for the final verdict.
+- **Only recording can supply:** anything that reads the order book (the score's book pillar, RER, OBI, spoofed and eaten walls, absorption zones, the opening-range breakout), and the final bid/ask-fill verdict on any strategy.
+
+## 9.12 The paper-trade audit
+
+`tasks.py audit` checks every journaled paper trade against the hard rules and writes `reports/audit/<date>.md`. It also runs every night at the end of `evening`. The rules:
+- **R1:** defined risk, and wings before shorts;
+- **R2:** per-trade risk;
+- **R3:** lots;
+- **R4:** entry window;
+- **R5:** trades per day;
+- **R6:** no entries after the daily loss limit;
+- **R7:** square-off;
+- **R8:** a losing scalp is never held more than 10 minutes;
+- **R9:** charges and net arithmetic.
+
+It reads the journals only. `DIR=data/replay/<date>` audits a replay. The first run, on 13 Nov, found exactly one breach: breakthrough's 09:37 put ran without its rules after an engine restart and lost ₹2,801 on its old 20% stop. Restored scalps are now re-adopted.
