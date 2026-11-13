@@ -4,6 +4,16 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Zone rider: tighter risk, time stops, EMA trail (13 Nov 2026, evening)
+
+Owner's second zone-rider note; all four points adopted:
+- **Divergence stop:** 0.12% beyond the 30-min extreme (already built).
+- **Option stop:** at most 12% of premium and ₹1,800, replacing the 35% start that the limit fitting cut to 29%.
+- **No follow-through:** not +3% in 20 min, or −6% after 15 min → out. The new `loss_cut` exit is available to every long play.
+- **Winners:** breakeven at +10%; a 9-EMA trail from +18% (replaces +12%/+20%).
+
+Today's 13:42 Sensex trade lost ₹2,416. The note estimates these rules would have exited near ₹855 (about −₹750). That is unverified: no replay was run.
+
 ## Testing/live plan, condor and zone-rider reviews; faulty trades removed (13 Nov 2026, evening)
 
 **`new/testing_pipeline_and_live_transition_plan.md`:** agreed with the 3 stages.

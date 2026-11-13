@@ -611,8 +611,18 @@ class ZoneRiderPlay(LongPlay):
     # extreme the divergence formed at, plus this margin (13 Nov 2026: 0.12% = ~98 Sensex
     # points, about Rs 1,200 on a 0.6-delta option, instead of a 29% premium stop = Rs 5,136).
     div_stop_pct: float = 0.12
-    # Step trail for the afternoon wave (no target): +12% -> charges breakeven, +20% -> +10%.
-    trail_steps: tuple[tuple[float, float], ...] = ((12.0, 1.0), (20.0, 10.0))
+    # Risk on the option (13 Nov review): the initial stop is at most 12% of premium and
+    # Rs 1,800 on the position (a 0.6-delta option down 12% means the index has moved well
+    # against the zone); a structural stop can make it tighter.
+    max_stop_pct: float = 12.0
+    max_stop_inr: float = 1800.0
+    # No follow-through: not +3% after 20 minutes, or down 6% after 15 -> out.
+    time_stop: tuple[float, float] = (20.0, 3.0)
+    loss_cut: tuple[float, float] = (15.0, 6.0)
+    # Winners: at +10% the stop goes to the charges breakeven (+1%); from +18% it trails the
+    # option's 1-minute 9-EMA, so an afternoon wave keeps most of its gain before 15:20.
+    trail_steps: tuple[tuple[float, float], ...] = ((10.0, 1.0),)
+    ema_after_pct: float = 18.0
     used: set[tuple[str, float]] = field(default_factory=set)
     div_at: dict[str, datetime] = field(default_factory=dict)
 
@@ -705,6 +715,11 @@ class ZoneRiderPlay(LongPlay):
                 continue
             # The structural stop is on the future; translate to the index by the basis.
             basis = (px - m.spot(und)) if px else 0.0
+            stop_pct = self.max_stop_pct
+            bk = m.book(pick[0])
+            ask = bk.asks[0][0] if bk is not None and bk.asks else 0.0
+            if ask > 0:
+                stop_pct = min(stop_pct, self.max_stop_inr / (ask * m.lot(pick[0])) * 100)
             out.append(
                 self.enter(
                     m,
@@ -712,9 +727,12 @@ class ZoneRiderPlay(LongPlay):
                     pick[0],
                     lots=1,
                     bullish=bull,
-                    stop_pct=35,
+                    stop_pct=stop_pct,
                     spot_stop=(stop - basis) if stop is not None else None,
                     trail=self.trail_steps,
+                    time_stop=self.time_stop,
+                    loss_cut=self.loss_cut,
+                    ema_after_pct=self.ema_after_pct,
                     reason=f"{und} {'long' if bull else 'short'} wave: {why}",
                 )
             )

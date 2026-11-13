@@ -200,8 +200,9 @@ Code: `engine/cockpit/plays_long.py`. These may hold for minutes only because ea
 - **Vehicle:** a **0.60 delta** option with ≥ 5 days left.
 - **Exits:**
   - **Structural stop:** the index crosses back through the zone; for a **divergence** entry (no zone), the index goes **0.12%** beyond the 30-minute high (bearish) or low (bullish) the divergence formed at. That is about 98 Sensex points, roughly ₹1,200 on the option.
-  - **Premium backstop:** 1.5× the option's expected move to the structural stop (delta), at least 5% of premium, for gaps. The risk gate books this as the planned loss.
-  - **Step trail:** at **+12%** the stop moves to the charges breakeven (+1%); at **+20%** it locks **+10%**.
+  - **Option stop:** at most **12%** of premium and **₹1,800** on the position (a Sensex option at ₹887 × 20: about 10%). A structural stop can make it tighter (1.5× the option's expected move to it, at least 5%). The risk gate books this as the planned loss.
+  - **No follow-through:** out if not **+3% after 20 minutes**, or if **down 6% after 15 minutes**.
+  - **Winners:** at **+10%** the stop moves to the charges breakeven (+1%); from **+18%** it trails the option's 1-minute **9-EMA**.
   - Otherwise held to the 15:20 square-off (no target, so a trend wave can run).
 - **Why (13 Nov):** a divergence entry at 13:42 had only a 29% premium stop: Sensex would have had to rally 421 points (−₹5,136) before the trade admitted it was wrong, more than the whole ₹4,000 daily limit, and a winning wave had no protection.
 

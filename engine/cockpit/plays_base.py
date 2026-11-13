@@ -292,6 +292,7 @@ class Managed:
     be_pts: float
     ratchet: BreakevenRatchet | None = None
     time_stop: tuple[float, float] | None = None  # (minutes, needed gain %)
+    loss_cut: tuple[float, float] | None = None  # (minutes, max loss %): down that much -> out
     candle_stop_min: float | None = None
     ema_after_pct: float | None = None
     delta_exit: float | None = None
@@ -417,6 +418,7 @@ class LongPlay(Status):
         time_stop: tuple[float, float] | None = None,
         candle_stop_min: float | None = None,
         ema_after_pct: float | None = None,
+        loss_cut: tuple[float, float] | None = None,
         delta_exit: float | None = None,
         target_pct: float | None = None,
         spot_stop: float | None = None,
@@ -511,6 +513,7 @@ class LongPlay(Status):
             "bullish": bullish,
             "ratchet": ratchet,
             "time_stop": time_stop,
+            "loss_cut": loss_cut,
             "candle_stop_min": candle_stop_min,
             "ema_after_pct": ema_after_pct,
             "delta_exit": delta_exit,
@@ -538,6 +541,7 @@ class LongPlay(Status):
             be_pts,
             bullish=spec["bullish"],
             time_stop=spec["time_stop"],
+            loss_cut=spec.get("loss_cut"),
             candle_stop_min=spec["candle_stop_min"],
             ema_after_pct=spec["ema_after_pct"],
             delta_exit=spec["delta_exit"],
@@ -581,6 +585,13 @@ class LongPlay(Status):
                     why = f"time stop: not +{mg.time_stop[1]:g}% in {mg.time_stop[0]:g} min"
                 else:
                     mg.time_stop = None  # it made the move in time: the velocity check is done
+            if (
+                why is None
+                and mg.loss_cut
+                and held_min >= mg.loss_cut[0]
+                and bid <= mg.entry * (1 - mg.loss_cut[1] / 100)
+            ):
+                why = f"no follow-through: down {mg.loss_cut[1]:g}% after {mg.loss_cut[0]:g} min"
             if (
                 why is None
                 and mg.candle_stop_min

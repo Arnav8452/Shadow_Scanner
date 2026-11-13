@@ -94,7 +94,7 @@ def test_structural_stop_sets_the_premium_backstop_and_the_trail(
     assert out.startswith("bought"), (out, p.notes)
     pos = p.account.positions[CE]
     assert pos.stop_price == pytest.approx(pos.avg_price * (1 - 0.165), rel=0.01)
-    assert pos.trail == ((12.0, 1.0), (20.0, 10.0))
+    assert pos.trail == ((10.0, 1.0),)
 
 
 def test_condor_books_before_a_weekend_when_little_is_left_vs_the_gap(
@@ -121,3 +121,38 @@ def test_condor_books_before_a_weekend_when_little_is_left_vs_the_gap(
     st.account.gap_stress = lambda legs, und: {"-8%": -2000.0}  # type: ignore[method-assign]
     assert st.exit_reason(pos, fri, books, None, {}) is None  # the gap is small vs what is left
     assert SimpleNamespace  # keep the import for readers of the fixture style
+
+
+def test_zone_rider_exits_without_follow_through(
+    repo_root: Path,
+    tmp_path: Path,
+    mkt: FakeMarket,  # noqa: F811
+) -> None:
+    from engine.cockpit.plays_long import ZoneRiderPlay
+
+    def opened(name: str) -> ZoneRiderPlay:
+        p = ZoneRiderPlay("zone_rider", "Zone", "z", _account(repo_root, tmp_path / name, "zr"))
+        mkt._books[CE] = _book(99.5, 100.0)
+        mkt.now = T
+        out = p.enter(mkt, "NIFTY", CE, lots=1, reason="t", bullish=True,
+                      stop_pct=p.max_stop_pct, trail=p.trail_steps, time_stop=p.time_stop,
+                      loss_cut=p.loss_cut, ema_after_pct=p.ema_after_pct)  # fmt: skip
+        assert out.startswith("bought"), out
+        return p
+
+    p = opened("a")  # down 7% after 16 minutes: out
+    mkt._books[CE] = _book(92.5, 93.0)
+    mkt.now = T + timedelta(minutes=16)
+    out = p.manage(mkt.now, mkt)
+    assert out and "no follow-through" in p.account.closed[-1].reason, out
+    p = opened("b")  # flat after 21 minutes: not +3% -> out
+    mkt._books[CE] = _book(100.5, 101.0)
+    mkt.now = T + timedelta(minutes=21)
+    p.manage(mkt.now, mkt)
+    assert "time stop" in p.account.closed[-1].reason
+    p = opened("c")  # +5% at 21 minutes: kept, and the 12% stop holds
+    mkt._books[CE] = _book(105.0, 105.5)
+    mkt.now = T + timedelta(minutes=21)
+    assert p.manage(mkt.now, mkt) == [] and CE in p.account.positions
+    pos = p.account.positions[CE]
+    assert pos.stop_price == pytest.approx(pos.avg_price * 0.88, rel=0.01)
