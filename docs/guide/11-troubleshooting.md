@@ -89,7 +89,7 @@ Nights must run in order, and a processed date is never redone. Run the missing 
 `config/rules/holidays.csv` has no rows for that year yet. Add next year's holiday list (each December).
 
 **A full-day replay is slow or uses a lot of memory.**
-On `main`, a replay loads the whole day first. The `replay-streaming` branch fixes this and is waiting to be merged.
+Replays stream the day in 5-minute windows and start within a second. If one is still slow, lower the speed: at max speed the engine can fall behind and drop events (the header shows DROPPED).
 
 ## Development
 

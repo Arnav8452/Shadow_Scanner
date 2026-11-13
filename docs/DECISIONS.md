@@ -11,6 +11,22 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 - **Registry:** the 5.4 calendar row is now `paper` (`CalendarPlay`), no longer "decision function only".
 - **Open:** DECISIONS above (12 Nov) gives the settlement window as 15:00–15:30. `market_sessions.csv` has NSE's F&O closing-price window at 15:10–15:40 since 3 Aug 2026 (primary). The 14:30/14:45 expiry rules still stand, but their reasoning should be re-checked against the current window.
 
+## Replay streams a recorded day in time windows (12 Nov 2026, late night)
+
+- **Problem.** Replaying 12 Nov from the cockpit grew to ~7.4 GB and sat at 0%. `recorded_events` turned every quote tick and `depth30` row of the day into Python dicts before it yielded the first event.
+- **Built.** `recorded_events` now reads 5 minutes of receive time at a time (`window_s`). Each window's `quotes` and `depth30` rows are merged in `(recv_ns, seq)` order. `Store.quotes`/`depth30` gained an exclusive `end`, and `Store.ts_span` lets the reader jump over silent stretches. The depth30-supersedes-5-level rule reads `depth30` times from `hold` before each window to 1 s after it, so books near window edges are decided exactly as before. `as_of`, `start`, the symbol filter and the pacing and gap compression in `ReplayFeed` are unchanged.
+- **Measured on 12 Nov (61 replay symbols, 3,312,135 events), reader alone:**
+
+  | | Old | New |
+  |---|---|---|
+  | First event | 300 s | 0.5 s |
+  | Peak memory | 10.8 GB | 375 MB |
+  | Full pass | 402 s | 174 s |
+
+  A real 10-minute slice gives identical events from both versions. The cockpit replay at max speed finished: 2,731,667 events played, process peak ~1.1 GB.
+- **Tests.** The old whole-day reader is kept in the test as an oracle. On a synthetic day, the new reader gives the same events across window sizes (7 s to 1 day) and across `start`, `as_of`, symbol, snapshot, depth30-off and hold variants. The day has a depth30 symbol entering and leaving across window edges, plus a 2 h gap.
+- **Open.** The rest of the replay process's memory (up to ~1.1 GB) is engine and cockpit state at max speed, not the reader. At max speed the page also showed a large DROPPED count. Neither was investigated here.
+
 ## Every strategy in the owner's notes, on paper (12 Nov 2026, late night)
 
 **Owner decisions, superseding parts of the entry below:**

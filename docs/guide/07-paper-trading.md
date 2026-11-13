@@ -71,7 +71,7 @@ Do not edit journals by hand; delete a day's lines only if you know why (ask fir
 3. All strategies run, the manual ticket works, and every panel behaves as live.
 4. Replay journals go to `data/replay/<date>/` and are wiped at the next replay of that date. Replays never touch live journals or recordings.
 
-Speed `max` runs as fast as the PC can. On `main` today a replay loads the whole day first, which for a full recorded day takes minutes and several GB of memory. The `replay-streaming` branch (not merged yet) reads the day in 5-minute windows instead: it starts in under a second and peaks at about 375 MB. Command-line form:
+Speed `max` runs as fast as the PC can. The day is read in 5-minute windows, so a replay starts in under a second; the reader peaks at about 375 MB and the whole replay process at about 1.1 GB at max speed. At max speed the header may show a large DROPPED count; use a finite speed when you want every event processed. Command-line form:
 
 ```bash
 uv run python tasks.py replay DATE=2026-11-12 SPEED=0

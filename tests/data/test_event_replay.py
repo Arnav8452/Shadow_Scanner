@@ -4,14 +4,18 @@ from the recorder's Parquet files back to events."""
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
+from typing import Any
 
+import pyarrow as pa
 import pytest
 
 from engine.backtest.event_replay import (
     ReplayConfig,
     ReplayContext,
+    _in_d30_window,
+    _ns,
     recorded_events,
     replay_day,
     replay_with_stress,
@@ -222,3 +226,192 @@ def test_recorded_depth30_supersedes_5_level_book_and_walks_deep_levels(
     assert sell.order.avg_fill_price == pytest.approx(98.5)
 
 
+
+
+# --- windowed streaming: same events as reading the whole day at once ---------------------------
+
+
+def _whole_day_events(
+    store: Store,
+    day: date,
+    *,
+    as_of: datetime,
+    start: datetime | None = None,
+    symbols: Sequence[str] | None = None,
+    include_snapshots: bool = False,
+    include_depth30: bool = True,
+    depth30_hold_s: float = 60.0,
+) -> list[Quote | Depth]:
+    """The pre-streaming implementation (whole day via to_pylist, one sort), kept as an oracle."""
+    capture = None if include_snapshots else "tick"
+    q_table = store.quotes(day, as_of=as_of, start=start, symbols=symbols, capture=capture)
+    d30_table = store.depth30(day, as_of=as_of, start=start, symbols=symbols) if include_depth30 else None
+    q_rows = q_table.to_pylist() if q_table.num_rows > 0 else []
+    d30_rows = d30_table.to_pylist() if d30_table is not None and d30_table.num_rows > 0 else []
+    hold_ns = int(depth30_hold_s * NS_PER_S)
+    d30_times: dict[str, list[int]] = {}
+    for r in d30_rows:
+        t_ns = _ns(r["ts"])
+        assert t_ns is not None
+        d30_times.setdefault(str(r["symbol"]), []).append(t_ns)
+    for times in d30_times.values():
+        times.sort()
+    timed: list[tuple[int, int, Quote | Depth]] = []
+    idx = 0
+    for r in q_rows:
+        recv = _ns(r["ts"])
+        assert recv is not None
+        sym = r["symbol"]
+        if r["msg"] in ("quote", "snap") and r.get("quote_recv_ts") is not None:
+            idx += 1
+            timed.append(
+                (recv, idx, Quote(sym, recv, ltp=r["ltp"], oi=r["oi"], bid=r["bid"], bid_qty=r["bid_qty"],
+                                  ask=r["ask"], ask_qty=r["ask_qty"], volume=r["volume"]))
+            )  # fmt: skip
+        if (
+            not _in_d30_window(recv, d30_times.get(str(sym), ()), hold_ns)
+            and r["msg"] in ("depth", "snap")
+            and r.get("depth_recv_ts") is not None
+        ):
+            bids = tuple(
+                (r[f"bid_px_{i}"], r[f"bid_qty_{i}"], r[f"bid_ord_{i}"])
+                for i in range(1, 6)
+                if r[f"bid_px_{i}"] and r[f"bid_qty_{i}"]
+            )
+            asks = tuple(
+                (r[f"ask_px_{i}"], r[f"ask_qty_{i}"], r[f"ask_ord_{i}"])
+                for i in range(1, 6)
+                if r[f"ask_px_{i}"] and r[f"ask_qty_{i}"]
+            )
+            idx += 1
+            timed.append((recv, idx, Depth(sym, recv, bids, asks)))
+    for r in d30_rows:
+        recv = _ns(r["ts"])
+        assert recv is not None
+        bids30 = tuple((float(p), int(q), None) for p, q in zip(r["bid_px"], r["bid_qty"], strict=False) if p and q)
+        asks30 = tuple((float(p), int(q), None) for p, q in zip(r["ask_px"], r["ask_qty"], strict=False) if p and q)
+        idx += 1
+        timed.append((recv, idx, Depth(r["symbol"], recv, bids30, asks30)))
+    timed.sort(key=lambda item: (item[0], item[1]))
+    return [ev for _, _, ev in timed]
+
+
+D30_SYM = "NSE:NIFTY26N1725000CE"  # enters the 30-level watchlist mid-day and rotates out
+PLAIN_SYM = "NSE:NIFTY26N1725100CE"  # 5-level book only
+SNAP_SYM = "NSE:NIFTY26N1724900PE"  # slow contract: snapshot rows only
+
+
+def _quote_row(ms: int, sym: str, msg: str, seq: int, *, capture: str = "tick", px: float = 100.0) -> dict[str, object]:
+    ts = ns_to_us(T0 + ms * 1_000_000)
+    row: dict[str, object] = {
+        "ts": ts, "capture": capture, "msg": msg, "symbol": sym, "underlying": "NIFTY", "kind": "CE",
+        "expiry": WEEKLY, "strike": 25000.0,
+        "quote_recv_ts": ts if msg in ("quote", "snap") else None,
+        "depth_recv_ts": ts if msg in ("depth", "snap") else None,
+        "ltp": px + 0.5, "oi": 1000 + seq, "volume": seq, "bid": px, "bid_qty": 650, "ask": px + 1, "ask_qty": 650,
+        "qc_flags": 0, "conn_id": 1, "seq": seq, "source": "test",
+    }  # fmt: skip
+    for i in range(1, 6):
+        row |= {f"bid_px_{i}": px - 0.5 * (i - 1), f"bid_qty_{i}": 65 * i, f"bid_ord_{i}": i,
+                f"ask_px_{i}": px + 1 + 0.5 * (i - 1), f"ask_qty_{i}": 65 * i, f"ask_ord_{i}": i}  # fmt: skip
+    return row
+
+
+def _d30_row(ms: int, seq: int, *, px: float = 100.0) -> dict[str, object]:
+    return {
+        "ts": ns_to_us(T0 + ms * 1_000_000), "symbol": D30_SYM, "underlying": "NIFTY", "kind": "CE",
+        "expiry": WEEKLY, "strike": 25000.0, "exch_ts": None, "levels": 10,
+        "bid_px": [px - 0.5 * i for i in range(10)], "bid_qty": [650] * 10,
+        "ask_px": [px + 1 + 0.5 * i for i in range(10)], "ask_qty": [650] * 10,
+        "seq": seq, "source": "upstox_d30",
+    }  # fmt: skip
+
+
+@pytest.fixture
+def multi_window_day(tmp_path: Path) -> Path:
+    """~7 minutes of quotes for three contracts plus a 30-level episode, written in several
+    Parquet parts, with rows placed on and around 60 s window edges and a 2 h silent gap."""
+    quotes = DatasetWriter(tmp_path, "quotes", QUOTES_SCHEMA)
+    seq = 0
+    edges = [59_800, 60_000, 119_999, 120_000, 239_000, 250_000, 261_000, 299_600, 300_000]
+    times_ms = [*range(0, 420_000, 3_700), *edges, 7_200_000, 7_200_000, 7_260_500]
+    for k, ms in enumerate(sorted(times_ms)):
+        for sym in (D30_SYM, PLAIN_SYM):
+            seq += 1
+            quotes.append(_quote_row(ms, sym, ("quote", "depth", "snap")[k % 3], seq, px=100 + k % 7))
+        if k % 4 == 0:
+            seq += 1
+            quotes.append(_quote_row(ms, SNAP_SYM, "snap", seq, capture="snap", px=50 + k % 5))
+        if k % 25 == 24:
+            quotes.flush()  # several parts per day, as the live recorder writes them
+    quotes.flush()
+    d30 = DatasetWriter(tmp_path, "depth30", DEPTH30_SCHEMA)
+    d30_ms = [60_300, *range(100_000, 200_001, 5_000), 299_500, 300_500, 7_200_000]
+    for k, ms in enumerate(d30_ms):
+        d30.append(_d30_row(ms, k + 1, px=101 + k % 3))
+    d30.flush()
+    return tmp_path
+
+
+LATE = datetime(2026, 11, 11, 23, 0, tzinfo=IST)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {},
+        {"include_snapshots": True},
+        {"include_depth30": False},
+        {"symbols": [D30_SYM]},
+        {"start": datetime(2026, 11, 11, 10, 1, 30, tzinfo=IST)},  # mid-window, mid-episode
+        {"as_of": datetime(2026, 11, 11, 10, 4, 59, 600_000, tzinfo=IST)},  # 0.4 s before a d30 row
+        {"depth30_hold_s": 15.0},
+    ],
+)
+@pytest.mark.parametrize("window_s", [7.0, 60.0, 61.3, 86_400.0])
+def test_windowed_replay_matches_whole_day_read(
+    multi_window_day: Path, kwargs: dict[str, object], window_s: float
+) -> None:
+    args: dict[str, object] = {"as_of": LATE} | kwargs
+    expected = _whole_day_events(Store(multi_window_day), DAY, **args)  # type: ignore[arg-type]
+    got = list(recorded_events(Store(multi_window_day), DAY, window_s=window_s, **args))  # type: ignore[arg-type]
+    assert len(expected) > 100
+    assert [(type(e).__name__, e.symbol, e.recv_ns) for e in got] == [
+        (type(e).__name__, e.symbol, e.recv_ns) for e in expected
+    ]
+    for g, e in zip(got, expected, strict=True):
+        if isinstance(e, Depth):
+            assert isinstance(g, Depth) and (g.bids, g.asks) == (e.bids, e.asks)
+        else:
+            assert isinstance(g, Quote)
+            assert (g.ltp, g.oi, g.bid, g.ask, g.volume) == (e.ltp, e.oi, e.bid, e.ask, e.volume)
+
+
+def test_depth30_supersedes_5_level_books_across_window_edges(multi_window_day: Path) -> None:
+    evs = list(recorded_events(Store(multi_window_day), DAY, as_of=LATE, window_s=60.0))
+    five = {e.recv_ns - T0 for e in evs if isinstance(e, Depth) and e.symbol == D30_SYM and len(e.bids) == 5}
+    ms = 1_000_000
+    assert 59_800 * ms not in five  # a 30-level book lands 0.5 s later, in the next window
+    assert 250_000 * ms not in five  # 50 s after the last 30-level book, held in the previous window
+    assert 261_000 * ms in five  # 61 s after it: the symbol rotated out, back to the 5-level book
+    assert 299_600 * ms not in five  # 30-level book 0.1 s before and 0.9 s after a window edge
+
+
+class _CountingStore(Store):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.quote_reads = 0
+
+    def quotes(self, *args: Any, **kwargs: Any) -> pa.Table:
+        self.quote_reads += 1
+        return super().quotes(*args, **kwargs)
+
+
+def test_first_events_come_from_one_window_read(multi_window_day: Path) -> None:
+    store = _CountingStore(multi_window_day)
+    it = recorded_events(store, DAY, as_of=LATE, window_s=60.0)
+    first = next(it)
+    assert first.recv_ns == T0 and store.quote_reads == 1  # not the whole day up front
+    rest = list(it)
+    # 7 windows of the first part of the day, then one jump over the 2 h silence (not ~120 reads)
+    assert store.quote_reads < 15 and rest[-1].recv_ns == T0 + 7_260_500 * 1_000_000
