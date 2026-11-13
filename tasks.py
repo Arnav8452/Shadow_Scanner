@@ -12,7 +12,8 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | event-arb | shadow-scan [VERSION=v1_shadow|v2_bot]
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
-                      | candle-backtest STRAT=condor|log3 FROM= [TO=] [CACHE=] [DOTENV=] [TRIALS=]
+                      | candle-backtest STRAT=condor|log3 FROM= [TO=] [SET=k=v] [VARIANTS=0]
+                        [CACHE=] [DOTENV=] [TRIALS=]
 """
 
 from __future__ import annotations
@@ -1368,9 +1369,10 @@ def task_candle_backtest(params: dict[str, str]) -> int:
     STRAT=condor|log3 FROM=YYYY-MM-DD TO=YYYY-MM-DD (default yesterday). Fills at the next
     bar's open with the punitive haircut, rerun at 2x; walk-forward, Monte Carlo and deflated
     Sharpe over every parameter set tried. Order-book strategies are refused. The condor runs
-    its variant grid (each a trial; VARIANTS=0 for the live config only). Report and trades
-    in reports/candle_backtest/. CACHE= another download folder; DOTENV= another .env file;
-    TRIALS= another trial registry."""
+    its variant grid (each a trial; VARIANTS=0 for the live config only). SET=key=value,...
+    changes rule parameters (e.g. SET=side_stop_mult=0); each change is a new trial. Report
+    and trades in reports/candle_backtest/. CACHE= another download folder; DOTENV= another
+    .env file; TRIALS= another trial registry."""
     _raw_dir, book, cal = _eod_common()
     from engine.backtest.candles.data import UpstoxCandleSource
     from engine.backtest.candles.fills import Costs, Haircut
@@ -1481,13 +1483,23 @@ def task_candle_backtest(params: dict[str, str]) -> int:
     wf = cb.get("walk_forward") or {}
     mc = cb.get("monte_carlo") or {}
     variants = [spec.params(ck)]
-    if spec.variants is not None and params.get("VARIANTS", "1") != "0":
+    overrides = params.get("SET", "")
+    if spec.variants is not None and params.get("VARIANTS", "0" if overrides else "1") != "0":
         variants = spec.variants(ck)
+    if overrides:  # e.g. SET=side_stop_mult=0: a new rule, counted as a trial
+        from engine.backtest.candles.strategies import apply_overrides
+
+        try:
+            variants = [apply_overrides(v, overrides) for v in variants]
+        except (ValueError, TypeError) as exc:
+            print(f"SET={overrides}: {exc}", file=sys.stderr)
+            return 2
+    set_tag = "_" + re.sub(r"[^A-Za-z0-9.]+", "-", overrides).strip("-") if overrides else ""
     out = ROOT / "reports" / "candle_backtest"
     out.mkdir(parents=True, exist_ok=True)
     results = []
     for n, var in enumerate(variants):
-        label = str(getattr(var, "label", "")) if len(variants) > 1 else ""
+        label = str(getattr(var, "label", "")) if len(variants) > 1 or overrides else ""
         res = run_candle_backtest(
             spec,
             var,
@@ -1515,15 +1527,13 @@ def task_candle_backtest(params: dict[str, str]) -> int:
             flush=True,
         )
         tag = f"_v{n + 1}" if len(variants) > 1 else ""
-        csv_name = f"{spec.key}_{res.start}_{res.end}{tag}_trades.csv"
+        csv_name = f"{spec.key}_{res.start}_{res.end}{set_tag}{tag}_trades.csv"
         (out / csv_name).write_text(trades_csv(res.base.trades), encoding="utf-8")
         res.notes.append(f"trades of this variant: `{csv_name}`")
     r0 = results[0]
-    md = out / f"{spec.key}_{r0.start}_{r0.end}.md"
+    md = out / f"{spec.key}_{r0.start}_{r0.end}{set_tag}.md"
     parts = [render_variants(results)] if len(results) > 1 else []
-    parts += [
-        render_report(r, "", max_trades=40 if n == 0 else 10) for n, r in enumerate(results)
-    ]
+    parts += [render_report(r, "", max_trades=40 if n == 0 else 10) for n, r in enumerate(results)]
     md.write_text("\n\n---\n\n".join(parts), encoding="utf-8")
     print(f"{src.budget.count} API calls -> {md}")
     return 0

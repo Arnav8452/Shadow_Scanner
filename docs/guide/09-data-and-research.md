@@ -233,6 +233,8 @@ uv run python tasks.py candle-backtest STRAT=log3 FROM=2025-01-01
   - stop at 2.0× or 1.5× the credit (take-profit 50%);
   - a 4-leg iron condor, or a 2-leg credit spread on the side the last 30 minutes of the index favour.
 
+  `SET=key=value,...` changes any rule parameter for a run, e.g. `SET=side_stop_mult=0` (0 switches the per-side stop off). The run gets its own report file and counts as a new trial.
+
   The live weekend rules apply to all of them. From 15:10 before a closure a structure is booked when 80% of the take-profit is in hand, or when what is left is under 10% of its worst ±5/8% gap loss (`engine/cockpit/stress.py`) once 25% is in hand. Each variant reports:
   - the win rate against the break-even win rate, net stop / (net take-profit + net stop), from each trade's own credit and charges;
   - the take-profit as a % of margin (four-leg ₹85,000, two-leg ₹49,500).

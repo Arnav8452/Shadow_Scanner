@@ -21,8 +21,13 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
   - Costs use today's rule tables (STT 0.15%, ₹30 Upstox Plus).
   - Runs start 1 Jan 2025 because holidays, T-bill rates and lot sizes are not loaded for 2024. Late-2024 candles only warm up the IV percentile.
   - Exit rules read last trades and every fill pays the haircut. The first run marked the triggers with the haircut too, and the ₹1.50 floor on ₹5–15 sides fired the side stop on the spread model itself. Those reports are kept as `*_haircut_triggers.md`; the results were similar.
+- **Without the 2.2× side stop** (owner, 14 Nov; trial 9; `SET=side_stop_mult=0`):
+  - 113 trades, 33% wins vs a 79% break-even win rate, **−₹1.20 lakh net** (t −6.4); −₹3.04 lakh in the stress run.
+  - Gross is still only +₹7k with the haircut added back.
+  - Exits: 46 overall stops, 34 take-profits, 19 weekend bookings and 13 time exits.
+  - The loss is smaller mainly because fewer trades and fills pay the haircut and charges, not because the rule gained an edge. The live side stop stays as it is.
 - **Open (owner):**
-  - Neither rule shows an edge on candles. The condor's 2.2× side stop (13 Nov) is what the grid did not vary; testing without it is a new trial.
+  - Neither rule shows an edge on candles.
   - Recorded bid/ask spreads should replace the ₹1.50 floor once there are enough sessions.
   - The event filter and the order-flow veto are not modelled: there is no event history before Nov 2026, and no depth.
 ## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)

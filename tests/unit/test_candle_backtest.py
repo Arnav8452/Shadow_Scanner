@@ -526,3 +526,36 @@ def test_weekend_books_when_little_is_left_vs_the_gap_risk(book: RuleBook) -> No
     wed = next(b for b in src.index_bars(date(2025, 1, 8)) if hhmm(b.start) == "15:14")
     tr2, px2 = _weekend_trade(ctx, wed.start)
     assert _condor_exit(ctx, cfg, tr2, wed, px2) is None  # Thursday trades: no closure
+
+
+def test_overrides_make_a_new_trial(tmp_path: Path) -> None:
+    from engine.backtest.candles.strategies import apply_overrides
+
+    base = CondorVariant(CondorConfig())
+    off = apply_overrides(base, "side_stop_mult=0,wing_widths=150/100")
+    assert off.cfg.side_stop_mult == 0.0 and off.cfg.wing_widths == (150.0, 100.0)
+    assert "side_stop_mult=0" in off.label
+    assert apply_overrides(Log3Params(), "mom_min_pct=0.08").mom_min_pct == 0.08
+    with pytest.raises(ValueError, match="unknown parameter"):
+        apply_overrides(base, "no_such_field=1")
+    now = datetime(2026, 11, 13, tzinfo=IST)
+    p = tmp_path / "t.jsonl"
+    assert register_trial(p, "condor", base, now)[1] == 1
+    assert register_trial(p, "condor", off, now)[1] == 2
+
+
+def test_side_stop_zero_means_off(book: RuleBook) -> None:
+    from dataclasses import replace
+
+    days = _weekdays(date(2025, 1, 6), date(2025, 1, 16))
+    src = Synth(days, _calm, lambda di: 0.13)
+    ctx = _ctx(book, src)
+    wed = next(b for b in src.index_bars(date(2025, 1, 8)) if hhmm(b.start) == "11:00")
+    tr, px = _weekend_trade(ctx, wed.start)
+    for lg in tr.legs:  # the put side now costs 3x its credit to close; the whole far less
+        if lg.kind == "PE" and lg.side == "SELL":
+            lg.entry_px = 1.0 + (px["23000PE"] - px["22900PE"]) / 3
+    tr.credit_pts = sum(lg.entry_px if lg.side == "SELL" else -lg.entry_px for lg in tr.legs)
+    cfg = CondorConfig(stop_mult=99.0, exit_on_short_touch=False)
+    assert "put side stop" in (_condor_exit(ctx, cfg, tr, wed, px) or "")
+    assert _condor_exit(ctx, replace(cfg, side_stop_mult=0.0), tr, wed, px) is None

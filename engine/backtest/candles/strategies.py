@@ -439,7 +439,8 @@ def _condor_exit(
         side_cr = sum(lg.entry_px for lg in legs if lg.side == "SELL") - sum(
             lg.entry_px for lg in legs if lg.side == "BUY"
         )
-        if side_cr > 0 and _ctc(ctx, tr, px, kind) >= side_cr * cfg.side_stop_mult:
+        stop_x = cfg.side_stop_mult  # 0 or less = no per-side stop (a backtest variant)
+        if stop_x > 0 and side_cr > 0 and _ctc(ctx, tr, px, kind) >= side_cr * stop_x:
             return f"{name} side stop ({cfg.side_stop_mult:g}x its credit)"
     if cfg.exit_on_short_touch:
         sp = [lg.strike for lg in tr.legs if lg.open and lg.side == "SELL" and lg.kind == "PE"]
@@ -770,6 +771,41 @@ def simulate_log3(ctx: Ctx, sessions: Sequence[date], p: Log3Params) -> SimOut:
     return SimOut(trades, skips, list(sessions))
 
 
+def _coerce(old: Any, raw: str) -> Any:
+    if isinstance(old, bool):
+        if raw.lower() not in ("true", "false", "1", "0"):
+            raise ValueError(f"expected true/false, got {raw!r}")
+        return raw.lower() in ("true", "1")
+    if isinstance(old, int):
+        return int(raw)
+    if isinstance(old, float):
+        return float(raw)
+    if isinstance(old, tuple):
+        return tuple(float(x) for x in raw.split("/") if x)
+    return raw
+
+
+def apply_overrides(params: Any, text: str) -> Any:
+    """``"side_stop_mult=0,short_delta=0.2"`` -> a copy of ``params`` with those fields set
+    (on ``.cfg`` for a ``CondorVariant``; tuples as ``200/150``). Every override is a new rule,
+    so the trial registry counts it."""
+    from dataclasses import fields, replace
+
+    pairs = [x.split("=", 1) for x in text.split(",") if x.strip()]
+    target = params.cfg if isinstance(params, CondorVariant) else params
+    names = {f.name for f in fields(target)}
+    changes: dict[str, Any] = {}
+    for key, raw in pairs:
+        key = key.strip()
+        if key not in names:
+            raise ValueError(f"unknown parameter {key!r} for {type(target).__name__}")
+        changes[key] = _coerce(getattr(target, key), raw.strip())
+    new = replace(target, **changes)
+    if isinstance(params, CondorVariant):
+        return replace(params, cfg=new, label=f"{params.label}; {text}")
+    return new
+
+
 # ============================================================================= registry
 
 
@@ -862,6 +898,7 @@ __all__ = [
     "SimOut",
     "StrategyRefused",
     "StrategySpec",
+    "apply_overrides",
     "condor_variants",
     "resolve",
     "simulate_condor",
