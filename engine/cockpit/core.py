@@ -768,6 +768,8 @@ class CockpitCore:
                 for sacct in self.spread_accounts():
                     for text in sacct.process_executions(books, now):
                         self.event(sacct.name, text, now)
+                    for text in sacct.carry_check(books, now):
+                        self.event(sacct.name, text, now)
                 for acct in self.long_accounts():
                     for text in acct.check_exits(books, now):
                         self.event(acct.name, text, now)

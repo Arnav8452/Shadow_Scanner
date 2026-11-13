@@ -33,6 +33,18 @@ Code: `engine/risk/limits.py` (`check_pre_trade_risk_gate`). Every paper entry, 
 | Margin cap per strategy | That strategy's own used + proposed broker margin ≤ **100% of capital (₹2,00,000)**, so each strategy stays executable alone in the real account. Strategies never block each other: each has its own account (owner, 13 Nov 2026). Live trading keeps the approved 50% (`risk.margin_headroom_max_used_pct`). Long options count their premium. | `margin_headroom_violated` |
 | Charges vs target (credit spreads) | Take-profit ≥ 3× round-trip charges (`cockpit.credit_charges_mult`) | `charges: take-profit … is under 3x the round-trip charges …` |
 
+**Vol-managed sizing** (SPEC 5.7, `cockpit.vol_sizing`). Code: `engine/cockpit/vol_sizing.py`.
+- **Factor:** the median 20-day realized vol of the index over the last year ÷ its latest 20-day realized vol, clamped to 0.5–1.5. Closes up to yesterday only; stock options use Nifty. Shown in the engine log at start.
+- **Never sizes up.** Below 1, a 2-lot entry becomes `floor(2 × factor)` = 1 lot. One lot stays one lot.
+- **Skip:** below **0.6** (realized vol about 1.7× its median), new entries are refused on every account, spreads included. Exits are never touched.
+- **13 Nov 2026:** Nifty 0.71 (RV20 17.0% vs 12.1%), Sensex 0.70, Bank Nifty 0.75, so 2-lot entries trade 1 lot for now.
+
+**Gap stress** (SPEC 6, `cockpit.gap_scenarios`). Code: `engine/cockpit/stress.py`.
+- **What it shows:** every open structure's P&L if the index gapped −8%, −5%, +5% or +8% now. Each option leg is repriced with Black-76 on our forward, IV and variance clock; IV rises 8 / 5 vol points on the down gaps and falls 2 / 3 on the up gaps. The night's time decay is ignored and wider spreads after a gap are not modelled, so real fills would be worse.
+- **Where:** the **Gap stress** line on every spread card; red when the worst case exceeds the per-trade spread limit (₹10,000).
+- **Carry rule:** from **15:10**, a structure on an overnight account (condor, calendar, compression, synthetic, married future) whose worst gap loss exceeds that limit is **closed instead of carried** (`cockpit.gap_carry`). A synthetic future's stop-based planned loss does not bound a gap through the stop; this does.
+- **Why ±5/8%:** 4 Jun 2024 (election results) closed about 6% down.
+
 On top of the gate, the paper accounts refuse:
 - anything but **long options** on single-leg accounts (no naked shorts, ever);
 - a second position in the same contract;

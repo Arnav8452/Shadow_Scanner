@@ -60,7 +60,8 @@ Each value is marked inline as **APPROVED** (owner decision: do not change witho
 |---|---|
 | `engine_version`, `capital` | v1_shadow / v2_bot; account size |
 | `shadow_scanner` | Scanner thresholds, eligibility filters, grades, Kelly guards, paper ledger times, cost plan |
-| `cockpit` | Ports, publish rates, the bot, directional, setups, condor, debit and gamma settings, reading cut-offs, expiry-day rules, paper lots, manual stop default, `plays` on/off |
+| `cockpit` | Ports, publish rates, the bot, directional, setups, condor, debit and gamma settings, reading cut-offs, expiry-day rules, paper lots, manual stop default, `plays` on/off, vol-managed sizing (`vol_sizing`, `vol_sizing_skip_below`), gap stress (`gap_scenarios`, `gap_carry`, `gap_carry_time`) |
+| `analytics` | The variance clock weights (`variance_clock.overnight` 0.49, `non_trading_day` 0.31), measured from daily candles |
 | `risk`, `execution` | The approved limits and order rules above |
 | `event_arb` | The event-arbitrage sleeve (approved; information only) |
 | `recorder` | Symbol caps, what to record, strike band, expiries, QC thresholds |

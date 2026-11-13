@@ -19,7 +19,14 @@ minute tape ─► CVD, ATR, VWAP, opening range, straddle, IV changes, OI veloc
 Options are priced off the forward, not spot or the future. For 3–5 strikes near the money, `F = K + e^(rT)·(C_mid − P_mid)`; the median is used. `r` is the 91-day T-bill rate from `config/rules/risk_free_rate.csv`.
 
 ### Implied volatility and greeks
-Black-76 on the **mid price** of each option, against that expiry's synthetic forward, solved with `scipy`. Time to expiry is counted in **trading minutes** to the session close (15:40 since 3 Aug 2026), so overnight and weekends don't inflate IV. Delta, gamma, theta (₹/lot/day), vega (₹/lot/vol point), vanna and charm follow from the same model.
+Black-76 on the **mid price** of each option, against that expiry's synthetic forward, solved with `scipy`. Delta, gamma, theta (₹/lot/day), vega (₹/lot/vol point), vanna and charm follow from the same model.
+
+**Time to expiry: the variance clock** (SPEC §4, since 13 Nov 2026). Time is counted in units of variance, not calendar days:
+- **Trading minutes** to the session close (15:40 since 3 Aug 2026) count in full.
+- **Each night** between sessions adds **0.49** of a session.
+- **Each weekend or holiday day** adds another **0.31** of a session.
+- **Where the weights come from:** Nifty daily candles since 2020 (Upstox). Overnight weight = the mean squared close-to-open move over one night ÷ the mean squared open-to-close move; the extra per non-trading day comes from nights spanning a weekend. The top 1% of moves are trimmed so a few event days don't set the clock. Code: `engine/analytics/variance_clock.py`; set in `analytics.variance_clock`.
+- **Why it matters:** counting trading minutes only treated a weekend as zero time, which inflated IV on Fridays and deflated it on Mondays. Counting calendar time over-counts nights. Nifty ATM IV read 16.3% on 13 Nov with the new clock; IV history and the screener cache were rebuilt with it.
 
 **One IV per strike.** Greeks for both the call and the put at a strike use the **out-of-the-money option's IV**: the call at or above the forward, the put below it. This is how the market quotes the smile (Sensibull does the same).
 - **Why:** a deep in-the-money option trades inside a wide spread with little time value, so the IV solved from its own mid is unreliable. On 13 Nov at 09:30 the 24400 call's own mid gave delta 0.99 and vega 0.7, while parity with the 24400 put (delta −0.05) says 0.95.

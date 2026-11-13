@@ -89,6 +89,14 @@ class CockpitConfig:
     paper_margin_cap_pct: float = 100.0
     # Gate 2 for short holds: "volatility" (ATR-aware, 13 Nov 2026) or "charges" (12 Nov).
     gate2_mode: str = "volatility"
+    # SPEC 5.7 vol-managed sizing: factor = median RV20 / RV20, clamped; never sizes up.
+    vol_sizing: bool = True
+    vol_sizing_skip_below: float = 0.6
+    # SPEC 6 gap stress: (gap %, IV shift vol pts); overnight structures over the per-trade
+    # spread limit at the worst scenario are closed at gap_carry_time.
+    gap_scenarios: tuple[tuple[float, float], ...] = ((-8, 8), (-5, 5), (5, -2), (8, -3))
+    gap_carry: bool = True
+    gap_carry_time: str = "15:10"
     # Short option legs expiring today are closed by this time, before the 15:10-15:40 closing
     # VWAP window that sets their settlement (owner delegated, 13 Nov 2026).
     spread_expiry_exit: str = "15:00"
@@ -255,6 +263,14 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         credit_charges_mult=float(raw.get("credit_charges_mult", 3.0)),
         paper_margin_cap_pct=float(raw.get("paper_margin_cap_pct", 100.0)),
         gate2_mode=str(raw.get("gate2_mode", "volatility")),
+        vol_sizing=bool(raw.get("vol_sizing", True)),
+        vol_sizing_skip_below=float(raw.get("vol_sizing_skip_below", 0.6)),
+        gap_scenarios=tuple(
+            (float(g), float(v))
+            for g, v in (raw.get("gap_scenarios") or ((-8, 8), (-5, 5), (5, -2), (8, -3)))
+        ),
+        gap_carry=bool(raw.get("gap_carry", True)),
+        gap_carry_time=str(raw.get("gap_carry_time", "15:10")),
         spread_expiry_exit=str(raw.get("spread_expiry_exit", "15:00")),
         feed_stale_s=float(
             (settings.raw.get("execution") or {}).get("disconnect_kill_after_s", 10)

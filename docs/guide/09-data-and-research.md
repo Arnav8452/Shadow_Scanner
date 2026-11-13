@@ -110,6 +110,18 @@ Related commands:
   ```
 
   The PDF must live in `data/private/` (gitignored). Names and account IDs are stripped on import. Never put values from these logs into fixtures, outputs or commits.
+- **Log-3 entry features** (SPEC 5.2 `log3_entry_features`): where was the index at each of the funded trader's entries?
+
+  ```bash
+  uv run python tasks.py log3-features
+  ```
+
+  - **Input:** `data/private/mined/log3_fills.csv` (from `mine-log`). Scale-ins in the same direction within 10 minutes count as one trade idea.
+  - **Data:** Upstox 1-minute index candles for each session.
+  - **Features, signed in the trade's direction:** time of day, distance from the session's mean price (a VWAP proxy; the index has no volume), position vs the 15-minute opening range, trend since the open, 15-minute momentum, distance from the day's high (calls) or low (puts), and whether the last 5 minutes made a new extreme.
+  - **Control:** the same features every 5 minutes from 10:00 to 14:00 in the same sessions. The best one-condition rules are ranked by entries caught minus other minutes caught.
+  - **Output:** a report next to the CSV, private and gitignored.
+  - **First run, 13 Nov 2026:** 15 trade ideas in 10 sessions (Sensex options, Sep–Oct 2026). 13 of 14 measured entries came after a **15-minute push of at least about +0.05% in the trade's direction**, a condition true at only 29% of other minutes. Entries also sat closer to the day's extreme (median 0.04% vs 0.15%) and above the opening range. This is a **HYPOTHESIS** from 10 sessions: test it on sessions the log never saw before it changes the §5.2 trigger.
 - **Self-review** of your own journal (behaviour: revenge trades, size after losses, time-of-day):
 
   ```bash

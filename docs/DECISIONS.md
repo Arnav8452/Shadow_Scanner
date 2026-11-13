@@ -4,6 +4,14 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Variance clock, Log-3 entry features, vol-managed sizing, gap stress (13 Nov 2026, afternoon)
+
+- **Variance clock (SPEC 4):** time to expiry = trading minutes + 0.49 session per night + 0.31 per weekend/holiday day, calibrated on Nifty daily candles since 2020 (trimmed 1%). `engine/analytics/variance_clock.py`, `analytics.variance_clock`; every task applies it. IV history and the 253-session screener cache were rebuilt; Nifty ATM IV reads 16.3% on it. Tests keep the old clock (weights 0) unless they set it.
+- **Log-3 entry features (SPEC 5.2):** `tasks.py log3-features`, `engine/research/log3_entry_features.py`. 15 ideas / 10 sessions: 93% of entries followed a ≥ ~0.05% 15-min push in the trade's direction (29% of other minutes), near the day's extreme, above the opening range. HYPOTHESIS: not wired into 5.2 until it holds on unseen sessions. The report stays in `data/private/`.
+- **Vol-managed sizing (SPEC 5.7):** factor = median RV20 (1y) / RV20, clamped 0.5–1.5; never sizes up; 2 lots → floor(2 × factor); skip under 0.6. Daily closes from Upstox, cached once a day. Today 0.70–0.75, so 2-lot entries trade 1 lot.
+- **Gap stress (SPEC 6):** ±5/8% with IV +8/+5 and −2/−3 vol pts, Black-76 per leg, on every spread card. Overnight accounts close a structure from 15:10 when its worst gap loss exceeds the ₹10,000 per-trade spread limit. The live condor (150-pt wings) shows about −₹8.2k worst: carried.
+- **Open:** whether the 0.6 skip should also apply to debit (long-vol) structures; whether the carry rule should convert rather than close (e.g. buy a nearer wing). Calibrate the IV shifts per scenario from VIX history.
+
 ## Gate-2 notes vs our review: best of both built (13 Nov 2026, afternoon)
 
 Compared the owner's `new/gate2_volatility_and_spec_audit.md` with today's review and with the code and SPEC:
@@ -17,9 +25,9 @@ Compared the owner's `new/gate2_volatility_and_spec_audit.md` with today's revie
 | Local NSE SPAN | Superseded: live Upstox margin quotes (SPAN + exposure + hedge benefit) plus a table | — |
 | Condor adjustments, wing cost (SPEC 5.1) | Right | Untested side booked at 85% decay while the other is tested (1 adjustment); first-candle gap rule; wing cost % recorded |
 | Liquidity-vacuum guard (SPEC 7) | Right | Spread/depth vs the last minute; entries wait, stops wait up to 3 s unless a hard limit |
-| Variance-time clock (SPEC 4) | Right that SPEC asks for it | Not yet: calibrate overnight/weekend weights from Upstox daily candles (since 2000) before switching, as it moves every IV |
-| Log-3 entry features (SPEC 5.2) | Right: 5.2 runs on our trigger, not the log's | Not yet: needs the private log and 1-min candles at its entries (Upstox has them since 2022) |
-| "Five things first": vol sizing (5.7), gap stress (6) | Right, not built | Next |
+| Variance-time clock (SPEC 4) | Right that SPEC asks for it | Built (see above): 0.49 per night, 0.31 per non-trading day |
+| Log-3 entry features (SPEC 5.2) | Right: 5.2 runs on our trigger, not the log's | Built (see above): a momentum hypothesis to test |
+| "Five things first": vol sizing (5.7), gap stress (6) | Right, not built | Built (see above) |
 
 ## Owner-approved fixes 1–4, slimmer header, history backfill, the paper-trade audit (13 Nov 2026, afternoon)
 

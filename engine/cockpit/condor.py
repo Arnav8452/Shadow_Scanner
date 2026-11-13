@@ -43,6 +43,7 @@ from typing import Any
 
 from engine.backtest.costs import fno_charges
 from engine.cockpit.paper import EXIT_PROTECTION_PCT, Book
+from engine.cockpit.stress import DEFAULT_SCENARIOS, gap_pnl, worst
 from engine.core.config import RiskLimits
 from engine.core.rules import IST, RuleBook
 from engine.execution.leg_sequencer import SpreadLegIntent, sequence_entry_legs
@@ -235,6 +236,16 @@ class SpreadAccount:
         self.executions: list[dict[str, Any]] = []
         self.open_net = 0.0  # open structures' net at the cost to close, refreshed every step
         self.liquidity: Any = None  # shared LiquidityMonitor, set by the cockpit
+        self.vol_sizing: Any = None  # SPEC 5.7 VolSizing (spreads: skip only), set by the cockpit
+        # SPEC 6 gap stress: LiveAnalytics (IV detail, spots), the scenarios, and whether this
+        # account's structures are held overnight (then a structure whose worst gap loss exceeds
+        # the per-trade spread limit is closed at ``gap_carry_time`` instead of carried).
+        self.analytics: Any = None
+        self.gap_scenarios: tuple[tuple[float, float], ...] = DEFAULT_SCENARIOS
+        self.holds_overnight = False
+        self.gap_carry: bool = True
+        self.gap_carry_time = "15:10"
+        self._carry_said: dict[str, date] = {}
         # Credit structures: the take-profit must be worth this many round-trips of charges
         # (0 = off). Set from cockpit.credit_charges_mult.
         self.charges_mult = 0.0
@@ -462,6 +473,12 @@ class SpreadAccount:
                 vac = self.liquidity.vacuum(lg.symbol, books[lg.symbol])
                 if vac:
                     return self._refuse(structure, now, f"{lg.strike:g} {lg.kind}: {vac}")
+        if self.vol_sizing is not None:
+            # SPEC 5.7: a 1-lot structure cannot be cut, so high realized vol skips it.
+            n, note, vctx = self.vol_sizing.size(legs[0].symbol, 1, now.astimezone(IST).date())
+            if n <= 0:
+                return self._refuse(structure, now, note or "vol-managed sizing")
+            context = {**dict(context or {}), **vctx}
         est_credit = sum(books[s.symbol].bids[0][0] for s in shorts) - sum(
             books[w.symbol].asks[0][0] for w in wings
         )
@@ -666,6 +683,46 @@ class SpreadAccount:
             f"credit {pos.credit_pts:.2f}, paid {debit:.2f}, net ₹{trade.net_inr:,.0f}"
         )
 
+    # ------------------------------------------------------------------ gap stress
+
+    def gap_stress(self, legs: Sequence[Leg], underlying: str) -> dict[str, float] | None:
+        a = self.analytics
+        if a is None:
+            return None
+        spot = (getattr(a, "strip", {}).get(underlying) or {}).get("spot")
+        return gap_pnl(legs, getattr(a, "detail", {}) or {}, spot, self.gap_scenarios)
+
+    def gap_cap(self) -> float:
+        return float(
+            self.limits.inr(self.limits.per_trade_max_loss_pct.get("defined_risk_spread", 0.0))
+        )
+
+    def carry_check(self, books: Mapping[str, Book], now: datetime) -> list[str]:
+        """SPEC 6: from ``gap_carry_time``, a structure held overnight whose worst +-5/8% gap
+        loss exceeds the per-trade spread limit is closed rather than carried (e.g. a synthetic
+        future, whose stop-based planned loss does not bound a gap past the stop)."""
+        if not (self.holds_overnight and self.gap_carry and self.positions):
+            return []
+        if now.astimezone(IST).strftime("%H:%M") < self.gap_carry_time:
+            return []
+        cap = self.gap_cap()
+        out: list[str] = []
+        for pos in list(self.positions):
+            if any(lg.symbol in self.executing_symbols() for lg in pos.legs):
+                continue
+            w = worst(self.gap_stress(pos.legs, pos.underlying))
+            if w is None or cap <= 0 or -w[1] <= cap:
+                continue
+            ok, text = self.close(
+                pos, books, now,
+                f"gap stress: a {w[0]} overnight gap would lose Rs {-w[1]:,.0f} > the "
+                f"Rs {cap:,.0f} per-trade limit; not carried",
+            )  # fmt: skip
+            if ok or self._carry_said.get(pos.id) != now.astimezone(IST).date():
+                out.append(text)
+                self._carry_said[pos.id] = now.astimezone(IST).date()
+        return out
+
     def close_side(
         self, pos: SpreadPosition, kind: str, books: Mapping[str, Book], now: datetime, reason: str
     ) -> tuple[bool, str]:
@@ -850,6 +907,8 @@ class SpreadAccount:
                     "reason": p.reason,
                     "legs": legs,
                     "margin": p.margin,
+                    "stress": self.gap_stress(p.legs, p.underlying),
+                    "stress_cap": self.gap_cap(),
                     "context": {
                         k: p.context[k] for k in ("wing_cost_pct", "adjustments") if k in p.context
                     },

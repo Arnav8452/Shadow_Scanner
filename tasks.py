@@ -33,6 +33,19 @@ PLANNED: dict[str, str] = {}
 _TASK = ""  # the running task's name, set in main()
 
 
+def _apply_analytics_settings() -> None:
+    """Process-wide analytics settings every task shares (the IV variance clock)."""
+    sys.path.insert(0, str(ROOT))
+    try:
+        from engine.analytics.expiry_clock import set_variance_weights
+        from engine.core.config import load_settings
+
+        vc = (load_settings().raw.get("analytics") or {}).get("variance_clock") or {}
+        set_variance_weights(float(vc.get("overnight", 0)), float(vc.get("non_trading_day", 0)))
+    except Exception as exc:  # a broken setting must not stop recording
+        print(f"variance clock not set ({type(exc).__name__}); using trading minutes")
+
+
 def run(*cmd: str) -> int:
     print("+", " ".join(cmd), flush=True)
     return subprocess.call(list(cmd), cwd=ROOT)
@@ -432,6 +445,37 @@ def task_audit(params: dict[str, str]) -> int:
     print(text)
     print(f"-> {out}")
     return 1 if finds else 0
+
+
+def task_log3_features(params: dict[str, str]) -> int:
+    """SPEC 5.2 research: the index's state at each Log-3 entry (1-minute candles from Upstox)
+    vs the same sessions' other minutes, and the simplest separating rule. Reads
+    data/private/mined/log3_fills.csv (FILE= another mined fills CSV); writes the report next
+    to it (private, gitignored)."""
+    sys.path.insert(0, str(ROOT))
+    import csv as _csv
+
+    from engine.cockpit.backfill import index_minute_candles
+    from engine.core.env import get_secret, load_dotenv
+    from engine.research.log3_entry_features import analyze, group_ideas, render
+
+    load_dotenv(ROOT / ".env")
+    src = Path(params.get("FILE") or ROOT / "data" / "private" / "mined" / "log3_fills.csv")
+    rows = list(_csv.DictReader(src.open(encoding="utf-8")))
+    if not rows:
+        print("no fills")
+        return 1
+    sensex = str(rows[0]["instrument"]).startswith("SENSEX")
+    key = "BSE_INDEX|SENSEX" if sensex else "NSE_INDEX|Nifty 50"
+    tok = (
+        get_secret("UPSTOX_ACCESS_TOKEN").reveal() or get_secret("UPSTOX_ANALYTICS_TOKEN").reveal()
+    )
+    res = analyze(group_ideas(rows), lambda d: index_minute_candles(key, d, tok))
+    out = src.with_name(src.stem.replace("_fills", "") + "_entry_features.md")
+    out.write_text(render(res), encoding="utf-8")
+    print(render(res))
+    print(f"-> {out} (private)")
+    return 0
 
 
 def task_backup(params: dict[str, str]) -> int:
@@ -1312,6 +1356,7 @@ def main(argv: list[str]) -> int:
     name, rest = argv[0], argv[1:]
     global _TASK
     _TASK = name  # each task logs to logs/engine_<task>.log (see setup_logging)
+    _apply_analytics_settings()
     params = dict(a.split("=", 1) for a in rest if "=" in a)
     if name in PLANNED:
         print(f"'{name}' is not built yet — planned in {PLANNED[name]}.", file=sys.stderr)

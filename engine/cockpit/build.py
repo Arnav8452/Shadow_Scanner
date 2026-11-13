@@ -214,8 +214,18 @@ def build_cockpit(
             p.expiry_exit = ccfg.spread_expiry_exit
         if hasattr(p, "gate2_mode"):
             p.gate2_mode = ccfg.gate2_mode
+    vs = _vol_sizing(ccfg, root, day, source, master)
     for acct in [*spread_accts, *core.long_accounts()]:
         acct.liquidity = core.liquidity
+        acct.vol_sizing = vs
+    for acct in spread_accts:
+        acct.analytics = core.analytics
+        acct.gap_scenarios = ccfg.gap_scenarios
+        acct.gap_carry, acct.gap_carry_time = ccfg.gap_carry, ccfg.gap_carry_time
+    spread.holds_overnight = True  # the iron condor
+    for p in core.plays:
+        if hasattr(p, "plan") and getattr(p, "overnight", False):
+            p.account.holds_overnight = True
     for acct in spread_accts:
         acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
         acct.leg_gap_s = ccfg.paper_leg_gap_ms / 1000
@@ -458,3 +468,29 @@ def _constituents(settings: Settings, rs: RecorderSettings) -> dict[str, tuple[s
         except ValueError:
             continue
     return out
+
+
+def _vol_sizing(ccfg: Any, root: Path, day: date, source: str, master: InstrumentMaster) -> Any:
+    """SPEC 5.7 overlay, or None when disabled. Daily index closes come from the cache, and
+    from Upstox (once a day) on the live feed only; replay and simulation never fetch."""
+    if not ccfg.vol_sizing:
+        return None
+    from engine.cockpit.margin import _token
+    from engine.cockpit.vol_sizing import VolSizing, load_daily_closes, upstox_daily
+
+    tok = _token() if source == "live" else None
+    closes = load_daily_closes(
+        root / "data" / "state" / "index_daily.json",
+        datetime.now(IST).date(),
+        upstox_daily(tok) if tok else None,
+    )
+
+    def underlying_of(sym: str) -> str:
+        return master.get(sym).underlying if sym in master else "NIFTY"
+
+    vs = VolSizing(closes, skip_below=ccfg.vol_sizing_skip_below, underlying_of=underlying_of)
+    for und in sorted(closes):
+        f = vs.factor(und, day)
+        if f is not None:
+            log.info("vol sizing %s: factor %.2f (RV20 %.1f%%, median %.1f%%)", und, *f)
+    return vs

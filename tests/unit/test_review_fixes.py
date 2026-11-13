@@ -140,3 +140,49 @@ def test_band_widths_from_minute_candles_match_the_live_tape() -> None:
                 25000 + i, 25001 + i, 24999 + i, 25000.5 + i, 0, 0] for i in range(120)]  # fmt: skip
     ws = widths_from_candles("NIFTY", candles)
     assert len(ws) > 10 and all(w > 0 for w in ws)
+
+
+def test_variance_clock_weights_overnight_and_weekend_time(repo_root: Path) -> None:
+    from datetime import date, datetime
+
+    from engine.analytics.expiry_clock import expiry_clock, set_variance_weights
+    from engine.analytics.variance_clock import calibrate
+    from engine.core.calendar import TradingCalendar
+    from engine.core.rules import IST, RuleBook
+
+    book = RuleBook.load(repo_root / "config" / "rules")
+    cal = TradingCalendar.from_rulebook(book)
+    fri = datetime(2026, 11, 13, 15, 0, tzinfo=IST)  # Friday; expiry Tuesday 17 Nov
+    try:
+        set_variance_weights(0.0, 0.0)
+        plain = expiry_clock(fri, date(2026, 11, 17), book=book, calendar=cal)
+        set_variance_weights(0.49, 0.31)
+        weighted = expiry_clock(fri, date(2026, 11, 17), book=book, calendar=cal)
+    finally:
+        set_variance_weights(0.0, 0.0)
+    assert weighted.trading_minutes == plain.trading_minutes
+    # 40 min Fri + 2 sessions, plus 2 overnights (0.98) and a weekend (0.62) of variance,
+    # over a year of 252 x 1.49 + 113 x 0.31 sessions.
+    sess = (40 + 2 * 385) / 385
+    want = (sess + 0.98 + 0.62) / (252 * 1.49 + 113 * 0.31)
+    assert weighted.t_var == pytest.approx(want, rel=1e-3)
+    assert weighted.t_var > plain.t_var  # the weekend adds variance time
+
+    # calibration: nights carry a quarter of a session's variance, weekend days a tenth more
+    import math
+
+    rows, px = [], 100.0
+    d0 = date(2025, 1, 6)
+    for i in range(400):
+        day = date.fromordinal(d0.toordinal() + i)
+        if day.weekday() >= 5:
+            continue
+        gap_days = 3 if day.weekday() == 0 else 1
+        night = (0.25 + 0.10 * (gap_days - 1)) ** 0.5 * 0.01 * (1 if i % 2 else -1)
+        o = px * math.exp(night)
+        c = o * math.exp(0.01 * (1 if i % 3 else -1))
+        rows.append([day.isoformat(), o, max(o, c), min(o, c), c])
+        px = c
+    w = calibrate(rows, trim=0.0)
+    assert w.overnight == pytest.approx(0.25, abs=0.02)
+    assert w.non_trading_day == pytest.approx(0.10, abs=0.02)

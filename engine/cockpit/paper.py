@@ -189,6 +189,7 @@ class PaperAccount:
         self.fill_latency_s = 0.0
         self.pending: dict[str, dict[str, Any]] = {}
         self.liquidity: LiquidityMonitor | None = None  # shared, set by the cockpit
+        self.vol_sizing: Any = None  # SPEC 5.7 VolSizing, set by the cockpit
         self.vacuum_wait_s = 3.0  # a stop exit waits this long for quotes to come back
         # Net P&L of open positions at the bid (after entry charges), refreshed every step:
         # an open loss counts toward the daily and weekly loss limits like a realized one.
@@ -266,6 +267,12 @@ class PaperAccount:
             vac = self.liquidity.vacuum(symbol, book)
             if vac:
                 return self._refuse(symbol, now, vac, signal_id)
+        if self.vol_sizing is not None:
+            # SPEC 5.7: smaller (never larger) when recent realized vol is high.
+            lots, note, vctx = self.vol_sizing.size(symbol, lots, now.astimezone(IST).date())
+            if lots <= 0:
+                return self._refuse(symbol, now, note or "vol-managed sizing", signal_id)
+            context = {**dict(context or {}), **vctx, **({"vol_note": note} if note else {})}
         if self._expires_today(symbol, now) and (
             now.astimezone(IST).strftime("%H:%M") >= self.expiry_day_last_entry
         ):
