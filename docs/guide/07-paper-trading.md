@@ -54,7 +54,7 @@ On top of the gate, the paper accounts refuse:
 
 **Why a stop is required:** a long option with no stop risks its whole premium. For a Nifty lot that is often above the ₹5,000 per-trade limit, so the gate would refuse it. The stop % tells the gate the planned maximum loss. Lower the stop % or pick a cheaper strike if you see `per_trade_risk_exceeded`.
 
-Every refusal is shown in a red pop-up, in the account's **Refused** list and in the **Events** tab, with the reason.
+Every refusal is shown in a red pop-up, in the account's **Refused** list and in the **Events** tab, with the reason. The same refusal for the same contract (numbers aside) is journaled once a minute at most; on 13 Nov, before this was per contract, one strategy cycling through 12 contracts wrote 33,592 lines.
 
 ## 7.3 Manual paper trading (your own account)
 
@@ -72,7 +72,7 @@ Your manual trades are journaled in `data/state/paper_manual.jsonl` with their e
 
 Each account writes one JSON line per open, close and refusal to `data/state/paper_<account>.jsonl`. On restart the engine replays today's lines, restoring open positions and the day's loss streak. Overnight strategies (condor, calendar, compression, synthetic, married) restore their positions from earlier days too, and their contracts are added back into the feed.
 
-A restart **during the session** also rebuilds what the engine learned since the open, from the recorder's quotes: the 15-minute opening range of every recorded contract, and the index tapes (30-minute opening range, VWAP, CVD, ATR, relative volume) from 09:15. Option-side tape items (ATM straddle, IVs, per-strike OI changes) restart from the restart time, so strategies that need 6–15 minutes of OI history wait that long. The only data lost is the 30-level order book for the minute or so the engine was down; the main recorder is a separate process.
+A restart **during the session** also rebuilds what the engine learned since the open, from the recorder's quotes: the 15-minute opening range of every recorded contract, and the index tapes (30-minute opening range, VWAP, CVD, ATR, relative volume) from 09:15. The married-future strategy's once-a-minute futures OI and basis are rebuilt the same way, so it no longer waits 30 minutes after a restart. Option-side tape items (ATM straddle, IVs, per-strike OI changes) restart from the restart time, so strategies that need 6–15 minutes of OI history wait that long. The only data lost is the 30-level order book for the minute or so the engine was down; the main recorder is a separate process.
 
 Other state files in `data/state/`:
 

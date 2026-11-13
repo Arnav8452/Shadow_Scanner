@@ -78,6 +78,8 @@ class Market:
         self.core = core
         self.now = now
         self._books: dict[str, Book] | None = None
+        # Chain picks that are not in the live feed yet (by_delta); a long play pins them.
+        self.want_feed: list[str] = []
 
     # ---------------------------------------------------------------- prices
     @property
@@ -135,20 +137,45 @@ class Market:
         return float(v) if v is not None else None
 
     def by_delta(
-        self, und: str, kind: str, target: float, rows: list[dict[str, Any]] | None = None
+        self,
+        und: str,
+        kind: str,
+        target: float,
+        rows: list[dict[str, Any]] | None = None,
+        live_band: float = 0.05,
     ) -> tuple[str, dict[str, Any]] | None:
-        """Contract of ``kind`` whose |delta| is closest to ``target`` (from the chain)."""
+        """Contract of ``kind`` whose |delta| is closest to ``target``.
+
+        A contract already in the live feed (book + live greeks) within ``live_band`` of the
+        target wins: strategies score and trade off its live book. Otherwise the chain's pick is
+        returned and added to ``want_feed`` so the strategy can pin it (the live feed carries
+        only ~50 contracts; Sensex often has just +-2 strikes in it)."""
         key = kind.lower()
         best = None
+        live = None
         for r in rows if rows is not None else self.chain_rows(und):
             side = r.get(key) or {}
             d, sym = side.get("delta"), side.get("sym")
             if d is None or not sym:
                 continue
             gap = abs(abs(float(d)) - target)
+            row = side | {"k": float(r["k"])}
             if best is None or gap < best[0]:
-                best = (gap, str(sym), side | {"k": float(r["k"])})
-        return (best[1], best[2]) if best else None
+                best = (gap, str(sym), row)
+            b, g = self.book(str(sym)), self.detail(str(sym))
+            if b is not None and b.bids and b.asks and g.get("delta") is not None:
+                lgap = abs(abs(float(g["delta"])) - target)
+                # Ties (equal live gaps) go to the contract the chain also ranks closer.
+                if lgap <= live_band and (live is None or (lgap, gap) < live[0]):
+                    live = ((lgap, gap), str(sym), row | {"delta": g["delta"]})
+        if live is not None:
+            return live[1], live[2]
+        if best is None:
+            return None
+        want: list[str] = self.__dict__.setdefault("want_feed", [])
+        if best[1] not in want:
+            want.append(best[1])
+        return best[1], best[2]
 
     def strike_step(self, und: str) -> float:
         ks = sorted(float(r["k"]) for r in self.chain_rows(und))
@@ -229,7 +256,7 @@ class Market:
             )
         ok, imp = impulse_ok(self.tape(und).atr(), g.get("delta"), g.get("gamma"), be_pts, mult)
         why = (
-            f"impulse {imp:.2f} pts vs {mult}x breakeven {be_pts:.2f}"
+            f"impulse {imp:.2f} pts, needs {mult * be_pts:.2f} ({mult:g}x breakeven {be_pts:.2f})"
             if g
             else "no greeks for the contract"
         )
@@ -291,6 +318,9 @@ class LongPlay(Status):
     notes: list[str] = field(default_factory=list)
     retry_s: float = 60.0  # after a refused entry, wait this long before retrying that index
     retry_at: dict[str, datetime] = field(default_factory=dict)
+    _pin_after: datetime = field(default=datetime.min.replace(tzinfo=IST), repr=False)
+    # A stop tightened to fit the per-trade limit must stay at least this % of premium.
+    min_fit_stop_pct: float = 10.0
     # Short-hold strategies: positions found open after a restart are put back under the
     # charges ratchet (initial stop, breakeven lock, 180-s scratch) and the candle rule.
     scalp: bool = False
@@ -342,7 +372,9 @@ class LongPlay(Status):
         if self.entries_today >= self.max_entries:
             self.note(f"{self.max_entries} entries today: done for the day")
         else:
+            m.want_feed = []
             out += self.look(now, m) or []
+            self._feed_candidates(now, m)
         held = [m.core.label(s) for s in self.managed]
         head = [f"holding {', '.join(held)}"] if held else []
         waits = [
@@ -355,6 +387,21 @@ class LongPlay(Status):
 
     def look(self, now: datetime, m: Market) -> list[str] | None:  # pragma: no cover - abstract
         return None
+
+    def _feed_candidates(self, now: datetime, m: Market) -> None:
+        """Pin the contracts this play picked from the chain but could not score (no live book),
+        so the next look can; at most every 30 s (a pin re-centres the feed)."""
+        pins = getattr(m.runner, "pins", None)
+        if not isinstance(pins, dict):
+            return
+        want = list(dict.fromkeys([*self.managed, *self.awaiting, *m.want_feed]))
+        if set(want) == set(pins.get(self.key, [])) or now < self._pin_after:
+            return
+        self._pin_after = now + timedelta(seconds=30)
+        got = m.pin(self.key, want) or []
+        miss = [s for s in m.want_feed if s not in got]
+        if miss:
+            self.note(f"live feed full: could not add {', '.join(m.core.label(s) for s in miss)}")
 
     def enter(
         self,
@@ -378,6 +425,12 @@ class LongPlay(Status):
         now = m.now
         if self.entries_today >= self.max_entries:
             return f"{self.title}: {self.max_entries} entries today already"
+        acct = self.account
+        if acct.trades_today + len(acct.pending) >= acct.limits.max_trades_per_day:
+            # The account's daily trade cap: no order would pass the gate, so don't send one
+            # (and don't journal a refusal) on every trigger for the rest of the day.
+            self.note(f"daily trade cap reached ({acct.limits.max_trades_per_day} trades)")
+            return ""
         wait = self.retry_at.get(und)
         if wait is not None and now < wait:
             return ""  # backing off after a refusal: no new attempt, no new event line
@@ -408,6 +461,22 @@ class LongPlay(Status):
             if atr:
                 dist = max(min(dist, 2.0 * atr), m.breakeven(entry, qty)[1])
             stop_pct = max(1.0, min(stop_pct, dist / entry * 100))
+        cap = float(acct.limits.inr(acct.limits.per_trade_max_loss_pct.get("directional", 0.0)))
+        if cap > 0 and entry > 0 and entry * qty * stop_pct / 100 > cap:
+            # The planned loss would breach the per-trade limit (a Sensex 0.6-delta option at
+            # Rs 900 x 20 with a 35% stop is Rs 6,300 > 5,000): tighten the stop to fit, as long
+            # as it stays a real stop; otherwise skip the contract instead of being refused.
+            fit = cap * 0.98 / (entry * qty) * 100
+            if fit < self.min_fit_stop_pct:
+                self.retry_at[und] = now + timedelta(seconds=self.retry_s)
+                self.note(
+                    f"{und}: {m.core.label(sym)} too dear for the Rs {cap:,.0f} per-trade limit "
+                    f"(a fitting stop would be {fit:.0f}% of premium, under "
+                    f"{self.min_fit_stop_pct:g}%)"
+                )
+                return ""
+            reason += f" (stop {fit:.0f}% of premium, was {stop_pct:.0f}%, to fit the limit)"
+            stop_pct = fit
         ok, text = self.account.open_long_option(
             sym,
             b,

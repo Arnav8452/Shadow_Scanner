@@ -4,6 +4,17 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Why other strategies were not trading: 3 flaws, 2 data gaps fixed (13 Nov 2026, afternoon)
+
+Owner asked why nothing but the condor, spoof-fade and breakthrough traded. Ten strategies were idle for real reasons: no 75+ order-flow reading since 09:37 (12 Nov's 50 signals all fell in 11:00–13:00), expiry-day-only or Mon/Tue/Thu schedules, IVP 67 < 80, conditions not met. Fixed:
+- **Breakthrough never scored Sensex:** `Market.by_delta` took the 1-min chain's pick, usually outside the 50-contract live feed, and scoring needs a live book. Now a live contract within 0.05 of the target delta wins; otherwise the chain pick is pinned (every 30 s at most).
+- **Zone rider never traded Sensex:** fixed 35% stop on a ~₹925 × 20 option = ₹6,477 > ₹5,000 limit. Long plays now tighten the stop to fit the limit (skip if under 10% of premium), as put-panic already did.
+- **33,592 refusal lines from spoof-fade:** the de-dupe remembered only the last refusal; now per (contract, reason). Strategies at the account's 5-trade cap stop sending orders.
+- **Married future reset on every restart:** futures OI and basis are rebuilt from the recorder in the warm start (259 minutes today).
+- **Calendar had 0/10 sessions:** term spread backfilled from synchronous 1-minute option candles (expired-instruments API + v3), 15 sessions.
+- **Charges-gate message** now shows the threshold ("needs 8.92 (3.5x breakeven 2.55)").
+- **Open (owner):** spoof-fade fires on Nifty and Sensex together and used its 5 trades by 09:49; a per-index cap would change a risk limit, so it is not done. Expiry-day spikes in the term-spread history widen its spread of values and make z > 2 harder; decide whether to exclude near-expiry days.
+
 ## Variance clock, Log-3 entry features, vol-managed sizing, gap stress (13 Nov 2026, afternoon)
 
 - **Variance clock (SPEC 4):** time to expiry = trading minutes + 0.49 session per night + 0.31 per weekend/holiday day, calibrated on Nifty daily candles since 2020 (trimmed 1%). `engine/analytics/variance_clock.py`, `analytics.variance_clock`; every task applies it. IV history and the 253-session screener cache were rebuilt; Nifty ATM IV reads 16.3% on it. Tests keep the old clock (weights 0) unless they set it.

@@ -741,6 +741,26 @@ class MarriedFuturePlay(SpreadPlay):
     fut_oi: dict[str, list[tuple[datetime, int]]] = field(default_factory=dict)
     basis: dict[str, list[float]] = field(default_factory=dict)
 
+    def seed_history(
+        self, und: str, samples: list[tuple[datetime, float, float, int]], expiry: Any
+    ) -> int:
+        """After a restart, rebuild today's once-a-minute futures OI and annualized basis from
+        the recorder's quotes ``(ts, future price, spot, OI)`` instead of collecting 30 minutes
+        again. Returns the minutes rebuilt."""
+        series: list[tuple[datetime, int]] = []
+        basis: list[float] = []
+        for ts, fpx, spot, oi in samples:
+            if not oi or not fpx or not spot:
+                continue
+            if series and (ts - series[-1][0]).total_seconds() < 60:
+                continue
+            series.append((ts, int(oi)))
+            dte = max(1, (expiry - ts.astimezone(IST).date()).days) if expiry else 30
+            basis.append((fpx - spot) / spot * 365 / dte * 100)
+        if len(series) > len(self.fut_oi.get(und, [])):
+            self.fut_oi[und], self.basis[und] = series, basis
+        return len(series)
+
     def look(self, now: datetime, m: Market) -> list[str] | None:
         for und in m.underlyings():
             f = m.fut(und)

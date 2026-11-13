@@ -19,6 +19,9 @@ Every number below is a **HYPOTHESIS** in the strategy's code or in `config/sett
   - intraday positions are squared off at 15:20;
   - long options expiring today: no entries after 14:30, closed at 14:45.
 - **High-IV routing (rule 4):** when ATM IV is at or above its **80th percentile**, a naked-buy signal from the put-panic, OI-ignition or breakthrough strategy becomes a **debit spread** on the *High-IV routed debit spreads* account instead (buy ~0.55 delta, sell ~0.25 delta).
+- **Choosing the option by delta:** a contract already in the live feed (live book and greeks) within **0.05** of the target delta is preferred, so the strategy can score and trade it at once. Otherwise the 1-minute chain's pick is used and the strategy asks for it to be added to the feed (at most every 30 s); the decision line says "live feed full" when there was no room. Before 13 Nov, Sensex picks were usually outside the feed, so the breakthrough scalper could not score Sensex at all.
+- **Stops fitted to the per-trade limit:** when a long option's planned loss (premium × stop % × quantity) would exceed the **₹5,000** directional limit, the stop is tightened to fit, and the reason says so ("stop 25% of premium, was 35%"). If a fitting stop would be under **10%** of premium, the contract is skipped instead. Before 13 Nov the zone rider's fixed 35% stop made every Sensex entry a refusal.
+- **Daily trade cap:** once an account has its 5 trades for the day, its strategy stops sending orders (the decision line says so) instead of being refused on every trigger.
 - **Stops on long options** need the model price to agree ([05-signals.md §5.8](05-signals.md#58-the-charges-gates-why-short-holds-are-allowed-at-all)).
 
 Sources:

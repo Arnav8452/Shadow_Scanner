@@ -386,9 +386,10 @@ def task_evening(params: dict[str, str]) -> int:
 
 
 def task_backfill_history(params: dict[str, str]) -> int:
-    """Seed the calendar's term-spread history (NSE bhavcopy closes) and the compression
-    strategy's 15-min band widths (Upstox 1-minute index candles) for the last SESSIONS=20
-    sessions before today, instead of waiting for them to accumulate. Safe to rerun."""
+    """Seed the calendar's term-spread history (1-minute option candles of both expiries) and
+    the compression strategy's 15-min band widths (Upstox 1-minute index candles) for the last
+    SESSIONS=20 sessions before today, instead of waiting for them to accumulate. Safe to
+    rerun."""
     raw_dir, book, cal = _eod_common()
     from engine.cockpit.backfill import backfill
     from engine.core.config import load_settings
@@ -402,12 +403,17 @@ def task_backfill_history(params: dict[str, str]) -> int:
         d = cal.previous_trading_day(d)
         sessions.append(d)
     sessions.reverse()
+    from engine.data.recorder.run import load_master, load_recorder_settings
+
     settings = load_settings()
     journal_dir = ROOT / str((settings.raw.get("cockpit") or {}).get("journal_dir", "data/state"))
+    master = load_master(
+        load_recorder_settings(settings), _today_ist(), datetime.now(IST), fetch=True
+    )
     for line in backfill(
         ROOT, raw_dir=raw_dir, book=book, calendar=cal, sessions=sessions,
         index_keys={"NIFTY": "NSE_INDEX|Nifty 50", "SENSEX": "BSE_INDEX|SENSEX"},
-        journal_dir=journal_dir,
+        journal_dir=journal_dir, master=master,
     ):  # fmt: skip
         print(line)
     return 0

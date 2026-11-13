@@ -321,6 +321,7 @@ class CockpitCore:
             ).to_pylist()
             t = IndexTape(und)
             spot = 0.0
+            fut_samples: list[tuple[datetime, float, float, int]] = []
             for q in rows:
                 px = q.get("ltp")
                 if not px or px <= 0:
@@ -339,6 +340,17 @@ class CockpitCore:
                         asks=((float(q.get("ask") or 0), 0, 0),),
                     )
                     t.on_sample(ts, spot=spot, fut=fut)
+                    fut_samples.append((ts, float(px), spot, int(q.get("oi") or 0)))
+            for play in self.plays:
+                if hasattr(play, "seed_history") and fut_samples:
+                    n = play.seed_history(und, fut_samples, futs[0].expiry if futs else None)
+                    if n:
+                        self.event(
+                            "system",
+                            f"{und} futures OI and basis rebuilt from the recording: {n} minutes "
+                            f"({play.title})",
+                            now,
+                        )
             if t.bars:
                 self.tapes[und] = t
                 self.event(

@@ -1,9 +1,9 @@
 """Seed the calendar and compression strategies' history from data we already can get, instead
 of waiting 10-20 sessions (owner question, 13 Nov 2026).
 
-- **Term spread (calendar, spec C): not backfilled.** Bhavcopy closes of the far monthly expiry
-  are stale (thin trading): on 12 Nov they implied a forward 1.2% above spot and a 27.7% IV
-  against ~14% live. A true backfill needs synchronous intraday quotes of both expiries.
+- **Term spread (calendar, spec C):** from synchronous 1-minute option candles of both
+  expiries (``engine/cockpit/term_backfill.py``). Bhavcopy closes are NOT used: a far monthly's
+  daily close is stale (12 Nov: forward 1.2% above spot, IV 27.7% vs ~14% live).
 - **15-minute band widths (compression, spec D):** each past session's index 1-minute candles
   from Upstox's historical candle API (v3) are replayed through the same ``IndexTape`` the live
   strategy uses, collecting ``bb_width(15)`` the same way.
@@ -98,12 +98,9 @@ def backfill(
     index_keys: dict[str, str],
     journal_dir: Path,
     fetch: Callable[[str, date, str], list[list[Any]]] = index_minute_candles,
+    master: Any = None,
 ) -> list[str]:
-    lines: list[str] = [
-        "term spread: not backfilled. Bhavcopy closes of the far (monthly) expiry are stale "
-        "(e.g. 12 Nov: ~2.8k contracts, implied forward 25,600 vs spot 25,290, IV 27.7% vs ~14% "
-        "live), so the calendar keeps its own history from the live chain at each close."
-    ]
+    lines: list[str] = []
     tok = ""
     for name in ("UPSTOX_ACCESS_TOKEN", "UPSTOX_ANALYTICS_TOKEN"):
         try:
@@ -116,21 +113,85 @@ def backfill(
         lines.append("band widths: no Upstox token in .env; skipped")
         return lines
     recs: list[dict[str, Any]] = []
+    nifty: dict[date, list[list[Any]]] = {}
     for d in sessions:
         rec: dict[str, Any] = {"day": d.isoformat(), "source": "upstox_1m"}
         for und, key in index_keys.items():
             try:
-                ws = widths_from_candles(und, fetch(key, d, tok))
+                cs = fetch(key, d, tok)
             except Exception as exc:  # one bad day must not stop the rest
                 lines.append(f"band widths {und} {d}: {type(exc).__name__}")
                 continue
+            if und == "NIFTY":
+                nifty[d] = cs
+            ws = widths_from_candles(und, cs)
             if ws:
                 rec[und] = ws
         if len(rec) > 2:
             recs.append(rec)
     n = _append_sorted(journal_dir / "bb_width_history.jsonl", recs)
     lines.append(f"band widths: {n} new session(s) from Upstox 1-minute candles")
+    lines += _term_spreads(journal_dir, sessions, nifty, tok, master, book, calendar)
     return lines
+
+
+def _term_spreads(
+    journal_dir: Path,
+    sessions: Sequence[date],
+    nifty: dict[date, list[list[Any]]],
+    tok: str,
+    master: Any,
+    book: RuleBook,
+    calendar: Any,
+) -> list[str]:
+    from datetime import time as _time
+
+    from engine.cockpit.term_backfill import UpstoxOptions, risk_free, spot_at, term_spread_day
+    from engine.data.reference.instrument_master import Kind
+
+    if master is None:
+        return ["term spread: no instrument master; skipped"]
+    path = journal_dir / "term_spread_history.jsonl"
+    have = _days_in(path)
+    todo = [d for d in sessions if d.isoformat() not in have]
+    if not todo:
+        return ["term spread: 0 new session(s) (all present)"]
+    live = {
+        e: {
+            (float(i.strike), "CE" if i.kind is Kind.CALL else "PE"): i.symbol
+            for i in master.options("NIFTY", e)
+            if i.strike and i.kind in (Kind.CALL, Kind.PUT)
+        }
+        for e in master.option_expiries("NIFTY", min(todo))
+    }
+    src = UpstoxOptions(tok, _http_json, live)
+    try:
+        expired = src.expired_expiries()
+    except Exception as exc:  # Upstox Plus only
+        return [f"term spread: expired-instruments API unavailable ({type(exc).__name__})"]
+    exps = sorted(set(expired) | set(live))
+    out: list[str] = []
+    recs: list[dict[str, Any]] = []
+    for d in todo:
+        spot = spot_at(nifty.get(d) or [], _time(15, 0))
+        if not spot:
+            out.append(f"term spread {d}: no index candles")
+            continue
+        at = datetime.combine(d, _time(15, 0), tzinfo=IST)
+        try:
+            rec = term_spread_day(
+                d, spot, src, exps, book=book, calendar=calendar, r=risk_free(book, at)
+            )
+        except Exception as exc:  # one bad day must not stop the rest
+            out.append(f"term spread {d}: {type(exc).__name__}")
+            continue
+        if rec is None:
+            out.append(f"term spread {d}: too few synchronous trades in both expiries")
+            continue
+        recs.append(rec)
+    n = _append_sorted(path, recs)
+    out.append(f"term spread: {n} new session(s) from 1-minute option candles")
+    return out
 
 
 __all__ = ["backfill", "widths_from_candles"]

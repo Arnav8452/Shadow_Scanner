@@ -172,7 +172,12 @@ Checked on 13 Nov 2026 with the read-only analytics token (Upstox Plus):
 
 What this means:
 - **Done:** `tasks.py backfill-history` seeded the compression strategy's 20 sessions of 15-minute band widths from index 1-minute candles. Re-running it is safe.
-- **Not backfillable from end-of-day files:** the calendar's term spread. Far-month closes are stale (12 Nov: forward 25,600 vs spot 25,290, IV 27.7% vs ~14% live). It keeps building from the live chain at each close.
+- **Done (13 Nov):** the same task now seeds the calendar's **term spread** history from 1-minute option candles (`engine/cockpit/term_backfill.py`), not from end-of-day files (far-month bhavcopy closes are stale: 12 Nov showed IV 27.7% vs ~14% live).
+  - **Near:** the first expiry on or after the session. **Far:** the first monthly at least 14 days away, as the live 14-day rule picks.
+  - **Prices:** every minute from 14:30 to 15:25 in which both the call and the put at one of the 3 strikes nearest the index traded. Expired contracts come from the expired-instruments API, live ones from the v3 candle API.
+  - **IV:** synthetic forward at the strike where call and put are closest, Black-76 on the variance clock, mean of call and put, median over the minutes.
+  - **Caveat:** last trades, not mids; the median over about 55 minutes keeps that noise small.
+  - **First run:** 15 sessions (23 Oct–12 Nov). Normal days −1 to +2 vol points; near-expiry days spike (9 Nov +8.9). The live strategy keeps adding one value at each close.
 - **Possible next:** a backtest runner on the expired-option 1-minute candles, giving about two years of OI and price history for the OI, straddle and breakout strategies. Candles have no bid/ask, so fills would use a spread model taken from our recorded spreads, doubled. That is a documented exception to "fills at recorded bid/ask", fit for screening ideas, not for the final verdict.
 - **Only recording can supply:** anything that reads the order book (the score's book pillar, RER, OBI, spoofed and eaten walls, absorption zones, the opening-range breakout), and the final bid/ask-fill verdict on any strategy.
 

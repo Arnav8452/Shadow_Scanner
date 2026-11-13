@@ -636,11 +636,16 @@ class PaperAccount:
     def _refuse(self, symbol: str, now: datetime, why: str, signal_id: str) -> tuple[bool, str]:
         # The same refusal again within a minute (numbers aside, e.g. the cool-off countdown)
         # is not journaled again: a persistent trigger would otherwise write lines every step.
+        # Remembered per (contract, reason), not just the last one: a strategy cycling through
+        # contracts would otherwise journal every attempt (33,592 lines on 13 Nov).
         kind = (symbol, re.sub(r"[0-9.]+", "#", why))
-        last = getattr(self, "_last_refusal", None)
-        if last is not None and last[0] == kind and (now - last[1]).total_seconds() < 60:
+        seen: dict[tuple[str, str], datetime] = self.__dict__.setdefault("_refusal_seen", {})
+        last = seen.get(kind)
+        if last is not None and 0 <= (now - last).total_seconds() < 60:
             return False, f"refused {symbol}: {why}"
-        self._last_refusal = (kind, now)
+        if len(seen) > 500:
+            seen.clear()
+        seen[kind] = now
         rec = {
             "type": "refused",
             "t": now.isoformat(),
