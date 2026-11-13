@@ -241,7 +241,7 @@ A full Sensibull-style chain from the recorder's 1-minute snapshots, with every 
 | **All** | POP, Volume, OI chg, OI chg %, OI (lakh), Bid, Ask, Intrinsic, Time value, Breakeven (and % away), Delta, LTP chg, LTP; plus a per-strike **PCR** column in the middle |
 
 - **IV** (middle) is the out-of-the-money side's IV at that strike.
-- **OI change** is vs the previous session's NSE bhavcopy (Sensex is BSE and not in that file, so it has none).
+- **OI change** is vs the previous session's bhavcopy: NSE's, and BSE's for Sensex (since 13 Nov).
 - **POP** is the chance a buyer at the ask ends past breakeven under a lognormal with the strike's IV: a model figure, not a forecast.
 - Gold outline = open condor leg. The ATM row has a blue top border. Click any price to open that contract on the Desk.
 

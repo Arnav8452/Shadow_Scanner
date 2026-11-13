@@ -61,6 +61,7 @@ Field definitions: [DATA_DICTIONARY.md](../DATA_DICTIONARY.md).
 | Dataset | Used for |
 |---|---|
 | F&O bhavcopy | Previous-session OI for ΔOI and the OI read; IV history; the screener |
+| BSE F&O bhavcopy (`bse_fo`, since 13 Nov) | The same for Sensex: previous-session OI, previous-day high/low/close of every Sensex contract (the scanner's location pillar), Sensex IV history (its IV percentile). Same UDiFF layout as NSE's; on an expiring contract's last day BSE puts the underlying's close in its close column, so contracts expiring that day are skipped. The Sensex index's own high/low is in neither file (recordings and the broker cover it). |
 | Cash bhavcopy and delivery | Delivery spikes, swing, fundamentals watchlist |
 | Participant OI and volume | Research → Flows (FII/DII/Pro/Client) |
 | Index closes | Trend sleeve, context |

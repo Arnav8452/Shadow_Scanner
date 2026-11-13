@@ -35,6 +35,11 @@ NSE_EOD_URLS: dict[str, str] = {
     "participant_oi": "https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{dmy}.csv",
     "participant_vol": "https://nsearchives.nseindia.com/content/nsccl/fao_participant_vol_{dmy}.csv",
     "indices": "https://nsearchives.nseindia.com/content/indices/ind_close_all_{dmy}.csv",
+    # BSE's derivatives bhavcopy (Sensex, Bankex): the same UDiFF layout as NSE's. Verified by
+    # download 13 Nov 2026 (12 Nov file, 222 kB). On an expiring contract's last day BSE puts
+    # the underlying's close in ClsPric: readers skip contracts expiring that day.
+    "bse_fo": "https://www.bseindia.com/download/BhavCopy/Derivative/"
+    "BhavCopy_BSE_FO_0_0_0_{ymd}_F_0000.CSV",
 }
 # A text marker each genuine file contains (NSE sometimes answers with an HTML error page).
 _MARKERS: dict[str, bytes] = {
@@ -44,6 +49,7 @@ _MARKERS: dict[str, bytes] = {
     "participant_oi": b"Client Type",
     "participant_vol": b"Client Type",
     "indices": b"Index Name",
+    "bse_fo": b"TckrSymb",
 }
 DATASETS = tuple(NSE_EOD_URLS)
 

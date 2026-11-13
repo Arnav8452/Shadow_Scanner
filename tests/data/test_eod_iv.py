@@ -202,3 +202,21 @@ def test_fetch_eod_ok_missing_html_and_cache(tmp_path: Path) -> None:
     assert html.status == "missing" and not eod_path(tmp_path, "participant_oi", day).exists()
     with pytest.raises(ValueError):
         fetch_eod("nonsense", day, raw_dir=tmp_path, now=now, fetcher=ok)
+
+
+def test_bse_bhavcopy_dataset_and_sensex_iv_on_bse_session(book: RuleBook) -> None:
+    from dataclasses import replace
+
+    from engine.data.eod.download import DATASETS, eod_path, eod_url
+
+    assert "bse_fo" in DATASETS
+    assert eod_url("bse_fo", date(2026, 11, 12)).endswith(
+        "/Derivative/BhavCopy_BSE_FO_0_0_0_20261112_F_0000.CSV"
+    )
+    assert eod_path(Path("raw"), "bse_fo", date(2026, 11, 12)).name == "2026-11-12.csv"
+    cal = TradingCalendar.from_rulebook(book)
+    rows = [replace(x, symbol="SENSEX") for x in
+            _chain(date(2026, 11, 9), date(2026, 11, 17), 25044.65, 0.1765, book)]  # fmt: skip
+    iv = atm_iv_for_day(rows, underlying="SENSEX", book=book, calendar=cal, r=0.0534,
+                        exchange="BSE")  # fmt: skip
+    assert iv is not None and abs(iv.atm_iv - 0.1765) < 0.005

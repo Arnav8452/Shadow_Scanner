@@ -76,6 +76,7 @@ def atm_iv_for_day(
     min_trading_days: int = 2,
     n_parity: int = 5,
     instruments: tuple[str, ...] = ("IDO", "OPTIDX"),
+    exchange: str = "NSE",
 ) -> DailyIV | None:
     """``instruments``: index options by default; ``("STO", "OPTSTK")`` for stock options."""
     opts = [
@@ -103,8 +104,8 @@ def atm_iv_for_day(
     both = sorted(set(calls) & set(puts), key=lambda k: abs(k - spot))[:n_parity]
     if len(both) < 3:
         return None
-    close_dt = market_session(book, "NSE", "fo", day).close_dt
-    clk = expiry_clock(close_dt, expiry, book=book, calendar=calendar)
+    close_dt = market_session(book, exchange, "fo", day, allow_unverified=exchange != "NSE").close_dt
+    clk = expiry_clock(close_dt, expiry, book=book, calendar=calendar, exchange=exchange)
     growth = math.exp(r * clk.t_cal)
     forward = statistics.median(k + growth * (calls[k].close - puts[k].close) for k in both)
     atm = min(both, key=lambda k: abs(k - forward))
@@ -155,11 +156,18 @@ def build_iv_history(
     vix: dict[date, float] = {}
     for d in days:
         r = book.lookup("risk_free_rate", d, allow_unverified=True, tenor="91d_tbill").as_float()
-        fo = eod_path(raw_dir, "fo", d)
-        if fo.exists():
+        for ds, exch in (("fo", "NSE"), ("bse_fo", "BSE")):  # BSE: Sensex, Bankex
+            fo = eod_path(raw_dir, ds, d)
+            if not fo.exists():
+                continue
             rows = parse_fno_bhavcopy_csv(read_eod_text(fo))
+            have = {x.symbol for x in rows}
             for u in underlyings:
-                iv = atm_iv_for_day(rows, underlying=u, book=book, calendar=calendar, r=r / 100)
+                if u not in have:
+                    continue
+                iv = atm_iv_for_day(
+                    rows, underlying=u, book=book, calendar=calendar, r=r / 100, exchange=exch
+                )
                 if iv is not None:
                     ivs.append(iv)
         idx = eod_path(raw_dir, "indices", d)

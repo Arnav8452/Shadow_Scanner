@@ -36,7 +36,7 @@ The chain comes from the **recorder** (P1). Start `tasks.py record`. Strategies 
 Fewer than 20 sessions in `iv_history.parquet`. Run `eod-backfill` once, then `iv-history` ([02-setup.md §2.6](02-setup.md#26-load-history-once)).
 
 **ΔOI or the OI read is empty for Sensex.**
-OI change uses the previous session's NSE bhavcopy; Sensex is on BSE and not in it. Its ΔOI counts from engine start instead.
+OI change uses the previous session's bhavcopy: NSE's, and BSE's for Sensex (`bse_fo`, downloaded nightly since 13 Nov). If a BSE file is missing, Sensex ΔOI counts from engine start instead.
 
 **A contract I searched for says "not in the live feed yet".**
 It is being added. Only 3 extra contracts can be pinned; remove one (× on its pill) to add another.

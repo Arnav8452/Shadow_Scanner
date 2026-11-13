@@ -260,7 +260,34 @@ def test_previous_day_levels_from_nse_eod_files(tmp_path: Path) -> None:
     assert lv[opt_symbol(WEEKLY, 25000, Kind.PUT)] == (95.0, 60.0, 70.0)
     assert opt_symbol(WEEKLY, 25050, Kind.CALL) not in lv  # zero high/low means untraded
     assert opt_symbol(MONTHLY, 25000, Kind.CALL) not in lv  # different expiry
-    assert "BSE:SENSEX-INDEX" not in lv  # BSE is not in NSE files
+    assert "BSE:SENSEX-INDEX" not in lv  # the index itself is in neither exchange's F&O file
+
+
+def test_previous_day_levels_and_oi_for_sensex_from_bse_eod(tmp_path: Path) -> None:
+    from engine.cockpit.chain import load_prev_oi
+
+    prev = date(2026, 11, 10)
+    header = (
+        "TradDt,TckrSymb,FinInstrmTp,XpryDt,StrkPric,OptnTp,OpnPric,HghPric,LwPric,ClsPric,"
+        "UndrlygPric,OpnIntrst"
+    )
+    lines = [
+        header,
+        f"{prev},SENSEX,IDO,{WEEKLY},82000.00,CE,300,340,250,320,81900,12000",
+        # an expiring contract: BSE puts the underlying's close in ClsPric
+        f"{prev},SENSEX,IDO,{prev},81000.00,PE,10,20,0.05,81900,81900,5000",
+    ]
+    f = tmp_path / "eod" / "bse_fo" / "2026" / f"{prev.isoformat()}.csv"
+    f.parent.mkdir(parents=True)
+    f.write_text(chr(10).join(lines), encoding="utf-8")
+    ce = ins("BSE_FO|1", Kind.CALL, underlying="SENSEX", expiry=WEEKLY, strike=82000.0,
+             exchange="BSE")  # fmt: skip
+    gone = ins("BSE_FO|2", Kind.PUT, underlying="SENSEX", expiry=prev, strike=81000.0,
+               exchange="BSE")  # fmt: skip
+    lv = eod_previous_day_levels(tmp_path, prev, [ce, gone])
+    assert lv == {"BSE_FO|1": (340.0, 250.0, 320.0)}  # the expired row is skipped
+    oi = load_prev_oi(tmp_path, prev + timedelta(days=1), ["SENSEX", "NIFTY"])
+    assert oi["SENSEX"][(WEEKLY.isoformat(), 82000.0, "CE")] == 12000 and oi["NIFTY"] == {}
 
 
 def test_eod_levels_never_downloaded_before_publication(tmp_path: Path) -> None:
@@ -276,7 +303,7 @@ def test_eod_levels_never_downloaded_before_publication(tmp_path: Path) -> None:
     assert calls == []
     late = datetime(2026, 11, 11, 8, 0, tzinfo=IST)
     assert eod_previous_day_levels(tmp_path, prev, [], now=late, fetcher=fetcher) == {}
-    assert len(calls) == 2  # fo and indices attempted, failures tolerated
+    assert len(calls) == 3  # NSE fo and indices, BSE fo attempted; failures tolerated
 
 
 def test_pinned_contracts_join_the_feed_within_the_cap(

@@ -4,6 +4,21 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)
+
+- **BSE F&O bhavcopy** (`bse_fo` in `engine/data/eod/download.py`): BSE's derivatives file at `https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{yyyymmdd}_F_0000.CSV`, verified by download. Same UDiFF layout as NSE's. Downloaded nightly by `tasks.py eod`; 275 sessions backfilled (Oct 2025 → 13 Nov 2026, 18 holidays missing).
+- **What it feeds:**
+  - Sensex previous-session OI (chain ΔOI, OI read);
+  - previous-day high/low/close of every Sensex contract (the scanner's location pillar);
+  - Sensex ATM IV history (275 rows): its IV percentile is 72 on 13 Nov, where it said "no history" before.
+- **BSE quirk:** on a contract's expiry day its `ClsPric` is the underlying's close (80700 PE: 81,911). Readers skip contracts expiring that day; the IV history already used expiries ≥ 2 trading days out.
+- **Rule added, UNVERIFIED (owner to confirm):** `market_sessions` BSE fo close 15:30 before 3 Aug 2026, assumed equal to NSE's. BSE's own circular was not found; only secondary articles. A 10-minute error barely moves an EOD IV. The 15:40 row from 3 Aug is also UNVERIFIED (broker master).
+- **Not covered:** the Sensex index's own previous-day high/low is in neither F&O file. Recordings and the broker cover it.
+- **Nightly job, 13 Nov:**
+  - it ran at 23:33 when the PC woke (it slept through 20:00), before Wi-Fi was back, so every NSE download failed with URLError;
+  - rerun by hand: 0 problems, and 13 Nov's files, swing, delivery watchlist, stock IV and IV history are filled in;
+  - `eod` and `evening` now wait up to 3 minutes for NSE to answer before starting.
+
 ## Screener and Option chain tabs reviewed; priority list status (13 Nov 2026, evening)
 
 **Priority list** (`priority_tasks.md`):

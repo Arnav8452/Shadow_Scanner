@@ -282,13 +282,36 @@ def _eod_common() -> tuple[Path, Any, Any]:
     return settings.paths["raw"], book, TradingCalendar.from_rulebook(book)
 
 
+def _wait_for_network(
+    host: str = "nsearchives.nseindia.com", timeout_s: float = 180.0, step_s: float = 10.0
+) -> bool:
+    """Wait until ``host`` answers on 443. The nightly job runs when the PC wakes if it slept
+    through 20:00 (13 Nov: 23:33), often before Wi-Fi is back: every download then failed with
+    URLError. Returns False after ``timeout_s``; the job then runs and reports the failures."""
+    import socket
+    import time as _time
+
+    end = _time.monotonic() + timeout_s
+    while True:
+        try:
+            with socket.create_connection((host, 443), timeout=5):
+                return True
+        except OSError:
+            if _time.monotonic() >= end:
+                print(f"network: {host} unreachable after {timeout_s:.0f} s; continuing anyway")
+                return False
+            _time.sleep(step_s)
+
+
 def task_eod(params: dict[str, str]) -> int:
-    """Download one day's NSE end-of-day files (default: today, after ~19:30 IST).
-    DATE=YYYY-MM-DD, DATASETS=fo,cm,delivery,participant_oi,participant_vol,indices (default
-    all). Without DATE it also saves the F&O ban list and bulk/block deals (current-only files)."""
+    """Download one day's NSE (and BSE F&O) end-of-day files (default: today, after ~19:30
+    IST). DATE=YYYY-MM-DD, DATASETS=fo,cm,delivery,participant_oi,participant_vol,indices,
+    bse_fo (default all). Without DATE it also saves the F&O ban list and bulk/block deals
+    (current-only files)."""
     raw_dir, _, _ = _eod_common()
     from engine.data.eod.download import DATASETS, fetch_eod
 
+    _wait_for_network()
     day = date.fromisoformat(params["DATE"]) if params.get("DATE") else _today_ist()
     sets = params.get("DATASETS", ",".join(DATASETS)).split(",")
     bad = 0
@@ -364,6 +387,8 @@ def task_evening(params: dict[str, str]) -> int:
     and scanner, engine/strategies/swing_night.py)."""
     settings, cfg, cal = _evening_setup()
     from engine.data.eod.evening import run_evening
+
+    _wait_for_network()
 
     steps = params.get("STEPS", "eod,watchlist,weights,calendar,swing,fundamentals").split(",")
     rep = run_evening(
@@ -798,7 +823,7 @@ def task_iv_history(params: dict[str, str]) -> int:
 
     end = date.fromisoformat(params["TO"]) if params.get("TO") else _today_ist()
     start = date.fromisoformat(params["FROM"]) if params.get("FROM") else end - timedelta(days=400)
-    unds = params.get("UNDERLYINGS", "NIFTY,BANKNIFTY,FINNIFTY").split(",")
+    unds = params.get("UNDERLYINGS", "NIFTY,BANKNIFTY,FINNIFTY,SENSEX").split(",")
     ivs, vix = build_iv_history(
         raw_dir, weekdays(start, end), underlyings=unds, book=book, calendar=cal
     )

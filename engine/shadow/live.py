@@ -307,8 +307,9 @@ def eod_previous_day_levels(
 ) -> dict[str, tuple[float, float, float]]:
     """``symbol -> (high, low, close)`` for ``prev_day`` from NSE's end-of-day files.
 
-    Covers NSE index spots, India VIX, and NSE futures and options (matched on underlying,
-    expiry, strike and type). BSE contracts (Sensex) are not in these files. Files are known
+    Covers NSE index spots, India VIX, and NSE and BSE (Sensex, Bankex) futures and options
+    (matched on underlying, expiry, strike and type). The Sensex index itself has no row in
+    these files (recordings and the broker cover it). Files are known
     from 19:30 IST on ``prev_day``, so they are point-in-time safe for the next session. With
     ``now`` given, a missing file is downloaded first (not before 19:30 of ``prev_day``).
     """
@@ -317,7 +318,7 @@ def eod_previous_day_levels(
     from engine.data.eod.download import eod_path, fetch_eod, read_eod_text
 
     if now is not None and now >= datetime.combine(prev_day, time(19, 30), IST):
-        for ds in ("fo", "indices"):
+        for ds in ("fo", "indices", "bse_fo"):
             res = fetch_eod(
                 ds, prev_day, raw_dir=raw_dir, now=now, fetcher=fetcher or http_get_bytes
             )
@@ -339,11 +340,14 @@ def eod_previous_day_levels(
                 index_levels[cells[0].lower()] = (hi, lo, close)
 
     contract_levels: dict[tuple[str, date, float, str], tuple[float, float, float]] = {}
-    fo_path = eod_path(raw_dir, "fo", prev_day)
-    if fo_path.exists():
+    for fo_path in (eod_path(raw_dir, "fo", prev_day), eod_path(raw_dir, "bse_fo", prev_day)):
+        if not fo_path.exists():
+            continue
         for row in parse_fno_bhavcopy_csv(read_eod_text(fo_path)):
             if row.trade_date != prev_day or row.high <= 0 or row.low <= 0:
                 continue  # untraded contracts carry zero high/low
+            if row.expiry <= prev_day:
+                continue  # expired that day (BSE's close on that row is the underlying's)
             kind = row.option_type if row.option_type in ("CE", "PE") else "FUT"
             strike = round(row.strike, 2) if kind != "FUT" else 0.0
             contract_levels[(row.symbol, row.expiry, strike, kind)] = (
@@ -354,7 +358,7 @@ def eod_previous_day_levels(
 
     out: dict[str, tuple[float, float, float]] = {}
     for ins in instruments:
-        if ins.exchange != "NSE":
+        if ins.exchange not in ("NSE", "BSE"):
             continue
         if ins.kind is Kind.INDEX:
             name = (

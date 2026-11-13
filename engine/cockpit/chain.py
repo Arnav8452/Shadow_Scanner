@@ -171,9 +171,9 @@ def build_chain_table(
 def load_prev_oi(
     raw_dir: Any, before: Any, underlyings: Any, max_back_days: int = 7
 ) -> dict[str, dict[tuple[str, float, str], int]]:
-    """OI per (expiry ISO, strike, CE/PE) for each index, from the newest NSE F&O bhavcopy dated
-    before ``before`` (a previous session's file, published the evening before). BSE contracts
-    (Sensex) are not in NSE's file and come back empty."""
+    """OI per (expiry ISO, strike, CE/PE) for each index, from the newest F&O bhavcopies dated
+    before ``before`` (a previous session's files, published the evening before): NSE's, and
+    BSE's for Sensex/Bankex."""
     from datetime import timedelta
 
     from engine.data.eod.bhavcopy import parse_fno_bhavcopy_csv
@@ -181,13 +181,19 @@ def load_prev_oi(
 
     for back in range(1, max_back_days + 1):
         d = before - timedelta(days=back)
-        path = eod_path(raw_dir, "fo", d)
-        if not path.exists():
+        paths = [p for p in (eod_path(raw_dir, ds, d) for ds in ("fo", "bse_fo")) if p.exists()]
+        if not paths:
             continue
         out: dict[str, dict[tuple[str, float, str], int]] = {u: {} for u in underlyings}
-        for row in parse_fno_bhavcopy_csv(read_eod_text(path)):
-            if row.trade_date != d or row.symbol not in out or row.option_type not in ("CE", "PE"):
-                continue
-            out[row.symbol][(row.expiry.isoformat(), float(row.strike), row.option_type)] = row.oi
+        for path in paths:
+            for row in parse_fno_bhavcopy_csv(read_eod_text(path)):
+                if (
+                    row.trade_date != d
+                    or row.symbol not in out
+                    or row.option_type not in ("CE", "PE")
+                ):
+                    continue
+                key = (row.expiry.isoformat(), float(row.strike), row.option_type)
+                out[row.symbol][key] = row.oi
         return out
     return {}
