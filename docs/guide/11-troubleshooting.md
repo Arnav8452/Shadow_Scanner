@@ -9,7 +9,7 @@ The engine (P2) isn't running. Outside 08:46–15:45 that is normal. During mark
 uv run python tasks.py shadow-live SEND=1
 ```
 
-Check `logs/shadow_live_task.log` if the scheduled task should have started it.
+Check `logs/shadow_live_task.log` (start-up output) and `logs/engine_shadow-live.log` (full log) if the scheduled task should have started it.
 
 **The page dot is red or the page is blank.**
 The gateway isn't running:
@@ -27,7 +27,7 @@ No quote for 10 s or more. Paper entries are frozen and exits paused. The feed r
 The engine dropped feed messages because it couldn't keep up. Close heavy programs; check the CPU. Persistent drops mean the PC is too slow for 50 keys at 30 levels.
 
 **`cockpit errors N` in the header.**
-An exception inside the cockpit step. It never stops recording, but read the log and fix the cause.
+An exception inside the cockpit step. It never stops recording, but read `logs/engine_shadow-live.log` and fix the cause.
 
 **No option chain: "Waiting for the 1-minute option chain".**
 The chain comes from the **recorder** (P1). Start `tasks.py record`. Strategies that need strikes by delta, OI walls or the chain also wait.
@@ -56,7 +56,7 @@ A macro event (RBI, Budget, CPI, FOMC…) or a heavy results cluster is active; 
 The expiry-day rule for long options.
 
 **A strategy never trades.**
-Open its row on the Overview: the decision line says what it's waiting for. Common causes:
+Open the **Playbook** tab (or its Overview row): the *Now* line shows each condition's live value next to the threshold it needs. Common causes:
 - it only runs on certain days (iron fly, expiry strategies);
 - it needs history (calendar: 10 sessions; compression: 20 widths);
 - the recorder isn't running;
@@ -64,6 +64,12 @@ Open its row on the Overview: the decision line says what it's waiting for. Comm
 
 **My stop was crossed but the trade wasn't closed.**
 Model-price confirmation: the stop fires only if the option's model price (from the index and a smoothed IV) also says it should. A quote air pocket the index didn't make is ignored. The detail view shows when a stop is being held for this reason.
+
+**A strategy keeps saying "no book for …".**
+The contract it picked from the 1-minute chain is not in the 50-contract live feed. It now adds the contract to the feed and retries after 10 s. The events log shows a repeated line from the same strategy only once per 30 s. Sensex has only ±2 strikes in the live feed, so Sensex strategies that need a 0.60-delta option often say so; more slots for those is planned work.
+
+**A strategy's line says "retrying after hh:mm:ss".
+Its last entry was refused (cool-off, a loss limit, an event window) or its legs never got a book. It waits 60 s per index before trying again, so a trigger that stays true doesn't hammer the risk gate; the account journals a repeated refusal at most once a minute.
 
 **Positions after a restart.**
 Open positions and the day's loss streak are rebuilt from `data/state/paper_<account>.jsonl`. Overnight strategies keep earlier days' positions.

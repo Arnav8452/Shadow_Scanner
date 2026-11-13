@@ -47,7 +47,7 @@ The Desk is a two-column layout. Left: events, index cards, setups, scanner, str
 
 ### Events line
 
-`Events · <next macro events>` with time to each (`in 3.5 h`, `in 2 d`). A `?` after an event means its date is `UNVERIFIED` in the calendar. When an event window is active, an amber **EVENT WINDOW: … — new entries blocked** leads the line: every paper strategy's new entries are blocked until it ends. *results within 24 h: X% of index weight* shows how much of Nifty reports results in the next day. (The condor will not open a position it would hold through results worth 10% or more of the index.)
+`Events · <next macro events>` with time to each (`in 3.5 h`, `in 2 d`). Click the line or **All events ▾** to open the full list: date and time, title, how far away (or *NOW* while its window is open), and whether the date is confirmed from a primary source. The choice is remembered. A `?` after an event means its date is `UNVERIFIED` in the calendar. When an event window is active, an amber **EVENT WINDOW: … — new entries blocked** leads the line: every paper strategy's new entries are blocked until it ends. *results within 24 h: X% of index weight* shows how much of Nifty reports results in the next day. (The condor will not open a position it would hold through results worth 10% or more of the index.)
 
 **One-line view / Full view** (button on the right) switches the index cards between one line each and the full grid.
 
@@ -92,7 +92,7 @@ Each setup row:
 Every live contract, ranked by its order-flow score.
 
 **Controls**
-- **All / Options / Fut/Index / Score 65+**: filter.
+- **All / Options / Fut/Index / Stocks / Score 65+**: filter. **Stocks** shows the delivery-spike stocks from last night's watchlist (up to 5, cash market, watch only), each tagged **accum** (accumulation: high delivery on an up day) or **churn** (a retail spike on low delivery). They are scored like everything else but rarely reach 65.
 - **By score / By contract**: sort. By score re-sorts every 30 s and **never while your mouse is over the list** (`order frozen`), so rows don't jump under the pointer.
 - **Keys:** ↑ ↓ move the selection; `/` focuses the search box.
 
@@ -117,7 +117,9 @@ Click a row to open it in the instrument panel.
 
 ### Strategies (paper) panel
 
-Tabs: **Overview**, **Condor / spreads (5.1)**, **Directional (5.2)**, **Debit spreads**, **Gamma 5.10**, **Score-follow**, **Manual**, **Signal study**, **Events**. Your last tab is remembered.
+**Expand ⤢** (panel header) grows the panel to the window height; **Restore ⤡** puts it back. Overview and Playbook update row by row, so scrolling and dragging the scrollbar work while the numbers change; long rule and status text is clipped to three lines (hover for all of it).
+
+Tabs: **Overview**, **Playbook**, **Condor / spreads (5.1)**, **Directional (5.2)**, **Debit spreads**, **Gamma 5.10**, **Score-follow**, **Manual**, **Signal study**, **Events**. Your last tab is remembered.
 
 **Overview**: one row per strategy (all of [06-strategies.md](06-strategies.md)), with *today net across all* at the top.
 
@@ -129,7 +131,9 @@ Tabs: **Overview**, **Condor / spreads (5.1)**, **Directional (5.2)**, **Debit s
 | **Trades · W / L · Open** | Count, wins/losses, open positions. |
 | **Rules / now** | The rule summary and what it is doing right now (watching, waiting for a retest, holding…). |
 
-Click a row to open that strategy's detail view: a **decision box** (green = ready, blue = holding, amber = no trade, with the reason), the full rule text, open positions and closed trades. The breakthrough scalper also shows its latest **5-pillar scores** per index, the contract, writer pain and the 25%/30% stop-cluster levels.
+**Playbook**: the strategies from the owner's notes (`plays_long.py`, `plays_spread.py`) in one table: state (watching / holding / off), today net, trades, open, and **Now**, a status line rebuilt every step that puts each condition's live value next to the threshold it needs. Examples: *NIFTY: index 25,840 vs PDH 25,910 / PDL 25,700; futures OI +0.6% in 15 min (needs > +2%)*, *not a trading day for it (trades NIFTY Mon/Tue; SENSEX Thu); today is Fri*, *entries 09:45–14:00 (opens later)*. A multi-leg plan that could not get every leg into the live feed says so (*only 1 of 2 legs fit in the live feed*), and the latest refused or dropped attempt stays on the line. The same text is the *Rules / now* column of Overview for these strategies.
+
+Click a row (in Overview or Playbook) to open that strategy's detail view: a **decision box** (green = ready, blue = holding, amber = no trade, with the reason), the full rule text, open positions and closed trades. The breakthrough scalper also shows its latest **5-pillar scores** per index, the contract, writer pain and the 25%/30% stop-cluster levels.
 
 **Condor / spreads (5.1)**
 - Rule line (hover for every rule) and the **decision**: *Holding*, *Ready* or *No trade* with the reason, plus the order-flow tally for the last 30 minutes (confirmed UP, DOWN, forming).
@@ -157,20 +161,48 @@ Click a row to open that strategy's detail view: a **decision box** (green = rea
 Three sub-tabs:
 
 **Market depth** (default)
-- **Spark line**: the last ~30 minutes of LTP and its range.
+- **Price chart**: the last ~30 minutes of LTP. Dashed lines mark the latest reading's **entry (blue), stop (red) and targets (green)** and any open paper position's **average (gold), stop and target**. Levels far outside the recent range are listed but not drawn, so the chart stays readable.
+- **Levels box**:
+  - **Latest order-flow reading:** direction, grade and score, entry, SL, T1, T2 and reward-to-risk. Below 75 it says *shown, not acted on*. A SHORT reading on an option is marked as a naked short that is never traded.
+  - **Open paper positions** in this contract, from any account: quantity, average, stop, target, net.
+  - These levels exist for every scored contract, but only readings of 75+ held 5 s start setups and strategies.
 - **Spread**: ask − bid and as % of mid; what a round trip at the touch costs before charges.
 - **Micro-price**: mid weighted by the size waiting on each side; *leans up* / *leans down* toward the side with less size.
 - **Orders bid / ask**: order counts on the visible levels (Upstox 30-level depth does not send them, so often *not in this feed*).
 - **Largest bid / ask**: the biggest resting order each side (possible support / resistance).
 - **Imbalance bars**: bids vs asks for the **top 5 levels** and for **all levels**.
-- **Ladder**: up to 30 levels each side: orders, cumulative quantity, quantity (with a size bar), price. **Highlighted sizes are walls** (at least 3× the median level on that side). Cumulative columns show how much you could fill before reaching that price. A dashed line marks level 6.
+- **Ladder**: up to 30 levels each side: orders, cumulative quantity, quantity (with a size bar), price.
+  - **Highlighted sizes are walls** (at least 3× the median level on that side).
+  - Price cells carry tags where a level sits in the book: **E**, **SL**, **T1/T2**, **AVG**, **STOP**, **TGT**.
+  - Cumulative columns show how much you could fill before reaching that price. A dashed line marks level 6.
 
 **Analytics**
-- For options: **implied vol, delta, gamma, theta per lot per day, vega per lot per vol point, days and trading minutes to expiry, intrinsic, time value, strike vs forward**. On an option expiring today in its last minutes it shows **Settling** instead: the price tracks the settlement average, so IV and greeks would be fiction and readings are ignored.
-- For the index and futures: previous day H/L, previous close, day range.
-- **Order-flow reading**: latest score and grade, 1-minute average, what it says about the index, pattern, futures OI quadrant, time; the **four pillar bars** (Location /25, Order flow /30, Book shape /25, Derivatives /20; hover each for what it measures); and **OBI**, **RER**, **Air pocket**, **CVD z-score**. Definitions in [05-signals.md](05-signals.md).
+- **Options:** implied vol, delta, gamma, theta per lot per day, vega per lot per vol point, days and trading minutes to expiry, intrinsic, time value, strike vs forward.
+  - Greeks use **one IV per strike**, taken from the out-of-the-money option (see [05-signals.md](05-signals.md#implied-volatility-and-greeks)); hover the IV for the option's own-mid IV and the source.
+  - On an option expiring today in its last minutes it shows **Settling** instead: the price tracks the settlement average, so IV and greeks would be fiction and readings are ignored.
+- **Trade lab** (options), for 1 lot bought at the ask:
+  - **Strike IV vs ATM IV:** rich or cheap on the smile.
+  - **Index IV percentile:** at 80+ the playbook routes naked buys into spreads.
+  - **Breakeven at expiry:** in points and % from spot.
+  - **Expected move to expiry (1σ)** = forward × IV × √T on trading time, and how many σ away the breakeven is.
+  - **Risk at the ticket's stop %:** premium × lot × stop, against the per-trade limit the risk gate applies.
+  - **Scenario grid:** P&L per lot for an index move of −2% … +2% now, after one trading day and at expiry. Black-76 with IV held constant, before charges: a model, not a forecast.
+  - **Payoff chart:** at expiry (solid) and today (dashed), with spot and breakeven marked.
+- **Index and futures:** previous day H/L, previous close, day range.
+- **Order-flow reading:**
+  - latest score and grade, 1-minute average, what it says about the index, pattern, futures OI quadrant, time;
+  - **entry · SL**, **T1 · T2**, reward-to-risk;
+  - the **four pillar bars** (Location /25, Order flow /30, Book shape /25, Derivatives /20; hover each for what it measures), with a reminder of the 75 threshold and the location cap;
+  - **OBI**, **RER**, **Air pocket**, **CVD z-score**. Definitions in [05-signals.md](05-signals.md).
 
-**Option chain** (compact): index switch; ±14 strikes around the forward with OI, ΔOI vs the previous session, IV, Δ, bid, ask each side. The ATM row is highlighted; ITM cells are tinted; the **OI wall strikes are gold**; **outlined cells are open condor legs**. Click any cell to open that contract. Underneath: the **smile** (OTM IVs as dots, SVI fit as a line, the forward dashed) with ATM IV, 98/102 skew and fit error.
+**Option chain** (compact):
+- **Picker:** index buttons and an **expiry picker**, covering every recorded expiry including the next monthly.
+- **Summary line:** forward, the **ATM straddle** (the move the market prices to expiry), PCR, **max pain** (amber strike), trading minutes left.
+- **Columns:** ±12 strikes around the forward. Each side shows OI in lakh with a bar, ΔOI vs the previous session, delta and LTP with % change; the **strike IV** sits under each strike.
+- **Hover** a cell for bid × ask, IV, delta, theta and volume.
+- **Marking:** the ATM row is highlighted and ITM cells tinted. **OI wall strikes are gold**, **outlined cells are open condor legs**, and the **blue outline is the contract open in the panel**.
+- **Click** any cell to open that contract.
+- **Smile** underneath: OTM IVs as dots, the SVI fit as a line, the forward dashed, with ATM IV, 98/102 skew and fit error.
 
 **Paper ticket** (bottom)
 - **Stop __ %**: paper stop as % of premium (default 25%). Needed so the risk gate knows the maximum loss.

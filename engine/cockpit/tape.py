@@ -25,6 +25,31 @@ from typing import Any
 from engine.core.rules import IST
 
 
+def trade_side(
+    vol: float, px: float, bid: float, ask: float, prev_px: float = 0.0
+) -> tuple[float, float]:
+    """(aggressive buy, aggressive sell) volume for ``vol`` that printed at ``px``, judged
+    against the quote that stood BEFORE it (Lee-Ready): at/above that ask is a buy, at/below
+    that bid a sell, otherwise by the side of that mid; exactly at the mid, by the tick
+    (up = buy, down = sell, unchanged = split). Using the post-trade quote instead misreads a
+    sweep that lifted the touch as selling."""
+    if vol <= 0:
+        return 0.0, 0.0
+    if ask > 0 and px >= ask:
+        return vol, 0.0
+    if bid > 0 and px <= bid:
+        return 0.0, vol
+    if bid > 0 and ask > 0:
+        mid = (bid + ask) / 2
+        if px > mid:
+            return vol, 0.0
+        if px < mid:
+            return 0.0, vol
+    if prev_px > 0 and px != prev_px:
+        return (vol, 0.0) if px > prev_px else (0.0, vol)
+    return vol / 2, vol / 2
+
+
 @dataclass
 class MinuteBar:
     start: datetime
@@ -62,6 +87,11 @@ class IndexTape:
     day: Any = None
     last_cum: float | None = None
     straddle_last_cum: float | None = None
+    # The futures quote and price at the previous sample: volume that traded since then hit
+    # THAT book (a sweep moves the touch before the next sample arrives).
+    prev_bid: float = 0.0
+    prev_ask: float = 0.0
+    prev_px: float = 0.0
     atm_strike: float | None = None
     iv: dict[str, list[tuple[datetime, float]]] = field(default_factory=dict)
     oi: list[tuple[datetime, dict[tuple[float, str], int]]] = field(default_factory=list)
@@ -95,21 +125,18 @@ class IndexTape:
                 if self.last_cum is not None and cum >= self.last_cum:
                     vol = cum - self.last_cum
                 self.last_cum = cum
+            bid = fut.bids[0][0] if fut.bids else 0.0
+            ask = fut.asks[0][0] if fut.asks else 0.0
+            px = float(fut.ltp)
             if vol > 0:
-                bid = fut.bids[0][0] if fut.bids else 0.0
-                ask = fut.asks[0][0] if fut.asks else 0.0
-                px = float(fut.ltp)
-                if ask and px >= ask:
-                    b.buy += vol
-                elif bid and px <= bid:
-                    b.sell += vol
-                elif bid and ask:
-                    if px > (bid + ask) / 2:
-                        b.buy += vol
-                    else:
-                        b.sell += vol
+                buy, sell = trade_side(
+                    vol, px, self.prev_bid or bid, self.prev_ask or ask, self.prev_px
+                )
+                b.buy += buy
+                b.sell += sell
                 b.vol += vol
                 b.pv += vol * px
+            self.prev_bid, self.prev_ask, self.prev_px = bid, ask, px
         if straddle:
             b.straddle = straddle
             if straddle_cum_vol is not None:
@@ -194,6 +221,8 @@ class IndexTape:
         inside = [b for b in self.bars if first <= b.start < end]
         if not inside or self.bars[-1].start < end:
             return None
+        if inside[0].start > first + timedelta(minutes=1):
+            return None  # the tape started late (a restart): a partial range is not the range
         return max(b.high for b in inside), min(b.low for b in inside)
 
     def realized_vol(self, minutes: int = 30, from_open: bool = True) -> float | None:

@@ -12,7 +12,7 @@ Times are IST. With the scheduled tasks registered ([02-setup.md §2.7](02-setup
 
 - Recorder starts at 08:50, engine at 08:46, gateway at 08:45 (or start them by hand in three terminals).
 - Open http://127.0.0.1:8765. In the header, the **page** and **live engine** dots should be green.
-- The header line shows the feed status, lag, contracts live and readings today. `DROPPED` or `cockpit errors` means: read `logs/shadow_live_task.log`.
+- The header line shows the feed status, lag, contracts live and readings today. `DROPPED` or `cockpit errors` means: read `logs/engine_shadow-live.log`.
 
 ## 09:15–15:40: market hours
 
@@ -39,6 +39,7 @@ Times that matter:
 | 14:45 | On expiry day: long options expiring today are closed; no more readings on that index. |
 | 15:00 | No new paper entries anywhere. Condor exits on the day before expiry. |
 | 15:15 | No new readings or setups (normal days). |
+| 15:00 | On expiry day: multi-leg positions whose short leg expires today are closed, before the 15:10 settlement window (`cockpit.spread_expiry_exit`). |
 | 15:20 | Intraday positions squared off at the bid. Overnight strategies (condor, calendar, compression, synthetic and married futures) keep their positions. |
 | 15:10–15:40 | NSE F&O closing-price window (VWAP of the last 30 minutes, per `NSE/FAOP/74467`). Options expiring today settle to an averaged index value, so late in the day they stop behaving like options; their greeks and readings are switched off. |
 | 15:40 | F&O close (15:30 before 3 Aug 2026; `config/rules/market_sessions.csv`). |
@@ -54,7 +55,12 @@ Times that matter:
 `QuantEngine-EOD` runs, in order:
 1. `eod`: NSE/BSE end-of-day files (F&O and cash bhavcopies, delivery, participant OI and volume, indices), plus the F&O ban list and bulk/block deals, which exist only on the day. It also catches up anything missing from the last 7 days and adds the day to the screener.
 2. `iv-history`: rebuilds `data/parquet/eod/iv_history.parquet` (our ATM IV from closes), which feeds the IV percentile.
-3. `evening`: delivery files and tomorrow's **delivery-spike watchlist**; Nifty members' **results dates** into the macro calendar; **quarterly results and shareholding** for the watchlist and heavyweights; the **swing** paper run (fills last night's orders at the open, stops, exits, queues tomorrow's entries; monthly trend sleeve).
+3. `evening`, in this order:
+   - delivery files and tomorrow's **delivery-spike watchlist**;
+   - Nifty members' **results dates** into the macro calendar;
+   - **quarterly results and shareholding** for the watchlist and heavyweights;
+   - the **swing** paper run (fills last night's orders at the open, stops, exits, queues tomorrow's entries; monthly trend sleeve);
+   - last, the **backup**: new or changed recordings and journals copied to `C:\QuantBackup` (see [09-data-and-research.md](09-data-and-research.md#910-backup)).
 
 A non-zero exit means one step failed (often NSE refusing a request); the others still ran. Read `logs/eod_task.log` and `logs/evening_task.log`.
 

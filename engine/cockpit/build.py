@@ -47,9 +47,12 @@ def build_cockpit(
     from dataclasses import replace as _replace
 
     # Paper strategies may size up to cockpit.paper_max_lots within the approved loss limits.
+    # Paper only: up to paper_max_lots, and each strategy's broker margin up to
+    # paper_margin_cap_pct of capital on its own account (live keeps settings.risk).
     paper_limits = _replace(
         settings.risk,
         max_lots_per_strategy=max(settings.risk.max_lots_per_strategy, ccfg.paper_max_lots),
+        margin_headroom_max_used_pct=ccfg.paper_margin_cap_pct,
     )
     square_off = session.at(sc.paper_square_off_at)
 
@@ -183,6 +186,11 @@ def build_cockpit(
     )
     debit.load_journal(day)
     core.debit_acct = debit
+    quoter = None
+    if source == "live":
+        from engine.cockpit.margin import MarginQuoter
+
+        quoter = MarginQuoter()
     core.plays = make_plays(
         ccfg,
         paper_limits,
@@ -197,6 +205,21 @@ def build_cockpit(
         expiry_of=expiry_of,
         event_block=event_block,
     )
+    spread_accts = [spread, debit, *(p.account for p in core.plays if hasattr(p, "plan"))]
+    if quoter is not None:
+        for acct in spread_accts:
+            acct.attach_margin(quoter)
+    for p in core.plays:
+        if hasattr(p, "expiry_exit"):
+            p.expiry_exit = ccfg.spread_expiry_exit
+    for acct in spread_accts:
+        acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
+        acct.leg_gap_s = ccfg.paper_leg_gap_ms / 1000
+        acct.charges_mult = ccfg.credit_charges_mult
+    for acct in [*core.long_accounts()]:
+        acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
+        acct.stop_hold_max_s = ccfg.stop_hold_max_s
+        acct.stop_override_mult = ccfg.stop_override_mult
     if ccfg.model_price_stops:
         for acct in [
             *core.long_accounts(),
@@ -232,7 +255,7 @@ def make_plays(
     from engine.cockpit import plays_long as L
     from engine.cockpit import plays_spread as S
     from engine.cockpit.condor import SpreadAccount
-    from engine.cockpit.plays_base import HighIvRouter, SpreadPlay
+    from engine.cockpit.plays_base import HighIvPlay, HighIvRouter
 
     on = dict(ccfg.plays)
 
@@ -268,7 +291,7 @@ def make_plays(
         a.load_journal(day)
         return a
 
-    hiv = SpreadPlay(
+    hiv = HighIvPlay(
         "hiv",
         "High-IV routed debit spreads",
         "rule 4",
@@ -276,7 +299,7 @@ def make_plays(
         rules="Naked-buy signals arriving with ATM IV at or above the 80th "
         "percentile are placed as ~0.55/0.25 delta debit spreads instead.",
     )
-    router = HighIvRouter(hiv)
+    router = HighIvRouter(hiv, ivp_min=hiv.ivp_min)
     plays: list[Any] = [
         L.PutPanicPlay(
             "put_panic",

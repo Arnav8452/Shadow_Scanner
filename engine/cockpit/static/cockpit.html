@@ -282,6 +282,25 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
 .spos .kv4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px 12px; margin: 6px 0; }
 .spos .kv4 .k { color: var(--muted); font-size: 10.5px; } .spos .kv4 .v { font-family: var(--mono); }
 .ev.setup .x { color: var(--up); } .ev.condor .x { color: #b48cff; } .ev.micro .x { color: var(--faint); }
+/* levels, scenarios, events list, smooth strategy tables */
+table.depth thead th { position: sticky; top: 0; z-index: 3; background: var(--panel); }
+.qgrid .v { overflow: hidden; text-overflow: ellipsis; }
+.lvl { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px; font: 600 10px var(--sans); }
+.lvl.e { background: #1d3a5c; color: #9cc8ff; } .lvl.sl { background: #4a1f22; color: #f1a3a3; }
+.lvl.t { background: #17402b; color: #8fe0a8; } .lvl.pos { background: #3a3014; color: var(--hot); }
+.lvbox { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px; margin: 6px 0; }
+.lvbox > div { background: var(--panel2); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.lvbox .h { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.lvbox .mono b { font-weight: 600; }
+table.scen { font: 12px var(--mono); margin: 4px 0 8px; }
+table.scen td, table.scen th { text-align: right; padding: 2px 6px; }
+table.scen td.k, table.scen th.k { text-align: left; color: var(--muted); font-family: var(--sans); }
+#ev-list { display: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font-size: 12px; max-height: 260px; overflow: auto; }
+#ev-list.show { display: block; }
+#ev-list .evr { display: grid; grid-template-columns: 170px minmax(0, 1fr) 110px 90px; gap: 8px; padding: 2px 0; border-bottom: 1px solid #1b2230; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+table.chain td.selk { box-shadow: inset 0 0 0 2px var(--accent); }
+table.chain tr.mp td.k { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -303,7 +322,8 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
 
 <div id="desk">
   <div id="leftcol">
-    <div id="evline"><span class="muted">Events</span><span class="evs" id="mk-events"></span><button id="view-toggle" type="button" title="Switch the index cards between full and one-line view (remembered)">One-line view</button></div>
+    <div id="evline"><span class="muted">Events</span><span class="evs" id="mk-events"></span><button id="ev-toggle" type="button" title="Show every upcoming event in the calendar">All events ▾</button><button id="view-toggle" type="button" title="Switch the index cards between full and one-line view (remembered)">One-line view</button></div>
+    <div id="ev-list"></div>
     <div id="icards"></div>
     <section class="panel" id="setups">
       <div class="hd"><h2>Setups</h2><span class="muted small" id="setup-rules"></span><span class="tag hyp" title="Thresholds are unvalidated priors (cockpit.setups in settings.yaml)">HYPOTHESIS</span></div>
@@ -312,7 +332,7 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
     <div class="hsplit" id="split-setups" title="Drag to resize the setups list (double-click to reset)"></div>
     <section class="panel" id="scanner">
       <div class="hd"><h2>Scanner</h2>
-        <div class="seg" id="filters"><button data-f="all" class="on">All</button><button data-f="opt">Options</button><button data-f="fut">Fut/Index</button><button data-f="sig">Score 65+</button></div>
+        <div class="seg" id="filters"><button data-f="all" class="on">All</button><button data-f="opt">Options</button><button data-f="fut">Fut/Index</button><button data-f="eq" title="Delivery-spike stocks from last night's watchlist (cash market, watch only)">Stocks</button><button data-f="sig">Score 65+</button></div>
         <div class="seg" id="sorts" title="Order refreshes every 30 s and never while the mouse is over the list"><button data-o="score" class="on">By score</button><button data-o="contract">By contract</button></div>
         <span class="tag hyp" title="The score is an unvalidated prior. Shown: the average of the last minute's per-second scores, so it moves slowly. Hover a bar for the latest raw score.">score = HYPOTHESIS, 1-min average</span>
         <span class="muted small" id="sort-note"></span>
@@ -321,7 +341,7 @@ table.chain td.wallc { color: var(--hot); font-weight: 700; }
     </section>
     <div class="hsplit" id="split-scan" title="Drag to resize the scanner (double-click to reset)"></div>
     <section class="panel" id="right">
-      <div class="hd"><h2>Strategies (paper)</h2><div class="seg" id="rtabs" style="flex-wrap:wrap"><button data-r="overview" class="on">Overview</button><button data-r="condor">Condor / spreads (5.1)</button><button data-r="bot">Directional (5.2)</button><button data-r="debit">Debit spreads</button><button data-r="gamma">Gamma 5.10</button><button data-r="score">Score-follow</button><button data-r="manual">Manual</button><button data-r="sig">Signal study</button><button data-r="events">Events</button></div></div>
+      <div class="hd"><h2>Strategies (paper)</h2><button id="right-max" type="button" title="Expand this panel to the window height (click again to restore)">Expand ⤢</button><div class="seg" id="rtabs" style="flex-wrap:wrap"><button data-r="overview" class="on">Overview</button><button data-r="playbook" title="The strategies from the owner's notes, with what each is waiting for right now">Playbook</button><button data-r="condor">Condor / spreads (5.1)</button><button data-r="bot">Directional (5.2)</button><button data-r="debit">Debit spreads</button><button data-r="gamma">Gamma 5.10</button><button data-r="score">Score-follow</button><button data-r="manual">Manual</button><button data-r="sig">Signal study</button><button data-r="events">Events</button></div></div>
       <div id="right-body"></div>
     </section>
     <div class="hsplit" id="split-paper" title="Drag to resize this panel (double-click to reset)"></div>
@@ -388,6 +408,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
 const inr = (v, d = 0) => (v === null || v === undefined) ? "—" : (v < 0 ? "−₹" : "₹") + Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: d, maximumFractionDigits: d });
+const ordn = (n) => { const v = Math.round(n), t = v % 100; return v + (t >= 11 && t <= 13 ? "th" : ["th", "st", "nd", "rd"][v % 10] || "th"); };
 const cls = (v) => v > 0 ? "up" : v < 0 ? "down" : "";
 const sgn = (v, d = 2) => v == null ? "—" : (v > 0 ? "+" : "") + num(v, d);
 const big = (v) => v == null ? "—" : Math.abs(v) >= 1e7 ? num(v / 1e7, 2) + " cr" : Math.abs(v) >= 1e5 ? num(v / 1e5, 2) + " L" : Math.round(v).toLocaleString("en-IN");
@@ -420,6 +441,21 @@ function connect() {
   };
 }
 function schedule() { if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+// While you scroll, wheel or hold the mouse down in a pane, it is not re-rendered (a DOM swap
+// mid-drag breaks scrollbars and selections); it catches up ~1 s after you stop.
+const busyUntil = {};
+function markBusy(id, ms) { busyUntil[id] = Math.max(busyUntil[id] || 0, Date.now() + ms); }
+function isBusy(id) { return (busyUntil[id] || 0) > Date.now() || holding[id]; }
+const holding = {};
+for (const id of ["right-body", "ibody"]) {
+  const el = document.getElementById(id);
+  el.addEventListener("wheel", () => markBusy(id, 900), { passive: true });
+  el.addEventListener("touchmove", () => markBusy(id, 900), { passive: true });
+  el.addEventListener("scroll", () => markBusy(id, 600), { passive: true, capture: true });
+  el.addEventListener("pointerdown", () => { holding[id] = true; });
+  window.addEventListener("pointerup", () => { if (holding[id]) { holding[id] = false; markBusy(id, 400); } });
+}
+setInterval(() => { if (snap) schedule(); }, 1000);  // catch up after a pause even if the feed is quiet
 
 function renderStatus() {
   $("d-live").classList.toggle("ok", !!status.live);
@@ -448,6 +484,7 @@ function render() {
     }
   }
   setHtml("mk-events", eventsLine(snap.events_cal));
+  if (view.evOpen) setHtml("ev-list", eventsList(snap.events_cal));
   setHtml("icards", indexCards());
   renderSetups(); renderScanner(); renderInstrument(); renderRight();
   if (tab === "chain") renderChainPage();
@@ -464,6 +501,13 @@ function eventsLine(ev) {
   const items = (ev.upcoming || []).slice(0, 4).map((e) => `<span class="${e.active ? "warn" : ""}">${esc(e.title)} ${esc(e.at)}${e.active ? " NOW" : e.in_hours < 48 ? ` (in ${num(e.in_hours, 1)} h)` : ` (in ${num(e.in_hours / 24, 0)} d)`}${e.status === "UNVERIFIED" ? "?" : ""}</span>`).join(" · ");
   return banner + (items || '<span class="muted">none in calendar</span>') + (ev.earnings_weight_24h_pct ? ` · results within 24 h: ${num(ev.earnings_weight_24h_pct, 1)}% of index weight` : "");
 }
+function eventsList(ev) {
+  const up = (ev && ev.upcoming) || [];
+  if (!up.length) return '<div class="muted">No upcoming events in config/events/macro_calendar.csv.</div>';
+  const when = (e) => e.active ? '<b class="warn">NOW (window open)</b>' : e.in_hours < 48 ? `in ${num(e.in_hours, 1)} h` : `in ${num(e.in_hours / 24, 0)} d`;
+  return `<div class="muted small" style="padding:2px 0 4px">${up.length} upcoming · a "?" or UNVERIFIED status means the date is not confirmed from a primary source · an event window blocks new paper entries</div>` +
+    up.map((e) => `<div class="evr"><span class="mono">${esc(e.at)}</span><span>${esc(e.title)}</span><span>${when(e)}</span><span class="${e.status === "UNVERIFIED" ? "warn" : "muted"}">${esc(e.status || "")}</span></div>`).join("");
+}
 function kvd(k, v, c = "", tip = "") { return `<div${tip ? ` title="${esc(tip)}"` : ""}><div class="k">${esc(k)}</div><div class="v ${c}">${v}</div></div>`; }
 function indexCards() {
   const out = [];
@@ -471,7 +515,7 @@ function indexCards() {
     const lv = (snap.levels || {})[u] || {}; const ch = s.chain || {}; const gex = ch.gex; const d = s.dispersion;
     const spotRow = snap.scanner.find((r) => r.kind === "IDX" && r.underlying === u);
     const chg = spotRow ? spotRow.chg_pct : null;
-    const ivp = s.iv_percentile == null ? (s.atm_iv_pct == null ? "" : " (no history)") : ` (${s.iv_percentile}th pct)`;
+    const ivp = s.iv_percentile == null ? (s.atm_iv_pct == null ? "" : " (no history)") : ` (${ordn(s.iv_percentile)} pct)`;
     const regime = gex ? (gex.regime.startsWith("POSITIVE") ? "γ+ dealers dampen moves" : "γ− dealers amplify moves") : "—";
     const short = `${num(s.spot)} ${chg == null ? "" : sgn(chg) + "%"} · IV ${s.atm_iv_pct == null ? "—" : num(s.atm_iv_pct) + "%"}${ivp} · VIX ${num(s.vix)} · PCR ${ch.pcr_oi == null ? "—" : num(ch.pcr_oi)} · walls ${ch.call_wall ? num(ch.call_wall, 0) + "/" + num(ch.put_wall, 0) : "—"} · OR ${lv.or_hi ? num(lv.or_hi, 0) + "–" + num(lv.or_lo, 0) : "—"}`;
     out.push(`<div class="icard"><div class="top"><b class="u">${esc(u)}</b><span class="px">${num(s.spot)}</span><span class="${cls(chg)}">${chg == null ? "" : sgn(chg) + "%"}</span><span class="muted small">expiry ${esc(s.expiry || "—")} · ${s.trading_minutes ?? "—"} trading min left · at ${esc(s.at || "—")}</span></div>
@@ -494,6 +538,14 @@ function indexCards() {
   return out.join("") || `<div class="empty">No market data yet.</div>`;
 }
 $("view-toggle").onclick = () => { view.compact = !view.compact; saveView(); applyView(); };
+$("ev-toggle").onclick = () => { view.evOpen = !view.evOpen; saveView(); applyEvents(); };
+function applyEvents() {
+  $("ev-list").classList.toggle("show", !!view.evOpen);
+  $("ev-toggle").textContent = view.evOpen ? "Hide events ▴" : "All events ▾";
+  if (view.evOpen && snap) setHtml("ev-list", eventsList(snap.events_cal));
+}
+applyEvents();
+$("evline").addEventListener("click", (e) => { if (e.target.closest(".evs")) { view.evOpen = !view.evOpen; saveView(); applyEvents(); } });
 function applyView() { $("icards").classList.toggle("compact", !!view.compact); $("view-toggle").textContent = view.compact ? "Full view" : "One-line view"; }
 applyView();
 
@@ -539,7 +591,8 @@ let sortMode = "score", order = [], lastSort = 0, hovering = false;
 function rowsFiltered() {
   let rows = snap.scanner.slice();
   if (filter === "opt") rows = rows.filter((r) => r.is_option);
-  if (filter === "fut") rows = rows.filter((r) => !r.is_option);
+  if (filter === "fut") rows = rows.filter((r) => !r.is_option && r.kind !== "EQ");
+  if (filter === "eq") rows = rows.filter((r) => r.kind === "EQ");
   if (filter === "sig") rows = rows.filter((r) => (r.score_1m || 0) >= 65);
   if (sortMode === "contract") return rows.sort(byContract);
   const now = Date.now();
@@ -560,7 +613,7 @@ function renderScanner() {
     const tip = `1-min average ${avg == null ? "—" : num(avg, 0)} · latest ${s ? num(s.score, 0) : "—"}${s ? ` · OBI ${num(s.obi)} · RER ${num(s.rer)} · air ${num(s.air)} · CVD z ${num(s.cvd_z)}` : ""}`;
     const bar = avg == null ? "" : `<div class="bar" title="${esc(tip)}"><i class="${avg >= 75 ? "act" : avg >= 65 ? "hot" : ""}" style="width:${Math.min(100, avg)}%"></i><b>${num(avg, 0)}</b></div>`;
     const reads = avg >= 65 && r.reads ? `<span class="${r.reads === "UP" ? "up" : "down"}">${esc(r.underlying)} ${r.reads === "UP" ? "↑" : "↓"}</span>` : "";
-    const pin = r.pinned ? ' <span class="tag" title="Added to the live feed on demand">+feed</span>' : "";
+    const pin = (r.pinned ? ' <span class="tag" title="Added to the live feed on demand">+feed</span>' : "") + (r.delivery ? ` <span class="tag ${r.delivery === "LONG_ACCUMULATION" ? "a" : "nt"}" title="Last night's delivery spike: ${r.delivery === "LONG_ACCUMULATION" ? "accumulation (high delivery on an up day)" : "retail churn (a spike on low delivery)"}. Picks what to watch, not what to trade.">${r.delivery === "LONG_ACCUMULATION" ? "accum" : "churn"}</span>` : "");
     return `<tr class="${klass}" data-s="${esc(r.symbol)}"><td>${esc(r.label)}${pin}</td><td class="n ${lc}">${num(r.ltp)}</td><td class="n ${cls(r.chg_pct)}">${r.chg_pct == null ? "—" : sgn(r.chg_pct)}</td><td class="n muted">${num(r.bid)} × ${num(r.ask)}</td><td class="n">${big(r.oi)}</td><td class="n ${cls(r.doi)}">${r.doi == null ? "—" : (r.doi > 0 ? "+" : "") + big(r.doi)}</td><td class="n">${g.iv == null ? "—" : num(g.iv, 1)}</td><td class="n">${g.delta == null ? "—" : num(g.delta, 2)}</td><td>${bar}</td><td>${reads}</td><td class="muted small">${s && avg >= 65 ? esc(s.wave.replace(/_/g, " ").toLowerCase()) : ""}</td><td class="small ${r.oi_read && r.oi_read.index_view === "UP" ? "up" : r.oi_read && r.oi_read.index_view === "DOWN" ? "down" : "muted"}" title="${r.oi_read ? esc(`OI ${r.oi_read.oi_chg > 0 ? "+" : ""}${r.oi_read.oi_chg} since ${r.oi_read.baseline}`) : ""}">${r.oi_read ? esc(r.oi_read.label) : ""}</td></tr>`;
   }).join("");
   setHtml("scan-body", html || `<tr><td colspan="12" class="empty">No contracts yet.</td></tr>`);
@@ -612,7 +665,7 @@ function renderInstrument() {
   else if (!r) body = `<div class="empty">${selected ? "Waiting for this contract to join the live feed…" : "Search for a contract above, or click a scanner row."}</div>`;
   else if (itab === "analytics") body = analyticsView(r);
   else body = depthView(r);
-  setHtml("ibody", body);
+  if (!isBusy("ibody")) setHtml("ibody", body);
   const man = snap.accounts && snap.accounts.manual;
   $("t-buy").disabled = !(r && r.is_option);
   $("t-close").disabled = !(man && man.positions.some((p) => p.symbol === selected));
@@ -633,6 +686,65 @@ function sparkSvg(sym) {
   const pts = h.map((v, i) => `${(i / (h.length - 1) * 400).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
   return `<svg viewBox="0 0 400 56" preserveAspectRatio="none" style="width:100%;height:56px;background:var(--panel2);border-radius:6px"><polyline points="${pts}" fill="none" stroke="#5aa7ff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="muted small">last ${Math.round(h.length / 60)} min of LTP · range ${num(lo)} – ${num(hi)}</div>`;
 }
+function ncdf(x) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x)), d = 0.3989422804014327 * Math.exp(-x * x / 2);
+  const p = d * t * (0.31938153 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+  return x > 0 ? 1 - p : p;
+}
+function b76(F, K, T, sig, call) {  // undiscounted Black-76 (r is a few bp over days: ignored here)
+  if (!(F > 0 && K > 0)) return null;
+  if (T <= 0 || sig <= 0) return Math.max(0, call ? F - K : K - F);
+  const sd = sig * Math.sqrt(T), d1 = (Math.log(F / K) + 0.5 * sd * sd) / sd, d2 = d1 - sd;
+  return call ? F * ncdf(d1) - K * ncdf(d2) : K * ncdf(-d2) - F * ncdf(-d1);
+}
+function positionsFor(sym) {
+  const out = [];
+  for (const [name, a] of Object.entries((snap && snap.accounts) || {})) for (const p of (a && a.positions) || []) if (p.symbol === sym) out.push({ acct: name, ...p });
+  for (const v of (snap && snap.plays) || []) for (const p of ((v.account || {}).positions) || []) if (p.symbol === sym) out.push({ acct: v.key, ...p });
+  return out;
+}
+function levelsFor(r) {
+  const L = []; const s = r.sig;
+  if (s && s.entry) {
+    L.push({ v: s.entry, cls: "e", tag: "E", label: "signal entry" });
+    if (s.sl) L.push({ v: s.sl, cls: "sl", tag: "SL", label: "signal stop" });
+    if (s.t1) L.push({ v: s.t1, cls: "t", tag: "T1", label: "target 1" });
+    if (s.t2) L.push({ v: s.t2, cls: "t", tag: "T2", label: "target 2" });
+  }
+  for (const p of positionsFor(r.symbol)) {
+    L.push({ v: p.avg, cls: "pos", tag: "AVG", label: `${p.acct} average` });
+    if (p.stop) L.push({ v: p.stop, cls: "sl", tag: "STOP", label: `${p.acct} stop` });
+    if (p.target) L.push({ v: p.target, cls: "t", tag: "TGT", label: `${p.acct} target` });
+  }
+  return L;
+}
+const LVL_COLOR = { e: "#5aa7ff", sl: "#ef5b5b", t: "#2fbf71", pos: "#f2c94c" };
+function sparkSvg(sym, levels = []) {
+  const h = hist[sym] || [];
+  if (h.length < 2) return `<div class="muted small">collecting prices…</div>`;
+  let lo = Math.min(...h), hi = Math.max(...h);
+  const span = Math.max(hi - lo, Math.abs(hi) * 0.002);
+  const vis = levels.filter((l) => l.v >= lo - 3 * span && l.v <= hi + 3 * span);  // keep the line readable
+  for (const l of vis) { lo = Math.min(lo, l.v); hi = Math.max(hi, l.v); }
+  const y = (v) => 66 - (hi === lo ? 30 : (v - lo) / (hi - lo) * 60);
+  const pts = h.map((v, i) => `${(i / (h.length - 1) * 400).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const lines = vis.map((l) => `<line x1="0" x2="400" y1="${y(l.v).toFixed(1)}" y2="${y(l.v).toFixed(1)}" stroke="${LVL_COLOR[l.cls]}" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/><text x="398" y="${(y(l.v) - 2).toFixed(1)}" fill="${LVL_COLOR[l.cls]}" font-size="8" text-anchor="end">${esc(l.tag)} ${num(l.v)}</text>`).join("");
+  const off = levels.length - vis.length;
+  return `<svg viewBox="0 0 400 70" preserveAspectRatio="none" style="width:100%;height:70px;background:var(--panel2);border-radius:6px">${lines}<polyline points="${pts}" fill="none" stroke="#5aa7ff" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="muted small">last ${Math.round(h.length / 60)} min of LTP · range ${num(Math.min(...h))} – ${num(Math.max(...h))}${off ? ` · ${off} level(s) far off the range not drawn` : ""}</div>`;
+}
+function levelsBox(r) {
+  const s = r.sig; const pos = positionsFor(r.symbol); const parts = [];
+  if (s && s.entry) {
+    const opt = r.is_option; const short = opt && s.direction === "SHORT";
+    const gradeTxt = esc(String(s.grade || "").replace("_", " ").toLowerCase());
+    const acted = (r.score_1m || 0) >= 75 ? "" : " · below 75: shown, not acted on";
+    parts.push(`<div><div class="h">Latest order-flow reading · ${esc(s.at)} · ${gradeTxt} ${num(s.score, 0)}${acted}</div>
+      <div class="mono">${short ? '<span class="down">SHORT on an option = naked short: tracked, never traded</span><br>' : ""}<span class="${s.direction === "LONG" ? "up" : "down"}">${esc(s.direction)}</span> entry <b>${num(s.entry)}</b> · SL <b class="down">${num(s.sl)}</b> · T1 <b class="up">${num(s.t1)}</b> · T2 <b class="up">${num(s.t2)}</b> · R:R ${num(s.rr1, 1)}</div>
+      <div class="muted small">Stop sits behind the nearest wall or sweep extreme; targets at ≥ 1.5R / 2.5R. HYPOTHESIS levels.</div></div>`);
+  } else parts.push(`<div><div class="h">Order-flow reading</div><div class="muted">No reading on this contract yet (it needs a two-sided book and an eligible option: ≥ ₹5 premium, ≤ 5% spread).</div></div>`);
+  for (const p of pos) parts.push(`<div><div class="h">Open paper position · ${esc(p.acct)}</div><div class="mono">${p.qty} @ <b>${num(p.avg)}</b> · stop <b class="down">${num(p.stop)}</b>${p.target ? ` · target <b class="up">${num(p.target)}</b>` : ""} · net <b class="${cls(p.net)}">${inr(p.net)}</b></div></div>`);
+  return `<div class="lvbox">${parts.join("")}</div>`;
+}
 function depthView(r) {
   if (!book || !(book.b || book.a)) return `<div class="empty">Waiting for the order book…</div>`;
   const b = book.b || [], a = book.a || []; const n = Math.max(b.length, a.length);
@@ -642,12 +754,14 @@ function depthView(r) {
   const wallB = b.length ? b.reduce((m, x) => (x[1] > m[1] ? x : m), b[0]) : null;
   const wallA = a.length ? a.reduce((m, x) => (x[1] > m[1] ? x : m), a[0]) : null;
   const maxq = Math.max(1, ...b.map((x) => x[1]), ...a.map((x) => x[1]));
+  const levels = levelsFor(r);
+  const tagsAt = (px) => px == null ? "" : levels.filter((l) => Math.abs(l.v - px) < 0.026).map((l) => `<span class="lvl ${l.cls}" title="${esc(l.label)}">${esc(l.tag)}</span>`).join("");
   let cb = 0, ca = 0, rows = "";
   for (let i = 0; i < n; i++) {
     const bi = b[i], ai = a[i];
     if (bi) cb += bi[1]; if (ai) ca += ai[1];
     const wb = bi && mb && bi[1] >= 3 * mb, wa = ai && ma && ai[1] >= 3 * ma;
-    rows += `<tr class="${i === 5 ? "l6" : ""}"><td class="ord">${bi && bi[2] ? bi[2] : ""}</td><td class="cum">${bi ? cb.toLocaleString("en-IN") : ""}</td><td class="bq${wb ? " wall" : ""}"><i style="width:${bi ? (bi[1] / maxq * 100).toFixed(1) : 0}%"></i><span>${bi ? bi[1].toLocaleString("en-IN") : ""}</span></td><td class="bp">${bi ? num(bi[0]) : ""}</td><td class="ap">${ai ? num(ai[0]) : ""}</td><td class="aq${wa ? " wall" : ""}"><i style="width:${ai ? (ai[1] / maxq * 100).toFixed(1) : 0}%"></i><span>${ai ? ai[1].toLocaleString("en-IN") : ""}</span></td><td class="cum ac">${ai ? ca.toLocaleString("en-IN") : ""}</td><td class="ord r">${ai && ai[2] ? ai[2] : ""}</td></tr>`;
+    rows += `<tr class="${i === 5 ? "l6" : ""}"><td class="ord">${bi && bi[2] ? bi[2] : ""}</td><td class="cum">${bi ? cb.toLocaleString("en-IN") : ""}</td><td class="bq${wb ? " wall" : ""}"><i style="width:${bi ? (bi[1] / maxq * 100).toFixed(1) : 0}%"></i><span>${bi ? bi[1].toLocaleString("en-IN") : ""}</span></td><td class="bp">${bi ? num(bi[0]) + tagsAt(bi[0]) : ""}</td><td class="ap">${ai ? num(ai[0]) + tagsAt(ai[0]) : ""}</td><td class="aq${wa ? " wall" : ""}"><i style="width:${ai ? (ai[1] / maxq * 100).toFixed(1) : 0}%"></i><span>${ai ? ai[1].toLocaleString("en-IN") : ""}</span></td><td class="cum ac">${ai ? ca.toLocaleString("en-IN") : ""}</td><td class="ord r">${ai && ai[2] ? ai[2] : ""}</td></tr>`;
   }
   const b5 = sum(b, 0, 5), a5 = sum(a, 0, 5), bAll = sum(b, 0, 30), aAll = sum(a, 0, 30);
   const bar = (x, y, label) => { const t = x + y || 1; const pb = x / t * 100; return `<div class="small muted">${label}: bids ${num(pb, 0)}% · asks ${num(100 - pb, 0)}%</div><div class="imb"><div class="b" style="width:${pb}%">${x.toLocaleString("en-IN")}</div><div class="a" style="width:${100 - pb}%">${y.toLocaleString("en-IN")}</div></div>`; };
@@ -655,7 +769,8 @@ function depthView(r) {
   const spread = bb && aa ? aa[0] - bb[0] : null; const mid = bb && aa ? (aa[0] + bb[0]) / 2 : null;
   const micro = bb && aa && (bb[1] + aa[1]) ? (aa[0] * bb[1] + bb[0] * aa[1]) / (bb[1] + aa[1]) : null;
   const ordB = b.reduce((t, x) => t + (x[2] || 0), 0), ordA = a.reduce((t, x) => t + (x[2] || 0), 0);
-  return `${sparkSvg(r.symbol)}
+  const inBook = levels.filter((l) => b.concat(a).some((x) => Math.abs(x[0] - l.v) < 0.026)).length;
+  return `${sparkSvg(r.symbol, levels)}${levelsBox(r)}
     <div class="dsum" style="margin-top:6px">
       ${kvd("Spread", spread == null ? "—" : `${num(spread)} (${num(spread / mid * 100, 2)}% of mid)`, "", "Ask minus bid; what a round trip at the touch costs before charges")}
       ${kvd("Micro-price", micro == null ? "—" : `${num(micro)} <span class="${cls(micro - mid)}">${micro > mid ? "leans up" : micro < mid ? "leans down" : "neutral"}</span>`, "", "Mid weighted by the size waiting on each side: leans toward the side with less size")}
@@ -665,7 +780,7 @@ function depthView(r) {
       ${kvd("Levels shown", `${n} each side`)}
     </div>
     ${bar(b5, a5, "Top 5 levels")}${bar(bAll, aAll, `All ${n} levels`)}
-    <p class="expl">Highlighted sizes are at least 3× the median level on that side (walls). Cumulative columns show how much you could fill before reaching that price.</p>
+    <p class="expl">Highlighted sizes are at least 3× the median level on that side (walls). Cumulative columns show how much you could fill before reaching that price. Tags in the price columns mark the reading's entry (E), stop (SL) and targets (T1/T2) and any open position's average, stop and target${levels.length && !inBook ? " — none of today's levels falls inside the visible book; they are drawn on the chart above" : ""}.</p>
     <table class="depth${ordB + ordA ? "" : " noord"}"><thead><tr><th class="ord" title="Orders at this price">Ord</th><th title="Cumulative bid quantity">Cum</th><th>Bid qty</th><th>Bid</th><th style="text-align:left">Ask</th><th style="text-align:left">Ask qty</th><th style="text-align:left">Cum</th><th class="ord" style="text-align:left">Ord</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 const PILLARS = [
@@ -674,44 +789,100 @@ const PILLARS = [
   ["book", "Book shape", 25, "Imbalance of resting size in the top 5 levels (OBI) and thin levels ahead (air pockets) that let price move."],
   ["derivatives", "Derivatives", 20, "Do futures OI (long/short build-up), dealer gamma and breadth agree with the move?"],
 ];
+function optionLab(r, g) {
+  // Strike IV, breakeven, expected move, risk at the ticket's stop, scenarios and payoff.
+  const call = r.kind === "CE"; const lot = r.lot || 1;
+  const strip = (snap.strip || {})[r.underlying] || {};
+  const F = g.forward || strip.forward || strip.spot; const K = g.strike || r.strike;
+  const T = g.t_var != null ? g.t_var : (g.trading_minutes || 0) / (252 * 385);
+  const sig = (g.iv || 0) / 100; const ask = r.ask || r.ltp; const spot = strip.spot || F;
+  if (!(F && K && ask && sig > 0)) return "";
+  const be = call ? K + ask : K - ask; const bePct = (be / spot - 1) * 100;
+  const em = F * sig * Math.sqrt(Math.max(T, 0));
+  const atm = strip.atm_iv_pct; const rel = atm ? g.iv - atm : null;
+  const stopPct = stopPctNow(); const riskInr = ask * lot * stopPct / 100;
+  const man = ((snap.accounts || {}).manual) || {}; const lim = man.per_trade_limit;
+  const ivNote = g.iv_source ? `${esc(g.iv_source)}${g.iv_own != null && Math.abs(g.iv_own - g.iv) >= 0.05 ? ` · own mid ${num(g.iv_own)}%` : ""}` : "own mid";
+  const head = `<h4>Trade lab (1 lot = ${lot})</h4><div class="dsum">
+    ${kvd("Strike IV", `${num(g.iv)}%${rel == null ? "" : ` <span class="${rel > 0.3 ? "warn" : rel < -0.3 ? "up" : "muted"}">${sgn(rel)} vs ATM</span>`}`, "", `Greeks use one IV per strike, the out-of-the-money option's (${ivNote}). Above ATM IV = this strike is relatively rich (skew).`)}
+    ${kvd("Index IV percentile", strip.iv_percentile == null ? "no history" : ordn(strip.iv_percentile), strip.iv_percentile >= 80 ? "warn" : "", "≥ 80: the playbook routes naked buys into debit spreads")}
+    ${kvd("Breakeven at expiry", `${num(be, 0)} (${sgn(bePct)}% from spot)`, "", "Strike ± the ask you pay; charges add a little more")}
+    ${kvd("Expected move to expiry (1σ)", `±${num(em, 0)} pts`, "", "Forward × IV × √T on trading time; about 68% of outcomes fall inside if IV is right")}
+    ${kvd("Breakeven vs 1σ", em ? `${num(Math.abs(be - F) / em, 2)}σ away` : "—", Math.abs(be - F) > em ? "warn" : "", "How many expected moves the index needs to travel to break even by expiry")}
+    ${kvd(`Risk at the ticket's ${num(stopPct, 0)}% stop`, `${inr(riskInr)}${lim ? ` of ${inr(lim)} allowed` : ""}`, lim && riskInr > lim ? "down" : "", "What the risk gate checks: premium × lot × stop %. Above the per-trade limit, Buy is refused.")}
+  </div>`;
+  // Scenarios: index move now, after one trading day, and at expiry (IV held constant).
+  const day = 1 / 252; const moves = [-2, -1, -0.5, 0, 0.5, 1, 2];
+  const val = (m, t) => b76(F * (1 + m / 100), K, Math.max(t, 0), sig, call);
+  const pl = (v) => v == null ? "—" : `<span class="${cls(v - ask)}">${inr((v - ask) * lot)}</span>`;
+  const scen = `<table class="scen"><thead><tr><th class="k">Index move</th>${moves.map((m) => `<th>${m > 0 ? "+" : ""}${m}%<div class="muted small">${num(F * (1 + m / 100), 0)}</div></th>`).join("")}</tr></thead><tbody>
+    <tr><td class="k">Now</td>${moves.map((m) => `<td>${pl(val(m, T))}</td>`).join("")}</tr>
+    ${T > day ? `<tr><td class="k">+1 trading day</td>${moves.map((m) => `<td>${pl(val(m, T - day))}</td>`).join("")}</tr>` : ""}
+    <tr><td class="k">At expiry</td>${moves.map((m) => `<td>${pl(val(m, 0))}</td>`).join("")}</tr></tbody></table>
+    <div class="muted small">P&amp;L per lot vs buying at the ask ${num(ask)}, before charges; Black-76 with IV held at ${num(g.iv)}%. A model, not a forecast: IV moves too.</div>`;
+  // Payoff chart: at expiry (straight lines) and today (curve), with breakeven and spot.
+  const W = 400, H = 120, lo = F * (1 - Math.max(0.03, 2.2 * sig * Math.sqrt(Math.max(T, day)))), hi = 2 * F - lo;
+  const xs = Array.from({ length: 61 }, (_, i) => lo + (hi - lo) * i / 60);
+  const exp = xs.map((x) => ((call ? Math.max(0, x - K) : Math.max(0, K - x)) - ask) * lot);
+  const now = xs.map((x) => ((b76(x, K, T, sig, call) || 0) - ask) * lot);
+  const ymin = Math.min(...exp, ...now), ymax = Math.max(...exp, ...now);
+  const X = (x) => (x - lo) / (hi - lo) * (W - 20) + 10, Y = (v) => H - 14 - (v - ymin) / (ymax - ymin || 1) * (H - 26);
+  const path = (ys, c, dash) => `<polyline fill="none" stroke="${c}" stroke-width="1.5" ${dash ? 'stroke-dasharray="4 3"' : ""} points="${xs.map((x, i) => `${X(x).toFixed(1)},${Y(ys[i]).toFixed(1)}`).join(" ")}"/>`;
+  const vline = (x, c, t) => x >= lo && x <= hi ? `<line x1="${X(x)}" x2="${X(x)}" y1="4" y2="${H - 12}" stroke="${c}" stroke-dasharray="3 3"/><text x="${X(x) + 2}" y="12" fill="${c}" font-size="9">${t}</text>` : "";
+  const payoff = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:120px;background:var(--panel2);border-radius:6px"><line x1="10" x2="${W - 10}" y1="${Y(0)}" y2="${Y(0)}" stroke="#4a5468"/>${path(exp, "#e3a33b")}${path(now, "#5aa7ff", true)}${vline(spot, "#7f8aa0", "spot")}${vline(be, "#2fbf71", "BE")}<text x="10" y="${H - 2}" fill="#7f8aa0" font-size="9">${num(lo, 0)}</text><text x="${W - 10}" y="${H - 2}" fill="#7f8aa0" font-size="9" text-anchor="end">${num(hi, 0)}</text><text x="${W - 10}" y="12" fill="#7f8aa0" font-size="9" text-anchor="end">max loss ${inr(-ask * lot)}</text></svg>
+    <div class="muted small"><span style="color:#e3a33b">—</span> at expiry · <span style="color:#5aa7ff">- -</span> today · per lot, before charges</div>`;
+  return head + scen + payoff;
+}
+function stopPctNow() { return Number($("t-stop").value) || (snap && snap.config ? snap.config.manual_stop_pct : 25); }
 function analyticsView(r) {
   const g = r.greeks; const s = r.sig;
-  const greeks = g && g.settling ? `<div class="decision no"><b>Settling</b> · expires today and is in its last minutes: the price tracks the settlement average, so IV and greeks would be fiction and readings are ignored.</div>` : g ? `<h4>Option (Black-76 on our forward, from this contract's mid)</h4><div class="dsum">
-      ${kvd("Implied vol", num(g.iv) + "%")}${kvd("Delta", num(g.delta, 3), "", "Change in premium per 1-point move in the index")}${kvd("Gamma", num(g.gamma, 5), "", "Change in delta per 1-point move")}
+  const greeks = g && g.settling ? `<div class="decision no"><b>Settling</b> · expires today and is in its last minutes: the price tracks the settlement average, so IV and greeks would be fiction and readings are ignored.</div>` : g ? `<h4>Option (Black-76 on our forward, one IV per strike)</h4><div class="dsum">
+      ${kvd("Implied vol (strike)", num(g.iv) + "%", "", g.iv_source ? `${g.iv_source}; this option's own mid gives ${num(g.iv_own)}%` : "")}${kvd("Delta", num(g.delta, 3), "", "Change in premium per 1-point move in the index")}${kvd("Gamma", num(g.gamma, 5), "", "Change in delta per 1-point move")}
       ${kvd("Theta / lot / day", inr(g.theta_lot), "down", "Time decay of one lot per calendar day")}${kvd("Vega / lot / vol pt", inr(g.vega_lot), "", "Premium change of one lot per 1 point of IV")}${kvd("Days to expiry", `${g.days} (${num(g.trading_minutes, 0)} trading min)`)}
       ${kvd("Intrinsic", num(g.intrinsic))}${kvd("Time value", num(g.time_value))}${kvd("Strike vs forward", sgn(g.moneyness_pct) + "%")}
-    </div>` : (r.is_option ? `<div class="muted">Greeks need a two-sided book and the index forward.</div>` : "");
+    </div>${optionLab(r, g)}` : (r.is_option ? `<div class="muted">Greeks need a two-sided book and the index forward.</div>` : "");
   const pill = s ? PILLARS.map(([k, name, max, ex]) => { const v = s.breakdown[k] || 0; return `<div class="pillar" title="${esc(ex)}"><span>${name}</span><div class="pbar"><i style="width:${(v / max * 100).toFixed(0)}%"></i></div><span class="mono">${num(v, 1)} / ${max}</span></div>`; }).join("") : "";
+  const need = s ? `<div class="muted small">A reading needs 75+ held 5 s (now ${num(r.score_1m, 0)} on the 1-minute average). Without a structural level (location under 8) the score is capped at 60.</div>` : "";
   const reading = s ? `<h4>Order-flow reading</h4>
     <p class="expl">The score is a HYPOTHESIS: an unvalidated weighting of four pillars. A reading is an input to the setups list and the strategies, never a trade by itself. Hover a pillar for what it measures.</p>
     <div class="dsum">${kvd("Latest score", `${num(s.score, 0)} (${esc(s.grade.replace("_", " ").toLowerCase())})`)}${kvd("1-minute average", num(r.score_1m, 0))}${kvd("Says about index", r.reads ? `${esc(r.underlying)} ${r.reads === "UP" ? "↑ up" : "↓ down"}` : "—", r.reads === "UP" ? "up" : "down")}
-    ${kvd("Pattern", esc(s.wave.replace(/_/g, " ").toLowerCase()))}${kvd("Futures OI", esc((s.oi_quadrant || "—").replace(/_/g, " ").toLowerCase()))}${kvd("At", esc(s.at))}</div>${pill}
+    ${kvd("Pattern", esc(s.wave.replace(/_/g, " ").toLowerCase()))}${kvd("Futures OI", esc((s.oi_quadrant || "—").replace(/_/g, " ").toLowerCase()))}${kvd("At", esc(s.at))}
+    ${kvd("Entry · SL", `${num(s.entry)} · <span class="down">${num(s.sl)}</span>`)}${kvd("T1 · T2", `<span class="up">${num(s.t1)} · ${num(s.t2)}</span>`)}${kvd("R:R to T1", num(s.rr1, 1))}</div>${pill}${need}
     <div class="dsum" style="margin-top:6px">${kvd("OBI (top 5)", num(s.obi), cls(s.obi), "(bid size − ask size) / total in the top 5 levels: +1 all bids, −1 all asks")}${kvd("RER", num(s.rer), "", "Real execution ratio: share of displayed size that actually trades rather than being pulled (low = possible spoofing)")}${kvd("Air pocket", num(s.air), "", "How thin the levels ahead are: high = price can move fast")}${kvd("CVD z-score", num(s.cvd_z), cls(s.cvd_z), "Aggressive buying minus selling, in standard deviations of recent flow")}</div>` : `<div class="muted" style="margin-top:6px">No order-flow reading on this contract yet.</div>`;
   const lv = !r.is_option ? `<h4>Levels</h4><div class="dsum">${kvd("Prev day H / L", r.pdh ? `${num(r.pdh)} / ${num(r.pdl)}` : "—")}${kvd("Prev close", num(r.prev_close))}${kvd("Day range", `${num(r.low)} – ${num(r.high)}`)}</div>` : "";
   return greeks + lv + reading;
 }
+let chainExpDesk = "";
 function chainView() {
   const unds = Object.keys(snap.strip || {});
   const und = chainUnd && unds.includes(chainUnd) ? chainUnd : unds[0];
-  const sw = `<div class="seg" id="chain-und" style="margin-bottom:6px">${unds.map((u) => `<button data-u="${esc(u)}" class="${u === und ? "on" : ""}">${esc(u)}</button>`).join("")}</div>`;
-  const m = chainMsg; const t = m && m.underlying === und ? m.table : null;
+  const m = chainMsg && chainMsg.underlying === und ? chainMsg : null;
+  const exps = m ? m.expiries || [] : [];
+  const sw = `<div class="seg" id="chain-und" style="margin-bottom:6px;flex-wrap:wrap;gap:4px">${unds.map((u) => `<button data-u="${esc(u)}" class="${u === und ? "on" : ""}">${esc(u)}</button>`).join("")}${exps.length ? `<select id="chain-exp" style="margin-left:6px" title="Expiry">${exps.map((e) => `<option ${m && e === m.expiry ? "selected" : ""}>${esc(e)}</option>`).join("")}</select>` : ""}</div>`;
+  const t = m ? m.table : null;
   if (!t || !t.rows || !t.rows.length) return sw + `<div class="empty">Waiting for the 1-minute option chain (needs the recorder running). The full chain with LTP / Greeks / All-columns views is on the Option chain tab.</div>`;
   const ch = ((snap.strip || {})[und] || {}).chain || {};
   const f = t.forward; const rows = t.rows;
   const atmI = rows.reduce((bi, r, i) => (Math.abs(r.k - f) < Math.abs(rows[bi].k - f) ? i : bi), 0);
-  const lo = Math.max(0, atmI - 14), hi = Math.min(rows.length, atmI + 15);
-  const legs = condorLegs();
-  const cell = (x, key, fmt, extra, sym) => `<td class="${extra}"${sym ? ` data-sym="${esc(sym)}"` : ""}>${x && x[key] != null ? fmt(x[key]) : "—"}</td>`;
+  const lo = Math.max(0, atmI - 12), hi = Math.min(rows.length, atmI + 13);
+  const legs = condorLegs(); const maxOi = Math.max(1, ...rows.slice(lo, hi).map((r) => Math.max((r.ce || {}).oi || 0, (r.pe || {}).oi || 0)));
+  const atmRow = rows[atmI] || {}; const straddle = ((atmRow.ce || {}).ltp || 0) + ((atmRow.pe || {}).ltp || 0);
+  const oiCell = (x, isCall) => { if (!x || !x.oi) return "—"; const w = (x.oi / maxOi * 46).toFixed(0); const v = num(x.oi / 1e5, 1); return isCall ? `${v}<span class="oibar c" style="width:${w}px"></span>` : `<span class="oibar p" style="width:${w}px"></span>${v}`; };
   const side = (x, isCall, k) => {
     const sym = x && x.sym; const itm = isCall ? k < f : k > f;
-    const base = `${itm ? "itm " : ""}${sym ? "click " : ""}${sym && legs.has(sym) ? "leg " : ""}`;
+    const base = `${itm ? "itm " : ""}${sym ? "click " : ""}${sym && legs.has(sym) ? "leg " : ""}${sym && sym === selected ? "selk " : ""}`;
     const wall = isCall ? ch.call_wall === k : ch.put_wall === k;
-    const c = [cell(x, "oi", big, base + (wall ? "wallc" : ""), sym), cell(x, "oi_chg", (v) => (v > 0 ? "+" : "") + big(v), base + (x && x.oi_chg > 0 ? "up" : x && x.oi_chg < 0 ? "down" : ""), sym), cell(x, "iv", (v) => num(v, 1), base, sym), cell(x, "delta", (v) => num(v, 2), base, sym), cell(x, "bid", num, base, sym), cell(x, "ask", num, base, sym)];
-    return (isCall ? c : [c[4], c[5], c[3], c[2], c[1], c[0]]).join("");
+    const tip = x ? ` title="${esc(`bid ${num(x.bid)} × ask ${num(x.ask)} · IV ${num(x.iv)}% · Δ ${num(x.delta, 2)} · Θ ${num(x.theta, 1)}/day · vol ${big(x.volume)}`)}"` : "";
+    const td = (html, extra = "") => `<td class="${base}${extra}"${sym ? ` data-sym="${esc(sym)}"` : ""}${tip}>${html}</td>`;
+    const doi = x && x.oi_chg != null ? `<span class="${cls(x.oi_chg)}">${x.oi_chg > 0 ? "+" : ""}${big(x.oi_chg)}</span>` : "—";
+    const ltp = x && x.ltp != null ? `${num(x.ltp)}<div class="small ${cls(x.chg_pct)}">${x.chg_pct == null ? "" : sgn(x.chg_pct, 1) + "%"}</div>` : "—";
+    const c = [td(oiCell(x, isCall), wall ? "wallc" : ""), td(doi), td(x && x.delta != null ? num(x.delta, 2) : "—"), td(ltp)];
+    return (isCall ? c : c.slice().reverse()).join("");
   };
-  const body = rows.slice(lo, hi).map((r, i) => `<tr class="${lo + i === atmI ? "atm" : ""}">${side(r.ce, true, r.k)}<td class="k">${num(r.k, 0)}</td>${side(r.pe, false, r.k)}</tr>`).join("");
-  return sw + `<div class="muted small" style="margin-bottom:4px">${esc(und)} ${esc(t.expiry)} · forward ${num(f)} · at ${esc(t.at)} · PCR ${num(t.summary.pcr_oi)} · max pain ${num(t.summary.max_pain, 0)} · ΔOI vs previous session · outlined = condor leg · click to open</div>
-    <table class="chain"><thead><tr><th>OI</th><th>ΔOI</th><th>IV</th><th>Δ</th><th>Bid</th><th>Ask</th><th style="text-align:center">Strike</th><th>Bid</th><th>Ask</th><th>Δ</th><th>IV</th><th>ΔOI</th><th>OI</th></tr></thead><tbody>${body}</tbody></table>${smileSvg(ch.smile)}`;
+  const ivOf = (r) => r.iv != null ? r.iv : (() => { const c = (r.ce || {}).iv, p = (r.pe || {}).iv; return r.k < f ? (p ?? c) : (c ?? p); })();
+  const body = rows.slice(lo, hi).map((r, i) => `<tr class="${lo + i === atmI ? "atm" : ""}${t.summary && r.k === t.summary.max_pain ? " mp" : ""}">${side(r.ce, true, r.k)}<td class="k" title="${t.summary && r.k === t.summary.max_pain ? "max pain" : ""}">${num(r.k, 0)}<div class="small muted">${ivOf(r) == null ? "" : num(ivOf(r), 1) + "%"}</div></td>${side(r.pe, false, r.k)}</tr>`).join("");
+  return sw + `<div class="muted small" style="margin-bottom:4px">${esc(und)} ${esc(t.expiry)} · forward ${num(f)} · ATM straddle ${num(straddle)} (≈ ±${num(straddle, 0)} pts priced to expiry) · PCR ${num(t.summary.pcr_oi)} · max pain <span class="warn">${num(t.summary.max_pain, 0)}</span> · ${t.trading_minutes ?? "—"} trading min · at ${esc(t.at)}<br>OI in lakh with bars · ΔOI vs previous session · strike IV under the strike · gold = OI wall · outlined = condor leg · blue = open contract · hover for bid/ask and greeks · click to open</div>
+    <table class="chain"><thead><tr><th>OI</th><th>ΔOI</th><th>Δ</th><th>LTP</th><th style="text-align:center">Strike</th><th>LTP</th><th>Δ</th><th>ΔOI</th><th>OI</th></tr></thead><tbody>${body}</tbody></table>${smileSvg(ch.smile)}`;
 }
 function condorLegs() {
   const legs = new Set(); const c = snap && snap.condor;
@@ -724,7 +895,7 @@ let chainMsg = null, fcView = "ltp", fcUnd = null, fcExp = "";
 function requestChain() {
   let und = "", exp = "";
   if (tab === "chain") { und = fcUnd || Object.keys((snap && snap.strip) || {})[0] || "NIFTY"; exp = fcExp; }
-  else if (tab === "desk" && itab === "chain") { und = chainUnd || Object.keys((snap && snap.strip) || {})[0] || "NIFTY"; }
+  else if (tab === "desk" && itab === "chain") { und = chainUnd || Object.keys((snap && snap.strip) || {})[0] || "NIFTY"; exp = chainExpDesk; }
   send({ type: "chain", underlying: und, expiry: exp });
 }
 function renderChainPage() {
@@ -825,10 +996,11 @@ $("sc-filter").addEventListener("click", (e) => { const b = e.target.closest("bu
 $("sc-q").addEventListener("input", renderScreener);
 $("sc-refresh").onclick = () => loadScreener(true);
 $("ibody").addEventListener("click", (e) => {
-  const u = e.target.closest("#chain-und button"); if (u) { chainUnd = u.dataset.u; lastHtml.ibody = ""; requestChain(); schedule(); return; }
+  const u = e.target.closest("#chain-und button"); if (u) { chainUnd = u.dataset.u; chainExpDesk = ""; lastHtml.ibody = ""; requestChain(); schedule(); return; }
   const td = e.target.closest("td[data-sym]"); if (td) { itab = "depth"; for (const b of $("itab-seg").children) b.classList.toggle("on", b.dataset.i === "depth"); openSymbol(td.dataset.sym); }
 });
-$("t-stop").addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
+$("t-stop").addEventListener("input", (e) => { e.target.dataset.touched = "1"; lastHtml.ibody = ""; schedule(); });
+$("ibody").addEventListener("change", (e) => { if (e.target.id === "chain-exp") { chainExpDesk = e.target.value; lastHtml.ibody = ""; requestChain(); } });
 const stopPct = () => Number($("t-stop").value) || (snap && snap.config ? snap.config.manual_stop_pct : 25);
 $("t-buy").onclick = () => selected && cmd({ cmd: "buy", symbol: selected, lots: 1, stop_pct: stopPct() });
 $("t-close").onclick = () => selected && cmd({ cmd: "close", symbol: selected, account: "manual" });
@@ -848,10 +1020,10 @@ function condorView(c) {
     const dist = (k) => (k == null || !p.spot ? "—" : `${num(k, 0)} (${sgn((k / p.spot - 1) * 100)}% from index)`);
     return `<div class="spos"><div class="row1"><b>${esc(p.structure.replace(/_/g, " ").toLowerCase())}</b><span class="mono">${esc(p.strikes)}</span><span class="muted small">expiry ${esc(p.expiry)} · opened ${esc(p.opened)}</span><span style="margin-left:auto" class="mono ${cls(p.net)}">${p.net == null ? "—" : inr(p.net)} net</span><button class="sell" data-condor-close="1">Close (shorts first)</button></div>
       <div class="kv4">${kvd("Credit received", `${num(p.credit)} pts · ${inr(p.credit * p.qty)}`)}${kvd("Cost to close now", p.cost_to_close == null ? "—" : num(p.cost_to_close) + " pts")}${kvd(`Take profit at ≤`, `${num(tp)} pts`, "up")}${kvd(`Stop at ≥`, `${num(sl)} pts`, "down")}
-      ${kvd("Short put", dist(p.short_put))}${kvd("Short call", dist(p.short_call))}${kvd("Worst case", inr(p.max_loss), "down")}${kvd("Wing width", `${num(p.width, 0)} pts × ${p.qty}`)}</div>
+      ${kvd("Short put", dist(p.short_put))}${kvd("Short call", dist(p.short_call))}${kvd("Worst case", inr(p.max_loss), "down")}${kvd("Wing width", `${num(p.width, 0)} pts × ${p.qty}`)}${kvd("Margin to open", marginTxt(p.margin, p.max_loss), "", "What the broker would block to put these legs on (NRML, hedge benefit included)")}</div>
       <table><thead><tr><th>Leg</th><th class="n">Entry</th><th class="n">Bid</th><th class="n">Ask</th></tr></thead><tbody>${p.legs.map((l) => `<tr><td class="${l.side === "SELL" ? "down" : "up"}">${esc(l.label)}${l.open ? "" : " (closed)"}</td><td class="n">${num(l.entry)}</td><td class="n">${num(l.bid)}</td><td class="n">${num(l.ask)}</td></tr>`).join("")}</tbody></table></div>`;
   }).join("");
-  const closed = a.closed.length ? `<table><thead><tr><th>Closed</th><th class="n">Credit</th><th class="n">Paid</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${num(x.credit)}</td><td class="n">${num(x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
+  const closed = a.closed.length ? `<table><thead><tr><th>Closed</th><th class="n">Margin</th><th class="n">Credit</th><th class="n">Paid</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${marginTxt(x.margin)}</td><td class="n">${num(x.credit)}</td><td class="n">${num(x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
   const ref = a.refusals.length ? `<h4>Refused</h4>${a.refusals.map((x) => `<div class="ev"><span class="t">${esc(x.time || "")}</span><span>${esc(x.symbol.replace(/_/g, " ").toLowerCase())}: ${esc(x.why)}</span></div>`).join("")}` : "";
   return rules + decision + `<div class="scroll">${pos}<h4>Entry checklist</h4>${checks}${closed ? "<h4>Closed</h4>" + closed : ""}${ref}</div>`;
 }
@@ -874,6 +1046,12 @@ function smileSvg(sm) {
 }
 
 
+function marginTxt(mg, proxy) {
+  if (!mg || (!mg.final && !mg.pending && !mg.error)) return proxy == null ? "—" : `<span class="muted" title="worst-case loss used as the margin proxy">≈ ${inr(proxy)}</span>`;
+  if (mg.pending) return '<span class="muted">quoting…</span>';
+  if (mg.error) return `<span class="muted" title="${esc(mg.error)}${proxy == null ? "" : " · worst-case loss shown as the proxy"}">${proxy == null ? "n/a" : "≈ " + inr(proxy)}</span>`;
+  return `<span title="${esc(mg.source || "")}${mg.required && mg.required !== mg.final ? ` · before hedge benefit ${inr(mg.required)}` : ""}${mg.at ? " · quoted " + esc(mg.at) : ""}">${inr(mg.final)}</span>`;
+}
 function acctView(a, name) {
   if (!a) return `<div class="empty">No data.</div>`;
   const cards = `<div class="cards">
@@ -885,8 +1063,8 @@ function acctView(a, name) {
     <div class="card"><div class="k">Wins / losses</div><div class="v">${a.wins} / ${a.losses}</div></div>
     <div class="card"><div class="k">Loss room left</div><div class="v ${a.loss_room_left < a.daily_loss_limit * 0.3 ? "down" : ""}">${inr(a.loss_room_left)}</div></div>
     <div class="card"><div class="k">Cool-off</div><div class="v ${a.cooloff_until ? "warn" : ""}">${a.cooloff_until ? "until " + a.cooloff_until : (a.consecutive_losses ? a.consecutive_losses + " losses in a row" : "none")}</div></div></div>`;
-  const pos = a.positions.length ? `<table><thead><tr><th>Open</th><th class="n">Qty</th><th class="n">Avg</th><th class="n">Bid</th><th class="n">Stop</th><th class="n">Target</th><th class="n">Net</th><th></th></tr></thead><tbody>${a.positions.map((p) => `<tr><td>${esc(labelOf(p.symbol))}<div class="muted small">${esc(p.opened)} · ${esc(p.reason)}</div>${p.greeks ? `<div class="muted small mono" title="Black-76 on our synthetic forward and IV; delta in underlying units, theta ₹/day, vega ₹/vol pt, vanna Δ/vol pt, charm Δ/day">IV ${num(p.greeks.iv)}% · Δ ${num(p.greeks.delta, 1)} · Γ ${num(p.greeks.gamma, 3)} · Θ ${inr(p.greeks.theta)}/d · V ${inr(p.greeks.vega)}/pt · vanna ${num(p.greeks.vanna, 2)} · charm ${num(p.greeks.charm, 2)}/d</div>` : ""}</td><td class="n">${p.qty}</td><td class="n">${num(p.avg)}</td><td class="n">${num(p.mark)}</td><td class="n" title="${p.stop > p.avg ? "trailing stop has locked a gain" : "premium stop"}">${num(p.stop)}${p.stop > p.avg ? " ↑" : ""}</td><td class="n">${p.target == null ? "—" : num(p.target)}</td><td class="n ${cls(p.net)}">${inr(p.net)}</td><td><button class="sell" data-close="${esc(p.symbol)}" data-acct="${name}">Close</button></td></tr>`).join("")}</tbody></table>` : `<div class="empty">No open positions.</div>`;
-  const closed = a.closed.length ? `<table><thead><tr><th>Closed</th><th class="n">Qty</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((c) => `<tr><td>${esc(labelOf(c.symbol))}<div class="muted small">${esc(c.opened)}→${esc(c.closed)} · ${esc(c.reason)}</div></td><td class="n">${c.qty}</td><td class="n">${num(c.entry)}</td><td class="n">${num(c.exit)}</td><td class="n">${inr(c.charges)}</td><td class="n ${cls(c.net)}">${inr(c.net)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No closed trades today.</div>`;
+  const pos = a.positions.length ? `<table><thead><tr><th>Open</th><th class="n">Qty</th><th class="n" title="Money needed to open this trade in the market: a long option needs only its premium (plus charges)">Margin</th><th class="n">Avg</th><th class="n">Bid</th><th class="n">Stop</th><th class="n">Target</th><th class="n">Net</th><th></th></tr></thead><tbody>${a.positions.map((p) => `<tr><td>${esc(labelOf(p.symbol))}<div class="muted small">${esc(p.opened)} · ${esc(p.reason)}</div>${p.greeks ? `<div class="muted small mono" title="Black-76 on our synthetic forward and IV; delta in underlying units, theta ₹/day, vega ₹/vol pt, vanna Δ/vol pt, charm Δ/day">IV ${num(p.greeks.iv)}% · Δ ${num(p.greeks.delta, 1)} · Γ ${num(p.greeks.gamma, 3)} · Θ ${inr(p.greeks.theta)}/d · V ${inr(p.greeks.vega)}/pt · vanna ${num(p.greeks.vanna, 2)} · charm ${num(p.greeks.charm, 2)}/d</div>` : ""}</td><td class="n">${p.qty}</td><td class="n">${marginTxt(p.margin)}</td><td class="n">${num(p.avg)}</td><td class="n">${num(p.mark)}</td><td class="n" title="${p.stop > p.avg ? "trailing stop has locked a gain" : "premium stop"}">${num(p.stop)}${p.stop > p.avg ? " ↑" : ""}</td><td class="n">${p.target == null ? "—" : num(p.target)}</td><td class="n ${cls(p.net)}">${inr(p.net)}</td><td><button class="sell" data-close="${esc(p.symbol)}" data-acct="${name}">Close</button></td></tr>`).join("")}</tbody></table>` : `<div class="empty">No open positions.</div>`;
+  const closed = a.closed.length ? `<table><thead><tr><th>Closed</th><th class="n">Qty</th><th class="n" title="Money that was needed to open it">Margin</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((c) => `<tr><td>${esc(labelOf(c.symbol))}<div class="muted small">${esc(c.opened)}→${esc(c.closed)} · ${esc(c.reason)}</div></td><td class="n">${c.qty}</td><td class="n">${marginTxt(c.margin)}</td><td class="n">${num(c.entry)}</td><td class="n">${num(c.exit)}</td><td class="n">${inr(c.charges)}</td><td class="n ${cls(c.net)}">${inr(c.net)}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">No closed trades today.</div>`;
   const ref = a.refusals.length ? `<h4>Refused by the risk gate / fills</h4>${a.refusals.map((x) => `<div class="ev"><span class="t">${esc(x.time || "")}</span><span>${esc(labelOf(x.symbol))}: ${esc(x.why)}</span></div>`).join("")}` : "";
   const d = snap.config.directional;
   const note = name === "bot" && d ? `<div class="muted small" style="padding:4px 10px 0" title="SPEC 5.2, paper only, HYPOTHESIS rules. One idea per index per day: the first confirmed order-flow reading scoring ≥ ${d.min_score} between ${esc(d.window)} buys 1 lot of the ATM call (index up) or put (index down). Exits: premium stop −${d.stop_pct}%, target +${d.target_pct}%, trailing (${d.trail.map((t) => "at +" + t[0] + "% lock +" + t[1] + "%").join(", ")}), square-off at ${esc(snap.session.square_off)}. Never flips direction the same day; at most ${d.max_entries} entries. Order-book changes do not close the trade. Costs: ${esc(snap.config.cost_broker)}.">${d.enabled ? "" : '<b class="warn">OFF</b> · '}Directional 5.2: one idea/index/day, entries ${esc(d.window)} · stop −${d.stop_pct}% · target +${d.target_pct}% · trailing · hover for rules</div>` : "";
@@ -909,26 +1087,56 @@ function studyView(st) {
 }
 
 let rightHtml = "";
-function overviewView(rows) {
-  if (!rows.length) return `<div class="empty">No strategies.</div>`;
+function overviewParts(rows) {
   const tot = rows.reduce((t, r) => t + (r.day_net || 0), 0);
-  return `<div class="muted small" style="padding:4px 10px 0">Every strategy runs on its own paper account, one lot, defined risk, the same approved risk gate and full costs. Today net across all: <b class="${cls(tot)}">${inr(tot)}</b>. Click a row for its detail. Results need 20+ sessions before anything is concluded; the Research tab splits them by entry conditions.</div><div class="scroll"><table><thead><tr><th>Strategy</th><th>Ref</th><th>Status</th><th class="n">Today net</th><th class="n">Realized</th><th class="n">Trades</th><th class="n">W / L</th><th class="n">Open</th><th>Rules / now</th></tr></thead><tbody>${rows.map((r) => `<tr class="row" data-goto="${esc(r.key)}"><td><b>${esc(r.title)}</b></td><td class="muted">${esc(r.ref)}</td><td class="${r.enabled ? "up" : "muted"}">${r.enabled ? "on" : "off"}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n ${cls(r.realized)}">${r.realized == null ? "—" : inr(r.realized)}</td><td class="n">${r.trades}</td><td class="n">${r.wins} / ${r.losses}</td><td class="n">${r.open}</td><td class="small muted" style="white-space:normal">${esc(r.rules)}</td></tr>`).join("")}</tbody></table></div>`;
+  const head = `<div class="muted small" style="padding:4px 10px 0">Every strategy runs on its own paper account, defined risk, the same approved risk gate and full costs. Today net across all: <b class="${cls(tot)}">${inr(tot)}</b>. Click a row for its detail. Results need 20+ sessions before anything is concluded; the Research tab splits them by entry conditions.</div>`;
+  const thead = `<tr><th>Strategy</th><th>Ref</th><th>Status</th><th class="n">Today net</th><th class="n">Realized</th><th class="n">Trades</th><th class="n">W / L</th><th class="n">Open</th><th>Rules / now</th></tr>`;
+  const body = rows.map((r) => [r.key, `<td><b>${esc(r.title)}</b></td><td class="muted">${esc(r.ref)}</td><td class="${r.enabled ? "up" : "muted"}">${r.enabled ? "on" : "off"}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n ${cls(r.realized)}">${r.realized == null ? "—" : inr(r.realized)}</td><td class="n">${r.trades}</td><td class="n">${r.wins} / ${r.losses}</td><td class="n">${r.open}</td><td class="small muted" style="white-space:normal;min-width:260px" title="${esc(r.rules)}"><div class="clamp">${esc(r.rules)}</div></td>`]);
+  return [head, thead, body];
+}
+function playbookParts(plays, portfolio) {
+  const byKey = Object.fromEntries((portfolio || []).map((r) => [r.key, r]));
+  const head = `<div class="muted small" style="padding:4px 10px 0">The playbook strategies from the owner's notes, each on its own paper account. "Now" is rebuilt every step: the live value next to the threshold each condition needs (hover a cell for the full text). Click a row for the rules, positions and refusals. Paper only; every threshold is a HYPOTHESIS.</div>`;
+  const thead = `<tr><th>Strategy</th><th>State</th><th class="n">Today net</th><th class="n">Trades</th><th class="n">Open</th><th>Now</th></tr>`;
+  const body = plays.map((v) => {
+    const r = byKey["play:" + v.key] || {};
+    const st = !v.enabled ? '<span class="muted">off</span>' : (r.open ? '<span class="up">holding</span>' : '<span class="muted">watching</span>');
+    return ["play:" + v.key, `<td><b>${esc(v.title)}</b><div class="muted small">${esc(v.ref)}</div></td><td>${st}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n">${r.trades ?? 0}</td><td class="n">${r.open ?? 0}</td><td class="small" style="white-space:normal;min-width:320px" title="${esc(v.decision || "")}"><div class="clamp">${esc(v.decision || "")}</div></td>`];
+  });
+  return [head, thead, body];
+}
+// Tables that change every step are patched row by row, so the scroll position, a scrollbar
+// drag and text selection survive the 5-a-second updates.
+let pvHead = "", pvKeys = "";
+function patchTableView(viewKey, [head, thead, rows]) {
+  const body = $("right-body");
+  if (body.dataset.view !== viewKey || !$("pv-tbody")) {
+    body.innerHTML = `<div id="pv-head">${head}</div><div class="scroll"><table><thead>${thead}</thead><tbody id="pv-tbody"></tbody></table></div>`;
+    body.dataset.view = viewKey; pvHead = head; pvKeys = ""; rightHtml = "";
+  } else if (pvHead !== head) { $("pv-head").innerHTML = head; pvHead = head; }
+  const tb = $("pv-tbody"); const keys = rows.map((r) => r[0]).join("|");
+  if (pvKeys !== keys) {
+    tb.innerHTML = rows.map(([k, h]) => `<tr class="row" data-goto="${esc(k)}">${h}</tr>`).join("");
+    [...tb.children].forEach((tr, i) => { tr._h = rows[i][1]; });
+    pvKeys = keys; return;
+  }
+  [...tb.children].forEach((tr, i) => { if (tr._h !== rows[i][1]) { tr.innerHTML = rows[i][1]; tr._h = rows[i][1]; } });
 }
 function debitView(d) {
   if (!d) return `<div class="empty">Debit-spread strategy not running.</div>`;
   const a = d.account;
   const pos = a.positions.map((p) => `<div class="spos"><div class="row1"><b>${esc(p.structure.replace(/_/g, " ").toLowerCase())}</b><span class="mono">${esc(p.strikes)}</span><span class="muted small">expiry ${esc(p.expiry)} · opened ${esc(p.opened)}</span><span style="margin-left:auto" class="mono ${cls(p.net)}">${p.net == null ? "—" : inr(p.net)} net</span></div>
-    <div class="kv4">${kvd("Debit paid", `${num(-p.credit)} pts · ${inr(-p.credit * p.qty)}`)}${kvd("Worth now", p.cost_to_close == null ? "—" : num(-p.cost_to_close) + " pts")}${kvd("Max value", `${num(p.width, 0)} pts`)}${kvd("Worst case", inr(p.max_loss), "down")}</div>
+    <div class="kv4">${kvd("Debit paid", `${num(-p.credit)} pts · ${inr(-p.credit * p.qty)}`)}${kvd("Worth now", p.cost_to_close == null ? "—" : num(-p.cost_to_close) + " pts")}${kvd("Max value", `${num(p.width, 0)} pts`)}${kvd("Worst case", inr(p.max_loss), "down")}${kvd("Margin to open", marginTxt(p.margin, p.max_loss), "", "What the broker would block to put these legs on (NRML, hedge benefit included)")}</div>
     <table><thead><tr><th>Leg</th><th class="n">Entry</th><th class="n">Bid</th><th class="n">Ask</th></tr></thead><tbody>${p.legs.map((l) => `<tr><td class="${l.side === "SELL" ? "down" : "up"}">${esc(l.label)}</td><td class="n">${num(l.entry)}</td><td class="n">${num(l.bid)}</td><td class="n">${num(l.ask)}</td></tr>`).join("")}</tbody></table></div>`).join("");
-  const closed = a.closed.length ? `<h4>Closed</h4><table><thead><tr><th>Closed</th><th class="n">Paid</th><th class="n">Got</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${num(-x.credit)}</td><td class="n">${num(-x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
+  const closed = a.closed.length ? `<h4>Closed</h4><table><thead><tr><th>Closed</th><th class="n">Margin</th><th class="n">Paid</th><th class="n">Got</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${marginTxt(x.margin)}</td><td class="n">${num(-x.credit)}</td><td class="n">${num(-x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
   const ref = a.refusals.length ? `<h4>Refused</h4>${a.refusals.map((x) => `<div class="ev"><span class="t">${esc(x.time || "")}</span><span>${esc(x.why)}</span></div>`).join("")}` : "";
   return `<div class="decision ${a.positions.length ? "hold" : "no"}"><b>Debit spreads</b> · ${esc(d.decision)}<div class="muted small">${esc(d.rules)}</div></div><div class="scroll">${pos || '<div class="empty">No open spread.</div>'}${closed}${ref}</div>`;
 }
 function spreadPositions(a) {
   const pos = a.positions.map((p) => `<div class="spos"><div class="row1"><b>${esc(p.structure.replace(/_/g, " ").toLowerCase())}</b><span class="mono">${esc(p.strikes)}</span><span class="muted small">expiry ${esc(p.expiry)} · opened ${esc(p.opened)}</span><span style="margin-left:auto" class="mono ${cls(p.net)}">${p.net == null ? "—" : inr(p.net)} net</span></div>
-    <div class="kv4">${kvd(p.credit >= 0 ? "Credit" : "Debit", `${num(Math.abs(p.credit))} pts · ${inr(Math.abs(p.credit) * p.qty)}`)}${kvd("Cost to close", p.cost_to_close == null ? "—" : num(p.cost_to_close) + " pts")}${kvd("Worst / planned loss", inr(p.max_loss), "down")}${kvd("Qty", p.qty)}</div>
+    <div class="kv4">${kvd(p.credit >= 0 ? "Credit" : "Debit", `${num(Math.abs(p.credit))} pts · ${inr(Math.abs(p.credit) * p.qty)}`)}${kvd("Cost to close", p.cost_to_close == null ? "—" : num(p.cost_to_close) + " pts")}${kvd("Worst / planned loss", inr(p.max_loss), "down")}${kvd("Margin to open", marginTxt(p.margin, p.max_loss), "", "What the broker would block to put these legs on (NRML, hedge benefit included)")}</div>
     <table><thead><tr><th>Leg</th><th class="n">Entry</th><th class="n">Bid</th><th class="n">Ask</th></tr></thead><tbody>${p.legs.map((l) => `<tr><td class="${l.side === "SELL" ? "down" : "up"}">${esc(l.label)}${l.open ? "" : " (closed)"}</td><td class="n">${num(l.entry)}</td><td class="n">${num(l.bid)}</td><td class="n">${num(l.ask)}</td></tr>`).join("")}</tbody></table></div>`).join("");
-  const closed = a.closed.length ? `<h4>Closed</h4><table><thead><tr><th>Closed</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${num(x.credit)}</td><td class="n">${num(x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
+  const closed = a.closed.length ? `<h4>Closed</h4><table><thead><tr><th>Closed</th><th class="n">Margin</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Charges</th><th class="n">Net</th></tr></thead><tbody>${a.closed.map((x) => `<tr><td>${esc(x.structure.replace(/_/g, " ").toLowerCase())}<div class="muted small">${esc(x.opened)} → ${esc(x.closed)} · ${esc(x.reason)}</div></td><td class="n">${marginTxt(x.margin)}</td><td class="n">${num(x.credit)}</td><td class="n">${num(x.debit)}</td><td class="n">${inr(x.charges)}</td><td class="n ${cls(x.net)}">${inr(x.net)}</td></tr>`).join("")}</tbody></table>` : "";
   const ref = a.refusals.length ? `<h4>Refused</h4>${a.refusals.map((x) => `<div class="ev"><span class="t">${esc(x.time || "")}</span><span>${esc(x.why)}</span></div>`).join("")}` : "";
   return (pos || '<div class="empty">Nothing open.</div>') + closed + ref;
 }
@@ -944,8 +1152,11 @@ function playView(v) {
 }
 function renderRight() {
   let html;
-  if (rtab === "overview") html = overviewView(snap.portfolio || []);
-  else if (rtab.startsWith("play:")) html = playView((snap.plays || []).find((v) => "play:" + v.key === rtab));
+  if (rtab === "overview") { patchTableView("overview", overviewParts(snap.portfolio || [])); return; }
+  if (rtab === "playbook") { patchTableView("playbook", playbookParts(snap.plays || [], snap.portfolio || [])); return; }
+  if (isBusy("right-body") && $("right-body").dataset.view === rtab) return;
+  $("right-body").dataset.view = rtab;
+  if (rtab.startsWith("play:")) html = playView((snap.plays || []).find((v) => "play:" + v.key === rtab));
   else if (rtab === "condor") html = condorView(snap.condor);
   else if (rtab === "debit") html = debitView(snap.debit);
   else if (rtab === "gamma") html = (snap.gamma ? `<div class="decision no"><b>Gamma breakout 5.10</b> · ${esc(snap.gamma.decision)}<div class="muted small">${esc(snap.gamma.rules)}</div></div>` : "") + acctView(snap.accounts.gamma, "gamma");
@@ -1177,6 +1388,13 @@ dragger("split-setups", "--setups-h", "y", 1);
 dragger("split-scan", "--scan-h", "y", 1);
 dragger("split-paper", "--paper-h", "y", 1);
 loadSizes();
+$("right-max").onclick = () => {
+  view.rightMax = !view.rightMax; saveView();
+  if (view.rightMax) { view.paperH = parseInt(getComputedStyle(deskEl).getPropertyValue("--paper-h")) || 520; setSize("--paper-h", window.innerHeight - 110); $("right").scrollIntoView({ block: "start" }); }
+  else setSize("--paper-h", view.paperH || 520);
+  $("right-max").textContent = view.rightMax ? "Restore ⤡" : "Expand ⤢";
+};
+if (view.rightMax) $("right-max").textContent = "Restore ⤡";
 connect();
 </script>
 </body>

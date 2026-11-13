@@ -73,6 +73,23 @@ class CockpitConfig:
     # Playbook strategies from the owner's notes (engine/cockpit/plays_*.py): key -> on/off.
     plays: tuple[tuple[str, bool], ...] = ()
     model_price_stops: bool = True
+    # A model-price hold gives way after this long at/below the stop, past this multiple of
+    # the stop distance, or at the per-trade loss limit (13 Nov 2026 review).
+    stop_hold_max_s: float = 5.0
+    stop_override_mult: float = 1.5
+    # Paper orders reach the exchange after this delay and multi-leg orders fill one leg at a
+    # time this far apart (wings first); 0 = the decision's own book.
+    paper_fill_latency_ms: float = 200.0
+    paper_leg_gap_ms: float = 300.0
+    # Credit structures: the take-profit must be worth this many round trips of charges.
+    credit_charges_mult: float = 3.0
+    # Owner, 13 Nov 2026: every paper strategy runs on its own account and is never blocked by
+    # another's margin; one strategy's open positions may use up to this % of capital in
+    # broker margin (100% = Rs 2L), so each stays executable alone in the real account.
+    paper_margin_cap_pct: float = 100.0
+    # Short option legs expiring today are closed by this time, before the 15:10-15:40 closing
+    # VWAP window that sets their settlement (owner delegated, 13 Nov 2026).
+    spread_expiry_exit: str = "15:00"
     # execution.disconnect_kill_after_s (APPROVED): no fresh quote for this long in market hours
     # freezes new paper entries and pauses exits (never flatten on stale prices).
     feed_stale_s: float = 10.0
@@ -224,6 +241,13 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         paper_max_lots=int(raw.get("paper_max_lots", 2)),
         plays=tuple((str(k), bool(v)) for k, v in (raw.get("plays") or {}).items()),
         model_price_stops=bool(raw.get("model_price_stops", True)),
+        stop_hold_max_s=float(raw.get("stop_hold_max_s", 5.0)),
+        stop_override_mult=float(raw.get("stop_override_mult", 1.5)),
+        paper_fill_latency_ms=float(raw.get("paper_fill_latency_ms", 200.0)),
+        paper_leg_gap_ms=float(raw.get("paper_leg_gap_ms", 300.0)),
+        credit_charges_mult=float(raw.get("credit_charges_mult", 3.0)),
+        paper_margin_cap_pct=float(raw.get("paper_margin_cap_pct", 100.0)),
+        spread_expiry_exit=str(raw.get("spread_expiry_exit", "15:00")),
         feed_stale_s=float(
             (settings.raw.get("execution") or {}).get("disconnect_kill_after_s", 10)
         ),

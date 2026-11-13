@@ -47,3 +47,23 @@ rules:
     verified_on:
     status: UNVERIFIED
     notes: "50:50 cash vs non-cash collateral. Verify which instruments count as cash-equivalent."
+
+  - name: paper_margin_per_lot
+    params:
+      # Rs per lot, NRML, after hedge benefit, Nifty/Sensex, from Upstox's margin calculator
+      # (POST /v2/charges/margin) on 13 Nov 2026 with Nifty ~25,250, plus a 15% buffer. Used
+      # by the paper risk gate only when no live quote for the exact legs is available.
+      credit_2leg: 49500      # bull put / bear call / expiry pin: quoted 40,711-42,966
+      debit_2leg: 41000       # bull call / bear put: quoted 35,505 (the short leg is margined)
+      four_leg: 85000         # iron condor / iron fly: quoted 70,017-73,583
+      calendar: 86500         # sell near, buy far: quoted 74,976
+      synthetic: 66000        # hedged synthetic future: quoted 57,184
+      married_future: 76500   # future + ATM option either way: quoted 54,925-66,243
+      unknown: 86500          # anything else: the largest of the above
+    effective_from: 2026-11-01  # quoted 13 Nov; applied back to 1 Nov for replays (a margin
+                                # estimate, not market data: no lookahead on price)
+    effective_to:
+    source_url: "https://upstox.com/developer/api-documentation/margin"
+    verified_on: 2026-11-13
+    status: secondary
+    notes: "Broker calculator, not the exchange SPAN file; moves with index level and volatility. Re-quote monthly."

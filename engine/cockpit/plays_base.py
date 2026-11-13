@@ -19,10 +19,10 @@ from __future__ import annotations
 import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from engine.cockpit.condor import Leg, SpreadAccount, cost_to_close
+from engine.cockpit.condor import Leg, SpreadAccount, _strikes, cost_to_close
 from engine.cockpit.gates import BreakevenRatchet, breakeven, impulse_ok
 from engine.cockpit.paper import Book, PaperAccount
 from engine.cockpit.tape import IndexTape, OptionTape
@@ -32,6 +32,43 @@ from engine.data.reference.instrument_master import Kind
 
 def hhmm(now: datetime) -> str:
     return now.astimezone(IST).strftime("%H:%M")
+
+
+def fmt(x: float | None, d: int = 1, sign: bool = False) -> str:
+    """A number for a status line ("—" when not known yet)."""
+    if x is None:
+        return "—"
+    return f"{x:+.{d}f}" if sign else f"{x:,.{d}f}"
+
+
+class Status:
+    """What a strategy is waiting for, rebuilt every step: one note per index (or condition)
+    with the live value next to the threshold it needs. The page shows the joined notes."""
+
+    notes: list[str]
+    decision: str
+
+    def note(self, text: str) -> None:
+        self.notes.append(text)
+        self.decision = " · ".join(self.notes)
+
+    def renote(self, text: str) -> None:
+        """Replace the latest note (a more specific reason found further down the checks)."""
+        if self.notes:
+            self.notes[-1] = text
+        else:
+            self.notes.append(text)
+        self.decision = " · ".join(self.notes)
+
+    def in_window(self, now: datetime, window: tuple[str, str]) -> bool:
+        h = hhmm(now)
+        if window[0] <= h <= window[1]:
+            return True
+        self.note(
+            f"entries {window[0]}–{window[1]}"
+            + (" (opens later)" if h < window[0] else " (closed for today)")
+        )
+        return False
 
 
 class Market:
@@ -162,16 +199,34 @@ class Market:
         return breakeven(acct.book, acct.broker_name, self.now.astimezone(IST).date(), entry, qty)
 
     def scalp_gate(
-        self, sym: str, qty: int, mult: float, und: str
+        self,
+        sym: str,
+        qty: int,
+        mult: float,
+        und: str,
+        delta_band: tuple[float, float] | None = (0.55, 0.65),
     ) -> tuple[bool, str, float, float]:
-        """Owner rule: a short-hold trade only when the expected 3-minute option move is at
-        least ``mult`` x its charges breakeven. Returns (ok, why, true_be, be_points)."""
+        """Owner rule: a short-hold trade only on a 0.55-0.65 delta option (``delta_band``;
+        intrinsic movement must dominate theta) whose expected 3-minute move is at least
+        ``mult`` x its charges breakeven. Returns (ok, why, true_be, be_points)."""
         b = self.book(sym)
         if b is None or not b.asks:
             return False, "no book", 0.0, 0.0
         entry = b.asks[0][0]
         true_be, be_pts = self.breakeven(entry, qty)
         g = self.detail(sym)
+        d = g.get("delta") if g else None
+        if (
+            delta_band is not None
+            and d is not None
+            and not delta_band[0] <= abs(float(d)) <= delta_band[1]
+        ):
+            return (
+                False,
+                f"delta {abs(float(d)):.2f} outside {delta_band[0]:g}-{delta_band[1]:g}",
+                true_be,
+                be_pts,
+            )
         ok, imp = impulse_ok(self.tape(und).atr(), g.get("delta"), g.get("gamma"), be_pts, mult)
         why = (
             f"impulse {imp:.2f} pts vs {mult}x breakeven {be_pts:.2f}"
@@ -180,8 +235,10 @@ class Market:
         )
         return ok, why, true_be, be_pts
 
-    def pin(self, owner: str, syms: list[str]) -> None:
-        self.core._pin(owner, syms)
+    def pin(self, owner: str, syms: list[str]) -> list[str] | None:
+        """Add ``syms`` to the live feed for ``owner``; returns the ones accepted."""
+        got = self.core._pin(owner, syms)
+        return list(got) if got is not None else None
 
 
 # ------------------------------------------------------------------------------ long plays
@@ -205,7 +262,7 @@ class Managed:
 
 
 @dataclass
-class LongPlay:
+class LongPlay(Status):
     key: str
     title: str
     ref: str
@@ -218,18 +275,69 @@ class LongPlay:
     entries_today: int = 0
     max_entries: int = 3
     hiv_route: Any = None  # HighIvRouter for the naked-buying rule 4
+    off_reason: str = "off (cockpit.plays in settings.yaml)"
+    notes: list[str] = field(default_factory=list)
+    retry_s: float = 60.0  # after a refused entry, wait this long before retrying that index
+    retry_at: dict[str, datetime] = field(default_factory=dict)
+    # Short-hold strategies: positions found open after a restart are put back under the
+    # charges ratchet (initial stop, breakeven lock, 180-s scratch) and the candle rule.
+    scalp: bool = False
+    awaiting: dict[str, dict[str, Any]] = field(default_factory=dict)  # orders not yet filled
 
     def _new_day(self, now: datetime) -> None:
         d = now.astimezone(IST).date()
         if self.day != d:
             self.day, self.entries_today = d, 0
 
+    def _adopt(self, now: datetime, m: Market) -> None:
+        """Open positions without a manager (the engine restarted after the entry) get one,
+        so the in-trade rules keep applying instead of only the account's premium stop."""
+        for sym, spec in list(self.awaiting.items()):
+            if sym in self.account.positions:
+                del self.awaiting[sym]
+                self._manage_new(m, sym, self.account.positions[sym], spec)
+            elif (
+                sym not in getattr(self.account, "pending", {})
+                and (now - spec["sent"]).total_seconds() > 30
+            ):
+                del self.awaiting[sym]  # the order was refused when it arrived
+        for sym, pos in list(self.account.positions.items()):
+            if sym in self.managed:
+                continue
+            ins = m.core.master.get(sym) if sym in m.core.master else None
+            und = ins.underlying if ins is not None else ""
+            bullish = not (ins is not None and ins.kind is Kind.PUT)
+            true_be, be_pts = m.breakeven(pos.avg_price, pos.qty)
+            mg = Managed(sym, und, pos.opened_at, pos.avg_price, true_be, be_pts, bullish=bullish)
+            if self.scalp:
+                mg.ratchet = BreakevenRatchet.start(
+                    pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at
+                )
+                mg.candle_stop_min = 15
+                pos.stop_price = max(pos.stop_price, mg.ratchet.stop)
+            self.managed[sym] = mg
+
     def step(self, now: datetime, m: Market) -> list[str]:
         self._new_day(now)
+        self._adopt(now, m)
         out = self.manage(now, m)
-        if self.enabled:
+        self.notes = []
+        if not self.enabled:
+            self.decision = self.off_reason
+            return out
+        if self.entries_today >= self.max_entries:
+            self.note(f"{self.max_entries} entries today: done for the day")
+        else:
             out += self.look(now, m) or []
-        return out
+        held = [m.core.label(s) for s in self.managed]
+        head = [f"holding {', '.join(held)}"] if held else []
+        waits = [
+            f"{u}: retrying after {t.astimezone(IST):%H:%M:%S} (last entry refused)"
+            for u, t in self.retry_at.items()
+            if now < t
+        ]
+        self.decision = " · ".join(head + self.notes + waits) or "watching"
+        return [x for x in out if x]
 
     def look(self, now: datetime, m: Market) -> list[str] | None:  # pragma: no cover - abstract
         return None
@@ -256,6 +364,9 @@ class LongPlay:
         now = m.now
         if self.entries_today >= self.max_entries:
             return f"{self.title}: {self.max_entries} entries today already"
+        wait = self.retry_at.get(und)
+        if wait is not None and now < wait:
+            return ""  # backing off after a refusal: no new attempt, no new event line
         ivp = m.ivp(und)
         if self.hiv_route is not None and ivp is not None and ivp >= self.hiv_route.ivp_min:
             # Rule 4: IV in its top band -> no naked buying; the signal becomes a debit spread.
@@ -263,12 +374,22 @@ class LongPlay:
             return str(self.hiv_route.route(m, und, bullish, f"{self.title}: {reason}"))
         b = m.book(sym)
         if b is None or not b.asks:
-            return f"{self.title}: no book for {m.core.label(sym)}"
+            # Chosen from the 1-minute chain but not in the 30-level feed: ask for it, and try
+            # again once its book can have arrived instead of on every step.
+            m.pin(self.key, [*self.managed, *self.awaiting, sym])
+            self.retry_at[und] = now + timedelta(seconds=10)
+            self.note(f"{und}: adding {m.core.label(sym)} to the live feed; retrying in 10 s")
+            return f"{self.title}: no book for {m.core.label(sym)} yet; added it to the live feed"
         lot = m.lot(sym)
         qty = lots * lot
         entry = b.asks[0][0]
         if stop_inr is not None and entry > 0:  # rupee risk per unit -> % of premium
             stop_pct = max(1.0, min(90.0, stop_inr / entry * 100))
+        if ratchet and entry > 0:
+            # Owner protocol, initial risk window: -12% of premium or Rs 1,200 on the position,
+            # whichever is tighter, booked at entry so the risk gate sees the real planned loss.
+            rule = min(12.0, 1200.0 / max(qty, 1) / entry * 100)
+            stop_pct = max(1.0, min(stop_pct, rule))
         ok, text = self.account.open_long_option(
             sym,
             b,
@@ -280,30 +401,55 @@ class LongPlay:
             context=m.context(und),
         )
         if not ok:
+            # The gate (cool-off, loss limits...) or the book refused: don't hammer it on every
+            # step while the trigger persists.
+            self.retry_at[und] = now + timedelta(seconds=self.retry_s)
             return text
+        self.retry_at.pop(und, None)
         self.entries_today += 1
-        pos = self.account.positions[sym]
-        true_be, be_pts = m.breakeven(pos.avg_price, qty)
+        spec = {
+            "und": und,
+            "bullish": bullish,
+            "ratchet": ratchet,
+            "time_stop": time_stop,
+            "candle_stop_min": candle_stop_min,
+            "ema_after_pct": ema_after_pct,
+            "delta_exit": delta_exit,
+            "spot_stop": spot_stop,
+            "sent": now,
+        }
+        m.otape(sym)
+        pos = self.account.positions.get(sym)
+        if pos is None:  # the order is on its way (fill latency): managed once it fills
+            self.awaiting[sym] = spec
+        else:
+            self._manage_new(m, sym, pos, spec)
+        return text.replace(sym, m.core.label(sym))
+
+    def _manage_new(self, m: Market, sym: str, pos: Any, spec: dict[str, Any]) -> None:
+        """Attach this strategy's exit rules to a filled position (charges breakeven from the
+        actual fill; the ratchet's clock starts at the fill)."""
+        true_be, be_pts = m.breakeven(pos.avg_price, pos.qty)
         mg = Managed(
             sym,
-            und,
-            now,
+            spec["und"],
+            pos.opened_at,
             pos.avg_price,
             true_be,
             be_pts,
-            bullish=bullish,
-            time_stop=time_stop,
-            candle_stop_min=candle_stop_min,
-            ema_after_pct=ema_after_pct,
-            delta_exit=delta_exit,
-            spot_stop=spot_stop,
+            bullish=spec["bullish"],
+            time_stop=spec["time_stop"],
+            candle_stop_min=spec["candle_stop_min"],
+            ema_after_pct=spec["ema_after_pct"],
+            delta_exit=spec["delta_exit"],
+            spot_stop=spec["spot_stop"],
         )
-        if ratchet:
-            mg.ratchet = BreakevenRatchet.start(pos.avg_price, qty, true_be, be_pts, now)
+        if spec["ratchet"]:
+            mg.ratchet = BreakevenRatchet.start(
+                pos.avg_price, pos.qty, true_be, be_pts, pos.opened_at
+            )
             pos.stop_price = max(pos.stop_price, mg.ratchet.stop)
         self.managed[sym] = mg
-        m.otape(sym)
-        return text.replace(sym, m.core.label(sym))
 
     def manage(self, now: datetime, m: Market) -> list[str]:
         out: list[str] = []
@@ -418,7 +564,7 @@ def spread_exit(
 
 
 @dataclass
-class SpreadPlay:
+class SpreadPlay(Status):
     key: str
     title: str
     ref: str
@@ -432,6 +578,14 @@ class SpreadPlay:
     max_entries: int = 1
     pending: dict[str, Any] | None = None  # a plan waiting for leg books
     overnight: bool = False  # held across sessions (no 15:20 square-off, restored on restart)
+    off_reason: str = "off (cockpit.plays in settings.yaml)"
+    notes: list[str] = field(default_factory=list)
+    last_result: str = ""  # the latest entry attempt's outcome (refusals stay visible)
+    retry_s: float = 60.0  # after a refused or dropped plan, wait this long before the next
+    retry_at: datetime | None = None
+    # A structure whose short leg expires today is closed by this time, before the 15:10-15:40
+    # closing-VWAP window that sets its settlement (cockpit.spread_expiry_exit).
+    expiry_exit: str = "15:00"
 
     def step(self, now: datetime, m: Market) -> list[str]:
         d = now.astimezone(IST).date()
@@ -439,8 +593,26 @@ class SpreadPlay:
             self.day, self.entries_today = d, 0
         out = self.manage(now, m)
         out += self.try_pending(now, m)
-        if self.enabled and self.pending is None:
+        self.notes = []
+        if not self.enabled:
+            self.decision = self.off_reason
+            return out
+        if self.retry_at is not None and now < self.retry_at:
+            self.note(
+                f"retrying after {self.retry_at.astimezone(IST):%H:%M:%S} (last plan refused)"
+            )
+        elif self.account.executions:
+            self.note("order on its way to the exchange (legs filling one by one)")
+        elif self.pending is None:
             out += self.look(now, m) or []
+        head = [
+            f"holding {p.structure.replace('_', ' ').lower()} {_strikes(p)}"
+            for p in self.account.positions
+        ]
+        if self.pending is not None:
+            head.append(f"placing: {self.pending['reason']} (waiting for every leg's book)")
+        tail = [f"last attempt: {self.last_result}"] if self.last_result else []
+        self.decision = " · ".join(head + self.notes + tail) or "watching"
         return out
 
     def look(self, now: datetime, m: Market) -> list[str] | None:  # pragma: no cover - abstract
@@ -475,11 +647,19 @@ class SpreadPlay:
             "max_loss": max_loss_inr,
             "expiry": expiry,
         }
-        m.pin(self.key, self.legs_in_use())
-        self.decision = f"ready: {reason} (waiting for leg books)"
+        self.account.prefetch_margin(legs)
+        want = self.legs_in_use()
+        got = m.pin(self.key, want)
+        if got is not None and len(got) < len(want):
+            # The live feed holds 50 contracts and strategies may add 10 between them.
+            self.last_result = (
+                f"only {len(got)} of {len(want)} legs fit in the live feed "
+                "(strategy slots full); the plan will lapse in 60 s"
+            )
 
     def legs_in_use(self) -> list[str]:
         syms = [lg.symbol for p in self.account.positions for lg in p.legs if lg.open]
+        syms += self.account.executing_symbols()
         if self.pending:
             syms += [lg.symbol for lg in self.pending["legs"]]
         return list(dict.fromkeys(syms))
@@ -492,6 +672,8 @@ class SpreadPlay:
         if (now - p["made"]).total_seconds() > 60:
             self.pending = None
             m.pin(self.key, self.legs_in_use())
+            self.last_result = f"{p['reason']}: dropped at {hhmm(now)}, leg books did not arrive"
+            self.retry_at = now + timedelta(seconds=self.retry_s)
             return [f"{self.title}: plan dropped (leg books did not arrive)"]
         if not all(
             lg.symbol in books and books[lg.symbol].bids and books[lg.symbol].asks
@@ -520,18 +702,27 @@ class SpreadPlay:
             context=m.context(p["und"]),
             lots=p["lots"],
             max_loss_inr=p["max_loss"],
+            take_profit_pct=(p["trade"].target_pct if p["trade"].target_pct else None),
+            on_done=lambda done, txt, pos: self._on_open(done, txt, pos, p, m),
         )
         if ok:
             self.entries_today += 1
-            tr = p["trade"]
-            tr.pos_id = self.account.positions[-1].id
-            tr.opened = now
-            self.trades[tr.pos_id] = tr
-            self.decision = "holding; managing exits"
-        else:
-            self.decision = text
         m.pin(self.key, self.legs_in_use())
         return [text]
+
+    def _on_open(self, ok: bool, text: str, pos: Any, p: dict[str, Any], m: Market) -> None:
+        """The order completed (now, or legs later with fill latency)."""
+        now = m.now
+        if ok and pos is not None:
+            tr = p["trade"]
+            tr.pos_id = pos.id
+            tr.opened = now
+            self.trades[tr.pos_id] = tr
+            self.last_result = ""
+        elif not ok:
+            self.last_result = f"{hhmm(now)} refused: {text}"
+            self.retry_at = now + timedelta(seconds=self.retry_s)
+        m.pin(self.key, self.legs_in_use())
 
     def manage(self, now: datetime, m: Market) -> list[str]:
         out: list[str] = []
@@ -543,8 +734,19 @@ class SpreadPlay:
                 pos.opened_at,
                 square_off=None if self.overnight else "15:20",
             )
-            why = spread_exit(pos, tr, books, now, m.spot(pos.underlying)) or self.extra_exit(
-                pos, tr, now, m
+            shorts_expiring = (
+                any(lg.open and lg.side == "SELL" and lg.kind != "FUT" for lg in pos.legs)
+                and pos.expiry == now.astimezone(IST).date()
+            )
+            why = (
+                f"expiry-day exit {self.expiry_exit} (before the 15:10 settlement window)"
+                if shorts_expiring and hhmm(now) >= self.expiry_exit
+                else None
+            )
+            why = (
+                why
+                or spread_exit(pos, tr, books, now, m.spot(pos.underlying))
+                or (self.extra_exit(pos, tr, now, m))
             )
             if why is None:
                 continue
@@ -553,7 +755,6 @@ class SpreadPlay:
             if ok:
                 self.trades.pop(pos.id, None)
                 m.pin(self.key, self.legs_in_use())
-                self.decision = "watching"
         return out
 
     def view(self) -> dict[str, Any]:
@@ -566,6 +767,21 @@ class SpreadPlay:
             "rules": self.rules,
             "kind": "spread",
         }
+
+
+@dataclass
+class HighIvPlay(SpreadPlay):
+    """Rule 4's account: receives naked-buy signals when IV is rich (see ``HighIvRouter``)."""
+
+    ivp_min: float = 80.0
+
+    def look(self, now: datetime, m: Market) -> list[str] | None:
+        ivps = ", ".join(f"{u} {fmt(m.ivp(u), 0)}" for u in m.underlyings())
+        self.note(
+            f"takes naked-buy signals (put-panic, OI ignition, breakthrough) as debit spreads "
+            f"when ATM IV is at or above the {self.ivp_min:g}th percentile; now {ivps}"
+        )
+        return None
 
 
 @dataclass
@@ -611,4 +827,15 @@ class HighIvRouter:
         )
 
 
-__all__ = ["HighIvRouter", "Kind", "LongPlay", "Managed", "Market", "SpreadPlay", "SpreadTrade"]
+__all__ = [
+    "HighIvPlay",
+    "HighIvRouter",
+    "Kind",
+    "LongPlay",
+    "Managed",
+    "Market",
+    "SpreadPlay",
+    "SpreadTrade",
+    "Status",
+    "fmt",
+]

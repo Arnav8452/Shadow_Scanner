@@ -59,12 +59,25 @@ class RedactingFilter(logging.Filter):
         return True
 
 
-def setup_logging(config_path: Path, *, log_dir: Path | None = None) -> None:
+def log_file_for(path: Path, process: str | None) -> Path:
+    """``engine.log`` -> ``engine_<process>.log``. Each process owns its file, so a daily
+    rollover never renames a file another process holds open (Windows refuses that)."""
+    if not process:
+        return path
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", process).strip("-") or "process"
+    return path.with_name(f"{path.stem}_{safe}{path.suffix}")
+
+
+def setup_logging(
+    config_path: Path, *, log_dir: Path | None = None, process: str | None = None
+) -> None:
+    """Configure logging from ``config_path``. ``process`` (the task name, e.g. ``record``)
+    gives the process its own log file; without it every process shares ``engine.log``."""
     doc = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     for handler in doc.get("handlers", {}).values():
         filename = handler.get("filename")
         if filename:
-            path = Path(filename)
+            path = log_file_for(Path(filename), process)
             if log_dir is not None:
                 path = log_dir / path.name
             elif not path.is_absolute():

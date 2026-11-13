@@ -67,6 +67,29 @@ def test_chain_table_columns() -> None:
     assert s["pcr_oi"] == 1.5 and s["max_pain"] is not None and s["call_oi_chg"] == 200
 
 
+def test_in_the_money_greeks_use_the_strike_iv_from_the_otm_option() -> None:
+    """A deep ITM call quoted inside a wide spread gives a low own IV (delta near 1, vega near
+    0). Greeks use the OTM put's IV at that strike, as the market quotes one IV per strike, so
+    call delta - put delta = 1 (parity) and the call's vega equals the put's."""
+    f, t, vol = 25000.0, 5 / 365, 0.16
+    k = 24400.0
+    legs: dict[float, dict[str, dict[str, float]]] = {k: {}}
+    put = black76_price(f, k, t, vol, is_call=False, t_cal=t, risk_free_rate=0.06)
+    call = black76_price(f, k, t, vol, is_call=True, t_cal=t, risk_free_rate=0.06)
+    legs[k]["PE"] = {"bid": round(put - 0.05, 2), "ask": round(put + 0.05, 2), "ltp": put,
+                     "prev_close": put, "oi": 1000.0, "volume": 10.0}
+    # The ITM call's quote sits low in a wide market: mid ~ 9 points under fair value.
+    legs[k]["CE"] = {"bid": round(call - 20, 2), "ask": round(call + 2, 2), "ltp": call,
+                     "prev_close": call, "oi": 10.0, "volume": 1.0}
+    out = build_chain_table(legs, forward=f, spot=f, t_var=t, t_cal=t, r=0.06)
+    row = out["rows"][0]
+    ce, pe = row["ce"], row["pe"]
+    assert row["iv"] == pytest.approx(16.0, abs=0.3) and ce["iv"] == pe["iv"] == row["iv"]
+    assert ce["iv_own"] < ce["iv"] - 1  # its own wide-spread mid says much lower vol
+    assert ce["delta"] - pe["delta"] == pytest.approx(1.0, abs=0.02)
+    assert ce["vega"] == pytest.approx(pe["vega"], rel=0.01)
+
+
 # ---------------------------------------------------------------- live wiring
 
 

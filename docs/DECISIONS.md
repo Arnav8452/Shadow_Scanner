@@ -4,6 +4,90 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Owner decisions: margin per strategy, ₹30 plan, expiry exit, backup (13 Nov 2026, noon)
+
+- **Margin:**
+  - **Decision (owner):** every strategy must run, since blocking one hides which strategy is better. Each strategy keeps its own paper account, so one never blocks another; its own open positions may use up to **100% of capital (₹2L)** in broker margin, so each stays executable alone in the real account (`cockpit.paper_margin_cap_pct: 100`).
+  - Live trading keeps the approved 50%.
+- **Brokerage:** keep **Upstox Plus, ₹30 an order** (owner): the bots will execute on it later.
+- **Expiring short spreads** (delegated): closed at **15:00** on expiry day (`cockpit.spread_expiry_exit`).
+  - **Reason:** the 15:10–15:40 closing-VWAP window sets their settlement, our option model no longer applies there, and pin risk is highest. It also matches the 14:45 rule for expiring long options.
+  - **Affects:** expiry pin, and the iron fly on Nifty's Tuesday expiry.
+- **Backup** (delegated): nightly at the end of `evening`, copying new or changed files from `data/parquet` and `data/state` to `C:\QuantBackup`; it never deletes from the target.
+  - **Where:** the PC has a single disk, so this guards against deletion and corruption, not disk failure. An external drive is recommended (`backup.target`).
+  - **No cloud:** none by default, for privacy.
+  - **First run:** 938 files, 791 MB.
+  - **Disk space:** D: has 16 GB free, which recording will use up in weeks.
+- **Event spam fixed:**
+  - **Cause:** the wave rider's 5+ day option wasn't in the live feed and it retried every step; its divergence trigger also had no once-per-episode memory.
+  - **Now:** it adds the contract to the feed and retries in 10 s, divergence fires once per 30 min, and the events log drops a repeated strategy line within 30 s.
+- **Restart at 11:43:**
+  - **Rebuilt:** opening range and tapes, from the recording.
+  - **Breakthrough's 09:37 trade:** adopted and scratched for **−₹834**. It had run unmanaged since the 09:39 restart; with its rules it would have been scratched around 09:40.
+  - **Married future:** its 30-min futures OI and basis history restarts, so it can trade again from about 12:15.
+
+## External review (Gemini) assessed; batch 1 applied (13 Nov 2026, midday)
+
+- **Assessment** of an external review of the guide, checked against code and live data:
+  - Correct: model-price stops can hold past the limit; worst-case loss is not margin; ₹30 brokerage eats condor targets; zero-latency paper fills; the 50-key feed is starved by wings; trade side was judged after the sweep; strategies pile into one bet; there is no BSE bhavcopy; there is no multi-day backtest.
+  - Partly wrong: the 15:10–15:40 window only matters for contracts expiring that day, so normal-day 15:20 exits are fine. Expiry pin, and the iron fly on Nifty's Tuesday expiry, do hold short 0DTE spreads into it; that is the owner's call.
+  - Measured: our open condor needs ₹73,611 of broker margin against a ₹7,624 proxy. Charges are 57% of a typical 50% condor take-profit on Upstox Plus (39% at ₹20).
+- **Batch 1, approved by the owner:**
+  1. **Stop override:** a model-price stop hold gives way after 5 s, past 1.5× the stop distance, or at the per-trade limit.
+  2. **Margin gate:** the gate uses broker margin (live quote prefetched at plan time, else `margin_rules.yaml` `paper_margin_per_lot`: 13 Nov quotes + 15%).
+  3. **Charges check:** credit spreads need take-profit ≥ 3× round-trip charges.
+  4. **Fill latency:** paper orders fill 200 ms after the decision, multi-leg orders one leg at a time 300 ms apart (wings first, unwinding on failure). In-flight orders count against the gate and stay pinned in the feed.
+  5. **Trade side:** judged against the previous quote (Lee–Ready, tick test at the mid), in the tape and the zones.
+  - All values are HYPOTHESES in `cockpit` settings; 9 tests cover them.
+- **Expected effects:** fewer condors and credit spreads (charges, margin); slightly worse paper fills on breakouts (latency); CVD and absorption zones change sign on sweeps that were misread before. Earlier results are not comparable with later ones; count this as a new trial.
+- **Next (batch 2, not started):** BSE bhavcopy, multi-day replay runner into the statistics, trials counter, portfolio view across accounts, wings on the 5-level feed.
+- **Owner decisions:** brokerage plan to model (₹30 vs ₹20); exiting expiring short spreads before 15:10; backup target.
+
+## Charges-breakeven protocol audit; margin to open (13 Nov 2026, late morning)
+
+- **Audit of today's scalps against the owner's protocol.** The 09:48 spoof exits followed it: they locked at true breakeven and closed near ₹0. Five gaps were fixed:
+  1. **Unmanaged after a restart.** Breakthrough's 09:37 trade lost its ratchet when the engine restarted at 09:39 (only the 20% account stop remained). Open scalps are now adopted after a restart, from their real open time.
+  2. **Spoof fade skipped rule 2.** It now needs the 5-pillar vacuum score at 65+, no absorption on the trigger bar, and an off-cycle entry; its 09:30:00 entries came in the first second of a round minute.
+  3. **Delta band.** Strikes were picked nearest 0.55; scalps now use 0.60 within a 0.55–0.65 band (0DTE excepted, per its ATM spec).
+  4. **Initial stop.** It was 20% at entry, tightened a step later; −12% or ₹1,200 is now booked at entry.
+  5. **Trailing.** It began at about 2.5× breakeven; it now starts beyond 3×.
+- **Open:** the breakeven uses Upstox Plus brokerage (₹30 an order), not the protocol's ₹20, so the hurdle is about 2.6 vs 2.10 points on a ₹150 lot. Which plan to model is the owner's call (`shadow_scanner.cost_broker`).
+- **Margin to open:** shown for every position and closed trade.
+  - **Long options:** premium paid plus entry charges.
+  - **Multi-leg and futures:** Upstox's `POST /v2/charges/margin` (NRML, hedge benefit), quoted on a background thread at entry, journaled and restored. It works with the read-only analytics token; Cloudflare needs the generic User-Agent.
+  - **Open:** the risk gate's margin-headroom check still uses the worst-case proxy. Wiring the real quote into the gate changes which trades pass, so it needs the owner's OK.
+- **Scrolling:** a pane is not re-rendered while you wheel, scroll or hold the mouse on it, and it catches up about a second later. The condor and account views were being replaced five times a second mid-scroll.
+
+## Greeks on one IV per strike; desk levels, trade lab, chain and events (13 Nov 2026, late morning)
+
+- **Greeks vs Sensibull:** ATM and OTM values matched (25100 CE delta 0.53 vs 0.52, 24800 PE −0.22 both), but in-the-money calls did not (24400 CE delta 0.99 vs 0.95, vega 0.7 vs 2.8). Their own wide-spread mids gave a too-low IV. Greeks for both sides of a strike now use the OTM option's IV, as the market quotes it; the own-mid IV is kept as `iv_own`. On live data call delta − put delta = 1.00 at every strike. A test covers it.
+- **Desk:**
+  - **Market depth:** draws the latest reading's entry, SL and T1/T2 and any open position's average, stop and target on the price chart, lists them in a levels box and tags them in the ladder. They were computed all along but no longer shown after the desk redesign.
+  - **Analytics:** gains a trade lab: strike IV vs ATM, breakeven, the 1σ expected move, risk at the ticket's stop vs the per-trade limit, a scenario grid and a payoff chart.
+  - **Compact chain:** gains an expiry picker, LTP, straddle and max pain.
+  - **Events line:** expands to the full calendar.
+  - **Overview and Playbook:** update row by row (the whole table was replaced 5 times a second, which broke scrolling) and can expand to the window height.
+  - **Overlaps:** the depth header and quote header no longer overlap their contents.
+- **Order flow:** working. No reading today reached 75 by late morning (best ~59–65); without a structural level (location < 8) the score is capped at 60.
+
+## Strategy status lines, Playbook tab, stock labels, per-process logs (13 Nov 2026, market hours)
+
+- **Why:** the owner saw no strategy or signal working and could not find the iron fly or the spec strategies. All 21 accounts were running; each just said "watching". The 5 delivery-watch stocks were scored but labelled with Upstox ISIN keys and sat below the derivatives.
+- **Built:**
+  - Every playbook strategy rebuilds a status line each step, with one note per index giving each condition's live value against its threshold. It also covers the entry window, wrong day, expiry-only rules, history still building, and pending or refused plans. A plan whose legs did not all fit in the live feed says so: strategies may add 10 contracts between them, and the condor uses 4.
+  - A **Playbook** tab lists these strategies with that line.
+  - Stocks are labelled `SBIN EQ`, with a **Stocks** scanner filter and an accum/churn tag.
+  - Each process now logs to `logs/engine_<task>.log`. The shared, daily-rotated `engine.log` raced at start-up on Windows: a rename is refused while another process holds the file open.
+- **Found on the 09:39 restart:** a mid-session restart lost the 15-min opening range and restarted every strategy tape at the restart. That made the 30-min range a narrow 6-minute one that put-panic could have acted on. Fixed:
+  - **Warm start:** at start-up the engine rebuilds the opening range from the recorder's quotes (783 contracts on 13 Nov); contracts joining later get it too. The cockpit replays today's index and front-future quotes into the tapes, so the range, VWAP, CVD, ATR and relative volume start at 09:15. Option-side tape items (ATM straddle, IVs, per-strike OI) still start at the restart.
+  - **Late-start guard:** a tape that began after 09:16 reports no 30-min opening range rather than a partial one.
+- **Found after the restart:** spoof fade wrote about 40 refusals a second (26,433 journal lines by 09:44) while in its loss cool-off. The spoof tracker fires several wall events a second, and each one re-tried the entry. Fixed:
+  - **Back-off:** a refused entry makes a strategy wait 60 s per index (a multi-leg one, 60 s after a refused or dropped plan).
+  - **Journaling:** the paper account journals the same refusal at most once a minute.
+  - **Status line:** shows when it will retry.
+  - **Still open:** the existing lines are left in `paper_spoof_fade.jsonl`. The event rate itself suggests the wall thresholds (3× median, PCR 0.75/0.20) are too loose on flickering option books; both of today's first spoof trades were scratched. A tuning question for the owner, counted as a new trial.
+- **Open:** the 10-slot strategy pin limit is unchanged.
+
 ## User guide; event windows on multi-leg accounts (13 Nov 2026)
 
 - **Built:** `docs/guide/`, 13 pages for a first-time user. It covers what the system is, setup, the daily routine, every Quant Cockpit element, how each signal is computed, every strategy, paper trading and the risk gate, testing a new strategy, data and nightly jobs, risk and config, troubleshooting, and a glossary. The top-level README links to it.

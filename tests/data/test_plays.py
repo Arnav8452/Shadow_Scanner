@@ -536,3 +536,178 @@ def test_married_future_triggers_both_ways(repo_root: Path, tmp_path: Path, mkt:
     assert down.pending is not None and down.pending["structure"] == "MARRIED_SHORT_FUTURE"
     assert [(lg.kind, lg.side) for lg in down.pending["legs"]] == [("CE", "BUY"), ("FUT", "SELL")]
     assert down.pending["trade"].spot_stop == pytest.approx(24800.0 * 1.005)
+
+
+# ---------------------------------------------------------------- status lines
+
+
+def test_status_says_why_a_strategy_is_not_trading(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    """Each strategy's line on the page names the condition it is waiting for, with numbers."""
+    from engine.cockpit.plays_base import HighIvPlay
+
+    friday = datetime(2026, 11, 13, 10, 30, tzinfo=IST)
+    mkt.now = friday
+    fly = IronFlyPlay("iron_fly", "Iron fly", "A", _spread(repo_root, tmp_path, "fly"))
+    fly.step(friday, mkt)
+    assert "not a trading day" in fly.decision and "Fri" in fly.decision
+    assert "NIFTY Mon/Tue" in fly.decision
+
+    married = MarriedFuturePlay("married", "Married", "F2", _spread(repo_root, tmp_path, "mf"))
+    married.step(friday, mkt)
+    assert "waiting for the front future" in married.decision
+
+    early = friday.replace(hour=9, minute=20)
+    mkt.now = early
+    pp = PutPanicPlay("put_panic", "Put panic", "S1", _account(repo_root, tmp_path, "pp"))
+    pp.step(early, mkt)
+    assert pp.decision == "entries 09:45–14:00 (opens later)"
+
+    pp.enabled = False
+    pp.step(early, mkt)
+    assert pp.decision.startswith("off")
+    mcx = McxMiniPlay("mcx", "MCX", "F3", _spread(repo_root, tmp_path, "mcx"), enabled=False)
+    mcx.step(early, mkt)
+    assert "no MCX feed" in mcx.decision
+
+    hiv = HighIvPlay("hiv", "High IV", "rule 4", _spread(repo_root, tmp_path, "hiv"))
+    hiv.step(early, mkt)
+    assert "80th percentile" in hiv.decision and "NIFTY 50" in hiv.decision
+
+
+def test_status_reports_when_legs_do_not_fit_in_the_feed(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    from engine.cockpit.condor import Leg
+
+    class FullFeed(FakeMarket):
+        def pin(self, owner: str, syms: list[str]) -> list[str]:  # type: ignore[override]
+            return syms[:1]
+
+    m = FullFeed(mkt.now, mkt.core.master)
+    play = SpreadPlay("oi_credit", "OI credit", "B", _spread(repo_root, tmp_path, "oc"))
+    put_a, put_b = opt_symbol(WEEKLY, 24800, Kind.PUT), opt_symbol(WEEKLY, 25000, Kind.PUT)
+    legs = [Leg(put_a, "PE", 24800.0, "BUY", 65), Leg(put_b, "PE", 25000.0, "SELL", 65)]
+    play.plan(m, "NIFTY", "BULL_PUT", legs, 200.0, "test plan", SpreadTrade("", "NIFTY", m.now))
+    play.step(m.now, m)
+    assert "only 1 of 2 legs fit in the live feed" in play.decision
+    assert "placing: test plan" in play.decision
+
+
+def test_a_tape_that_started_late_has_no_opening_range() -> None:
+    """After a restart at 09:39 the tape's first bars are not 09:15-09:45: no range, not a
+    narrow fake one (the warm start rebuilds the real one from the recording)."""
+    t = IndexTape("NIFTY")
+    for i in range(40):
+        t.on_sample(D.replace(hour=9, minute=39) + timedelta(minutes=i, seconds=30), spot=25000 + i)
+    assert t.opening_range(30) is None
+    full = IndexTape("NIFTY")
+    for i in range(40):
+        full.on_sample(D + timedelta(minutes=i, seconds=30), spot=25000 + i)
+    assert full.opening_range(30) == (25029, 25000)
+
+
+def test_a_refused_entry_backs_off_instead_of_retrying_every_step(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    """A persistent trigger hitting a refusing gate (cool-off, event window) once wrote ~40
+    journal lines a second. Now: one attempt, a 60-s pause per index, one journal line."""
+    acct = _account(repo_root, tmp_path, "pp")
+    acct.entry_block = lambda now: "event window: RBI_MPC"
+    p = PutPanicPlay("put_panic", "Put panic", "S1", acct)
+    sym = opt_symbol(WEEKLY, 25000, Kind.PUT)
+    first = p.enter(mkt, "NIFTY", sym, lots=1, reason="test", bullish=False)
+    assert "event window" in first
+    assert p.enter(mkt, "NIFTY", sym, lots=1, reason="test", bullish=False) == ""
+    for _ in range(5):  # the account itself also journals a repeated refusal only once a minute
+        acct.open_long_option(sym, mkt.book(sym), now=mkt.now, lots=1, stop_pct=20, reason="t")
+    lines = [ln for ln in (tmp_path / "paper_pp.jsonl").read_text(encoding="utf-8").splitlines()
+             if '"refused"' in ln]
+    assert len(lines) == 1
+    mkt.now += timedelta(seconds=61)
+    assert "event window" in p.enter(mkt, "NIFTY", sym, lots=1, reason="test", bullish=False)
+
+
+# ---------------------------------------------------------------- charges-breakeven protocol
+
+
+def test_protocol_breakeven_matches_the_owner_formula_on_a_20_rupee_plan(repo_root: Path) -> None:
+    """The protocol's worked example: Rs 150 option, 1 lot of 65, Rs 20 + 20 brokerage + GST,
+    1-point slippage -> true breakeven about Rs 152.10 (2.10 pts). Our config-driven costs on
+    a Rs 20 plan land within a few paise; on Upstox Plus (Rs 30) the hurdle is higher."""
+    book = RuleBook.load(repo_root / "config" / "rules")
+    tax_be = (150 * (1 + 0.0004504) + 47.20 / 65) / (1 - 0.0019204)
+    be20, pts20 = breakeven(book, "upstox", date(2026, 11, 13), 150.0, 65)
+    assert be20 == pytest.approx(tax_be + 1.0, abs=0.06)
+    be30, pts30 = breakeven(book, "upstox_plus", date(2026, 11, 13), 150.0, 65)
+    assert pts30 > pts20
+
+
+def test_ratchet_locks_at_2x_and_trails_only_beyond_3x(repo_root: Path) -> None:
+    book = RuleBook.load(repo_root / "config" / "rules")
+    be, pts = breakeven(book, "upstox", date(2026, 11, 11), 150.0, 65)
+    r = BreakevenRatchet.start(150.0, 65, be, pts, D)
+    r.on_bid(150 + 2.6 * pts, D + timedelta(seconds=20))  # past 2x: locked at breakeven
+    assert r.state == "BREAKEVEN_LOCKED" and r.stop == be
+    r.on_bid(150 + 2.9 * pts, D + timedelta(seconds=30))  # under 3x: no trail yet
+    assert r.stop == be
+    r.on_bid(150 + 4 * pts, D + timedelta(seconds=40))  # beyond 3x: trail 1.5x behind
+    assert r.stop == pytest.approx(150 + 2.5 * pts, abs=0.02)
+
+
+def test_scalp_entry_books_the_protocol_stop_and_needs_the_delta_band(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    acct = _account(repo_root, tmp_path, "bt")
+    p = BreakthroughPlay("breakthrough", "Breakthrough", "rules.md", acct)
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    ask = mkt.book(sym).asks[0][0]
+    p.enter(mkt, "NIFTY", sym, lots=1, reason="test", bullish=True, ratchet=True)
+    pos = acct.positions[sym]
+    # -12% of premium or Rs 1,200 on the lot, whichever is tighter, from the first moment.
+    assert pos.stop_price == pytest.approx(ask - min(0.12 * ask, 1200 / 65), abs=0.06)
+    mkt.greeks[sym] = {"delta": 0.45, "gamma": 0.003, "iv": 15.0}
+    ok, why, _, _ = mkt.scalp_gate(sym, 65, 3.5, "NIFTY")
+    assert not ok and "outside 0.55-0.65" in why
+
+
+def test_restart_puts_an_open_scalp_back_under_the_180s_scratch(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    """A scalp found open after an engine restart (no manager) is adopted: past 180 s and still
+    under its charges breakeven it is scratched, as the protocol requires."""
+    acct = _account(repo_root, tmp_path, "bt2")
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    ok, _ = acct.open_long_option(sym, mkt.book(sym), now=mkt.now, lots=1, stop_pct=20, reason="t")
+    assert ok
+    fresh = BreakthroughPlay("breakthrough", "Breakthrough", "rules.md", acct)  # the restarted play
+    later = mkt.now + timedelta(minutes=5)
+    mkt.now = later
+    out = fresh.step(later, mkt)
+    assert sym not in acct.positions, out
+    closed = acct.closed[-1]
+    assert "scratch" in closed.reason, closed.reason
+
+
+def test_spread_margin_is_quoted_in_the_background_and_journaled(repo_root: Path, tmp_path: Path) -> None:
+    from engine.cockpit.condor import Leg
+    from engine.cockpit.margin import MarginQuoter, fetch_margin
+
+    seen: list[list[tuple[str, int, str]]] = []
+
+    def fake(legs: Any) -> dict[str, Any]:
+        seen.append(list(legs))
+        return {"final": 42985.0, "required": 54922.0, "source": "test"}
+
+    acct = _spread(repo_root, tmp_path, "oc")
+    acct.attach_margin(MarginQuoter(fetch=fake))
+    a, b = opt_symbol(WEEKLY, 24800, Kind.PUT), opt_symbol(WEEKLY, 25000, Kind.PUT)
+    legs = [Leg(a, "PE", 24800.0, "BUY", 65), Leg(b, "PE", 25000.0, "SELL", 65)]
+    books = {a: bk(40.0, 40.5), b: bk(100.0, 100.5)}
+    ok, text = acct.open_spread(structure="BULL_PUT", underlying="NIFTY", expiry=WEEKLY, legs=legs,
+                                width_pts=200.0, books=books, now=D.replace(hour=11), spot=25000.0,
+                                reason="test")
+    assert ok, text
+    import time
+    for _ in range(50):
+        if acct.positions[0].margin.get("final"):
+            break
+        time.sleep(0.02)
+    assert acct.positions[0].margin["final"] == 42985.0
+    assert seen == [[(a, 65, "BUY"), (b, 65, "SELL")]]
+    again = _spread(repo_root, tmp_path, "oc")  # restart: the journaled quote comes back
+    again.load_journal(datetime.now(IST).date())  # the quote's line carries the real clock
+    assert again.positions[0].margin["final"] == 42985.0
+    # Simulated keys never reach the network.
+    assert "error" in fetch_margin([("NSE:NIFTY26111725000PE", 65, "SELL")])

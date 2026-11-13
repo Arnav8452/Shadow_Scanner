@@ -75,6 +75,8 @@ def build_chain_table(
     vol = {"CE": 0, "PE": 0}
     for k in sorted(legs):
         row: dict[str, Any] = {"k": k}
+        ivs: dict[str, float] = {}
+        buys: dict[str, float] = {}
         for kind in ("CE", "PE"):
             q = legs[k].get(kind)
             if not q:
@@ -115,24 +117,41 @@ def build_chain_table(
                 side["breakeven"] = round(be, 2)
                 side["be_pct"] = round((be / spot - 1) * 100, 2) if spot > 0 else None
             if mid > 0 and t_var > 0:
-                iv = implied_vol_black76(mid, forward, k, t_var, is_call=is_call, **kw)
-                if iv:
-                    g = compute_black76_greeks(forward, k, t_var, iv, is_call=is_call, **kw)
-                    side.update(
-                        {
-                            "iv": round(iv * 100, 2),
-                            "delta": round(g.delta, 3),
-                            "gamma": round(g.gamma, 5),
-                            "theta": round(g.theta_per_day, 2),
-                            "vega": round(g.vega_per_1pct, 2),
-                        }
-                    )
-                    if buy > 0:
-                        pop = buyer_pop(
-                            forward, k + buy if is_call else k - buy, iv, t_var, is_call=is_call
-                        )
-                        side["pop"] = round(pop * 100, 1) if pop is not None else None
+                own = implied_vol_black76(mid, forward, k, t_var, is_call=is_call, **kw)
+                if own:
+                    side["iv_own"] = round(own * 100, 2)
+                    ivs[kind] = own
+            buys[kind] = buy
             row[kind.lower()] = side
+        # One IV per strike, from the out-of-the-money option (calls above the forward, puts
+        # below), as the market quotes it: a deep in-the-money option's own mid sits inside a
+        # wide spread with little time value, so its own IV is unreliable and its greeks drift
+        # (e.g. delta 0.99 where parity with the put says 0.95).
+        otm = "CE" if k >= forward else "PE"
+        strike_iv = ivs.get(otm) or ivs.get("PE" if otm == "CE" else "CE")
+        if strike_iv and t_var > 0:
+            row["iv"] = round(strike_iv * 100, 2)
+            for kind in ("CE", "PE"):
+                leg = row.get(kind.lower())
+                if leg is None:
+                    continue
+                is_call = kind == "CE"
+                g = compute_black76_greeks(forward, k, t_var, strike_iv, is_call=is_call, **kw)
+                leg.update(
+                    {
+                        "iv": round(strike_iv * 100, 2),
+                        "delta": round(g.delta, 3),
+                        "gamma": round(g.gamma, 5),
+                        "theta": round(g.theta_per_day, 2),
+                        "vega": round(g.vega_per_1pct, 2),
+                    }
+                )
+                buy = buys.get(kind) or 0.0
+                if buy > 0:
+                    pop = buyer_pop(
+                        forward, k + buy if is_call else k - buy, strike_iv, t_var, is_call=is_call
+                    )
+                    leg["pop"] = round(pop * 100, 1) if pop is not None else None
         ce_oi = (row.get("ce") or {}).get("oi") or 0
         pe_oi = (row.get("pe") or {}).get("oi") or 0
         row["pcr"] = round(pe_oi / ce_oi, 2) if ce_oi else None

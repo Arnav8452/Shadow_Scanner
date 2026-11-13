@@ -26,7 +26,7 @@ Three processes, each restartable on its own:
 
 Start of day:
 - [ ] `uv run python tasks.py cockpit` (opens http://127.0.0.1:8765; bookmark it). Automatic once `QuantEngine-Cockpit` is registered: `powershell -ExecutionPolicy Bypass -File ops\scheduler\windows\register_cockpit.ps1`.
-- [ ] Header dots: **page** and **live engine** green. The header also shows feed status, lag (exchange time is whole seconds, so ±1 s), contracts watched and signals. "DROPPED" or "cockpit errors" in the header means check the engine log.
+- [ ] Header dots: **page** and **live engine** green. The header also shows feed status, lag (exchange time is whole seconds, so ±1 s), contracts watched and signals. "DROPPED" or "cockpit errors" in the header means check `logs/engine_shadow-live.log`. Each process writes its own `logs/engine_<task>.log`.
 
 On the **Desk**:
 - **Market strip**, per underlying:

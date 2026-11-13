@@ -222,11 +222,16 @@ class LiveAnalytics:
         return out
 
     def _contract_greeks(self, now: datetime, states: Mapping[str, Any], r: float) -> None:
-        """IV and greeks for every live option from its own mid (Black-76 on our forward for
-        the nearest expiry; spot carried at r for later expiries)."""
+        """IV and greeks for every live option (Black-76 on our forward for the nearest expiry;
+        spot carried at r for later expiries). Greeks use one IV per strike, the
+        out-of-the-money option's (its live partner at the same strike, else the 1-minute
+        chain's strike IV), so an in-the-money option's wide-spread mid does not distort them;
+        its own IV is kept as ``iv_own``."""
         from engine.analytics.greeks import compute_black76_greeks
 
         out: dict[str, dict[str, Any]] = {}
+        own: dict[tuple[str, Any, float, bool], float] = {}  # (und, expiry, strike, call) -> IV
+        todo: list[tuple[str, Any, Any, float, float, bool, Any, float]] = []
         for sym, st in states.items():
             if sym not in self.master or not (st.bids and st.asks):
                 continue
@@ -256,11 +261,32 @@ class LiveAnalytics:
             iv = implied_vol_black76(mid, f, float(ins.strike), clk.t_var, is_call=is_call, **kw)
             if iv is None:
                 continue
-            g = compute_black76_greeks(f, float(ins.strike), clk.t_var, iv, is_call=is_call, **kw)
+            own[(ins.underlying, ins.expiry, float(ins.strike), is_call)] = iv
+            todo.append((sym, ins, clk, f, mid, is_call, kw, iv))
+        for sym, ins, clk, f, mid, is_call, kw, iv_self in todo:
+            k = float(ins.strike)
+            otm_call = k >= f
+            if is_call == otm_call:
+                iv, src = iv_self, "own (out of the money)"
+            else:
+                partner = own.get((ins.underlying, ins.expiry, k, otm_call))
+                chain_iv = self._chain_strike_iv(ins.underlying, ins.expiry, k)
+                if partner:
+                    iv, src = partner, "strike IV from the live out-of-the-money option"
+                elif chain_iv:
+                    iv, src = chain_iv, "strike IV from the 1-minute chain"
+                else:
+                    iv, src = iv_self, "own (no out-of-the-money quote)"
+            g = compute_black76_greeks(f, k, clk.t_var, iv, is_call=is_call, **kw)
             lot = max(1, ins.lot_size)
             intrinsic = max(0.0, (f - ins.strike) if is_call else (ins.strike - f))
             out[sym] = {
                 "iv": round(iv * 100, 2),
+                "iv_own": round(iv_self * 100, 2),
+                "iv_source": src,
+                "forward": round(f, 2),
+                "strike": k,
+                "t_var": clk.t_var,
                 "delta": round(g.delta, 3),
                 "gamma": round(g.gamma, 5),
                 "theta_lot": round(g.theta_per_day * lot, 0),
@@ -272,6 +298,15 @@ class LiveAnalytics:
                 "trading_minutes": round(clk.trading_minutes, 0),
             }
         self.detail = out
+
+    def _chain_strike_iv(self, und: str, expiry: Any, k: float) -> float | None:
+        """The 1-minute chain's strike IV (decimal), when that expiry and strike are there."""
+        tables = getattr(self, "chains", {}).get(und) or {}
+        t = tables.get(expiry.isoformat()) if expiry is not None else None
+        for row in (t or {}).get("rows") or []:
+            if abs(float(row.get("k", 0)) - k) < 1e-6 and row.get("iv"):
+                return float(row["iv"]) / 100
+        return None
 
     def _apply_breadth(self, states: Mapping[str, Any]) -> None:
         """Feed constituent breadth to the scanner: an index/futures move counts as broad when

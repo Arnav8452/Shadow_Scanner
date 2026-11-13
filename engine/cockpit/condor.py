@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -108,6 +108,8 @@ class SpreadPosition:
     spot0: float
     reason: str
     context: dict[str, Any] = field(default_factory=dict)
+    # Margin to put the same legs on in the market (engine/cockpit/margin.py), once quoted.
+    margin: dict[str, Any] = field(default_factory=dict)
 
     @property
     def short_put(self) -> float | None:
@@ -139,6 +141,7 @@ class ClosedSpread:
     reason: str
     legs: tuple[dict[str, Any], ...] = ()
     context: dict[str, Any] = field(default_factory=dict)
+    margin: dict[str, Any] = field(default_factory=dict)
 
 
 def cost_to_close(pos: SpreadPosition, books: Mapping[str, Book]) -> float | None:
@@ -184,6 +187,16 @@ class SpreadAccount:
         self.journal = journal
         # Extra entry rule outside the risk gate, e.g. a macro-event window (returns the reason).
         self.entry_block = entry_block
+        self.margin_quoter: Any = None  # engine.cockpit.margin.MarginQuoter (live engine only)
+        self._mcache: dict[tuple[tuple[str, int, str], ...], tuple[float, float]] = {}
+        # Orders reach the exchange after ``fill_latency_s``; legs go one at a time,
+        # ``leg_gap_s`` apart (wings first). 0 = all legs against the decision's books.
+        self.fill_latency_s = 0.0
+        self.leg_gap_s = 0.0
+        self.executions: list[dict[str, Any]] = []
+        # Credit structures: the take-profit must be worth this many round-trips of charges
+        # (0 = off). Set from cockpit.credit_charges_mult.
+        self.charges_mult = 0.0
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: list[SpreadPosition] = []
         self.closed: list[ClosedSpread] = []
@@ -205,29 +218,103 @@ class SpreadAccount:
             if t.net_inr >= 0:
                 break
             streak += 1
-        open_risk = sum(p.max_loss_inr for p in self.positions)
+        open_risk = sum(p.max_loss_inr for p in self.positions) + sum(
+            float(x["max_loss"]) for x in self.executions
+        )
         return AccountRiskState(
             realized_daily_pnl_inr=self.realized_net,
             realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net,
             open_risk_inr=open_risk,
-            margin_used_inr=open_risk,  # proxy: SPAN not modelled (UNVERIFIED)
-            trades_taken_today=self.trades_today,
+            # Broker margin: the live quote for a position's legs, else the paper margin table.
+            margin_used_inr=sum(self.margin_of(p) for p in self.positions)
+            + sum(float(x["margin"]) for x in self.executions),
+            trades_taken_today=self.trades_today + len(self.executions),
             consecutive_losses_today=streak,
             last_loss_at=losses[-1].closed_at if losses else None,
         )
 
-    def gate(self, max_loss_inr: float, now: datetime, lots: int = 1) -> tuple[bool, str]:
+    def gate(
+        self, max_loss_inr: float, now: datetime, lots: int = 1, margin_inr: float | None = None
+    ) -> tuple[bool, str]:
         g = check_pre_trade_risk_gate(
             self.limits,
             self.risk_state(),
             proposed_trade_max_loss_inr=max_loss_inr,
-            proposed_margin_inr=max_loss_inr,
+            proposed_margin_inr=max_loss_inr if margin_inr is None else margin_inr,
             proposed_lots=lots,
             strategy_kind="defined_risk_spread",
             now=now,
             session_open=self.session_open,
         )
         return g.allowed, "; ".join(g.reasons)
+
+    # ------------------------------------------------------------------ margin
+
+    @staticmethod
+    def _mkey(legs: Sequence[Leg]) -> tuple[tuple[str, int, str], ...]:
+        return tuple(sorted((lg.symbol, int(lg.qty), lg.side) for lg in legs))
+
+    def table_margin(self, structure: str, lots: int, day: date) -> float:
+        """Paper margin table (config/rules/margin_rules.yaml, from broker quotes + buffer)."""
+        cls = _MARGIN_CLASS.get(structure, "unknown")
+        try:
+            row = self.book.lookup(
+                "margin_rules", day, allow_unverified=True, name="paper_margin_per_lot"
+            )
+            per_lot = float(row.params.get(cls) or row.params.get("unknown") or 0.0)
+        except Exception:
+            per_lot = 86500.0
+        return per_lot * max(1, lots)
+
+    def margin_for(self, structure: str, legs: Sequence[Leg], lots: int, day: date) -> float:
+        """Margin to put these legs on: a live quote (prefetched) when fresh, else the table."""
+        hit = self._mcache.get(self._mkey(legs))
+        if hit is not None and datetime.now(IST).timestamp() - hit[0] < 900:
+            return hit[1]
+        return self.table_margin(structure, lots, day)
+
+    def prefetch_margin(self, legs: Sequence[Leg]) -> None:
+        """Ask the broker's calculator for these legs now, so the gate has a live figure by
+        the time the plan executes (plans wait for leg books anyway)."""
+        if self.margin_quoter is None or not legs:
+            return
+        key = self._mkey(legs)
+        hit = self._mcache.get(key)
+        if hit is not None and datetime.now(IST).timestamp() - hit[0] < 900:
+            return
+
+        def done(res: dict[str, Any]) -> None:
+            if res.get("final"):
+                self._mcache[key] = (datetime.now(IST).timestamp(), float(res["final"]))
+
+        self.margin_quoter.request([(s, q, side) for s, q, side in key], done)
+
+    def margin_of(self, pos: SpreadPosition) -> float:
+        final = (pos.margin or {}).get("final")
+        if final:
+            return float(final)
+        return self.table_margin(
+            pos.structure, max(1, pos.qty // max(1, pos.legs[0].qty)), pos.opened_at.date()
+        )
+
+    def round_trip_charges(
+        self, legs: Sequence[Leg], books: Mapping[str, Book], day: date
+    ) -> float:
+        """Entry charges at the touch, doubled for the exit (a conservative round trip)."""
+        total = 0.0
+        for lg in legs:
+            b = books.get(lg.symbol)
+            lv = (b.asks if lg.side == "BUY" else b.bids) if b is not None else ()
+            px = lv[0][0] if lv else 0.0
+            total += fno_charges(
+                self.book, day, segment="futures" if lg.kind == "FUT" else "options",
+                side="buy" if lg.side == "BUY" else "sell",
+                turnover_inr=px * lg.qty, broker=self.broker_name,
+            ).total  # fmt: skip
+        return round(2 * total, 2)
+
+    def executing_symbols(self) -> list[str]:
+        return [lg.symbol for x in self.executions for lg in x["legs"]]
 
     def per_trade_limit(self) -> float:
         return self.limits.inr(self.limits.per_trade_max_loss_pct["defined_risk_spread"])
@@ -293,9 +380,14 @@ class SpreadAccount:
         context: Mapping[str, Any] | None = None,
         lots: int = 1,
         max_loss_inr: float | None = None,
+        take_profit_pct: float | None = None,
+        on_done: Any = None,
     ) -> tuple[bool, str]:
         """``max_loss_inr`` overrides the structure's worst case for the risk gate when a hard
-        (spot-conditioned) stop defines the planned loss, e.g. a synthetic future."""
+        (spot-conditioned) stop defines the planned loss, e.g. a synthetic future.
+        ``take_profit_pct`` (credit structures) is checked against round-trip charges.
+        ``on_done(ok, text, position | None)`` runs when the order completes, which with
+        ``fill_latency_s`` > 0 is a few steps later (the call then returns "order sent")."""
         qty = legs[0].qty
         # Defined risk only: refuse any short without a same-type wing (raises otherwise).
         intents = [
@@ -327,32 +419,103 @@ class SpreadAccount:
             books[w.symbol].asks[0][0] for w in wings
         )
         max_loss = worst_case(est_credit, width_pts) * qty if max_loss_inr is None else max_loss_inr
-        ok, why = self.gate(max_loss, now, lots)
+        day = now.astimezone(IST).date()
+        if self.executions:
+            return self._done(
+                on_done, *self._refuse(structure, now, "an order is already on its way")
+            )
+        if take_profit_pct and est_credit > 0 and self.charges_mult > 0:
+            rt = self.round_trip_charges(legs, books, day)
+            target = est_credit * take_profit_pct / 100 * qty
+            if target < self.charges_mult * rt:
+                return self._done(on_done, *self._refuse(
+                    structure, now,
+                    f"charges: take-profit Rs {target:,.0f} ({take_profit_pct:g}% of a "
+                    f"{est_credit:.1f}-pt credit) is under {self.charges_mult:g}x the round-trip "
+                    f"charges Rs {rt:,.0f}",
+                ))  # fmt: skip
+        margin = self.margin_for(structure, legs, lots, day)
+        ok, why = self.gate(max_loss, now, lots, margin_inr=margin)
         if not ok:
-            return self._refuse(structure, now, why)
-        filled: list[Leg] = []
-        # Stage 1: wings.
-        for w in wings:
-            q, px, ch, why = self._fill(
-                w.symbol, "BUY", qty, books[w.symbol], now, exit_=False, kind=w.kind
+            return self._done(on_done, *self._refuse(structure, now, why))
+        ex: dict[str, Any] = {
+            "structure": structure, "underlying": underlying, "expiry": expiry,
+            "legs": [*wings, *shorts], "todo": [*wings, *shorts], "filled": [],
+            "qty": qty, "width": width_pts, "spot": spot, "reason": reason,
+            "context": dict(context or {}), "max_loss_override": max_loss_inr,
+            "max_loss": max_loss, "margin": margin, "on_done": on_done,
+            "decided": now, "est_credit": est_credit,
+        }  # fmt: skip
+        if self.fill_latency_s > 0:
+            ex["next_at"] = now.timestamp() + self.fill_latency_s
+            self.executions.append(ex)
+            return True, (
+                f"order sent: {structure.replace('_', ' ').lower()} "
+                f"({len(ex['legs'])} legs, wings first; {self.fill_latency_s * 1000:.0f} ms to "
+                f"the exchange, {self.leg_gap_s * 1000:.0f} ms between legs)"
             )
-            if q < qty:
-                self._unwind(filled + ([_part(w, q, px, ch)] if q else []), books, now)
-                return self._refuse(structure, now, f"wing {w.strike:g} {w.kind} not filled: {why}")
-            w.entry_px, w.entry_charges = round(px, 4), ch
-            filled.append(w)
-        # Stage 2: shorts, only now that their wings are held.
-        for s in shorts:
-            q, px, ch, why = self._fill(
-                s.symbol, "SELL", qty, books[s.symbol], now, exit_=False, kind=s.kind
-            )
-            if q < qty:
-                self._unwind(filled + ([_part(s, q, px, ch)] if q else []), books, now)
-                return self._refuse(
-                    structure, now, f"short {s.strike:g} {s.kind} not filled: {why}; wings unwound"
-                )
-            s.entry_px, s.entry_charges = round(px, 4), ch
-            filled.append(s)
+        while ex["todo"]:
+            ok, text = self._fill_next(ex, books, now)
+            if not ok:
+                return False, text
+        return self._finish(ex, now)
+
+    def process_executions(self, books: Mapping[str, Book], now: datetime) -> list[str]:
+        """Advance orders on their way: at most one leg per order per step once its time has
+        come, against the books of that moment."""
+        out: list[str] = []
+        for ex in list(self.executions):
+            if now.timestamp() < float(ex["next_at"]):
+                continue
+            ok, text = self._fill_next(ex, books, now)
+            if not ok:
+                self.executions.remove(ex)
+                out.append(text)
+                continue
+            if ex["todo"]:
+                ex["next_at"] = now.timestamp() + self.leg_gap_s
+                continue
+            self.executions.remove(ex)
+            out.append(self._finish(ex, now)[1])
+        return out
+
+    def _fill_next(
+        self, ex: dict[str, Any], books: Mapping[str, Book], now: datetime
+    ) -> tuple[bool, str]:
+        lg = ex["todo"][0]
+        qty = int(ex["qty"])
+        b = books.get(lg.symbol)
+        if b is None or not b.bids or not b.asks:
+            q, px, ch, why = 0, 0.0, 0.0, "no book"
+        else:
+            q, px, ch, why = self._fill(lg.symbol, lg.side, qty, b, now, exit_=False, kind=lg.kind)
+        if q < qty:
+            self._unwind(ex["filled"] + ([_part(lg, q, px, ch)] if q else []), books, now)
+            what = "wing" if lg.side == "BUY" else "short"
+            ok, text = self._refuse(
+                ex["structure"], now,
+                f"{what} {lg.strike:g} {lg.kind} not filled: {why}"
+                + ("; wings unwound" if lg.side == "SELL" else ""),
+            )  # fmt: skip
+            self._done(ex["on_done"], ok, text)
+            return False, text
+        lg.entry_px, lg.entry_charges = round(px, 4), ch
+        ex["filled"].append(lg)
+        ex["todo"].pop(0)
+        return True, ""
+
+    def _done(self, on_done: Any, ok: bool, text: str, pos: Any = None) -> tuple[bool, str]:
+        if on_done is not None:
+            on_done(ok, text, pos)
+        return ok, text
+
+    def _finish(self, ex: dict[str, Any], now: datetime) -> tuple[bool, str]:
+        structure, qty, width_pts = ex["structure"], int(ex["qty"]), float(ex["width"])
+        max_loss_inr, filled = ex["max_loss_override"], ex["filled"]
+        shorts = [lg for lg in filled if lg.side == "SELL"]
+        wings = [lg for lg in filled if lg.side == "BUY"]
+        underlying, expiry, spot = ex["underlying"], ex["expiry"], ex["spot"]
+        reason, context = ex["reason"], ex["context"]
         credit = sum(s.entry_px for s in shorts) - sum(w.entry_px for w in wings)
         self._seq += 1
         pos = SpreadPosition(
@@ -375,10 +538,19 @@ class SpreadAccount:
         self.positions.append(pos)
         self.trades_today += 1
         self._write({"type": "open", "t": now.isoformat(), **_pos_json(pos)})
+        self._quote_margin(pos)
         what = f"credit {credit:.2f}" if credit >= 0 else f"debit {-credit:.2f}"
-        return True, (
+        lag = (
+            f"; estimated {float(ex['est_credit']):.2f} at the decision"
+            if self.fill_latency_s > 0
+            else ""
+        )
+        return self._done(
+            ex["on_done"],
+            True,
             f"opened {structure.replace('_', ' ').lower()} {_strikes(pos)}: {what} pts "
-            f"(₹{abs(credit) * qty:,.0f}), worst case ₹{pos.max_loss_inr:,.0f}"
+            f"(₹{abs(credit) * qty:,.0f}{lag}), worst case ₹{pos.max_loss_inr:,.0f}",
+            pos,
         )
 
     def _unwind(self, legs: Sequence[Leg], books: Mapping[str, Book], now: datetime) -> None:
@@ -426,6 +598,7 @@ class SpreadAccount:
             reason=reason,
             legs=tuple(asdict(lg) for lg in pos.legs),
             context=pos.context,
+            margin=dict(pos.margin),
         )
         self.positions.remove(pos)
         self.closed.append(trade)
@@ -450,6 +623,32 @@ class SpreadAccount:
         self._write(rec)
         return False, f"refused {what.replace('_', ' ').lower()}: {why}"
 
+    def attach_margin(self, quoter: Any) -> None:
+        """Use ``quoter`` for new positions and quote any restored one that has no margin yet."""
+        self.margin_quoter = quoter
+        for p in self.positions:
+            if not p.margin:
+                self._quote_margin(p)
+
+    def _quote_margin(self, pos: SpreadPosition) -> None:
+        """Margin to put these legs on in the market, quoted in the background (the trade never
+        waits for it). Without a quoter the worst-case loss stays the margin proxy."""
+        if self.margin_quoter is None:
+            pos.margin = {"error": "no margin quote in this run (simulation or replay)"}
+            return
+        pos.margin = {"pending": True}
+        legs = [(lg.symbol, int(lg.qty), lg.side) for lg in pos.legs if lg.open]
+
+        def done(res: dict[str, Any]) -> None:
+            # Journal first, so a restart right after the in-memory update still finds it.
+            self._write({"type": "margin", "t": datetime.now(IST).isoformat(), "id": pos.id, **res})
+            pos.margin = res
+            for i, t in enumerate(self.closed):  # closed before the answer came back
+                if t.id == pos.id:
+                    self.closed[i] = replace(t, margin=res)
+
+        self.margin_quoter.request(legs, done)
+
     def _write(self, rec: dict[str, Any]) -> None:
         if self.journal is None:
             return
@@ -464,6 +663,7 @@ class SpreadAccount:
             return 0
         iso = day.isocalendar()
         opens: dict[str, dict[str, Any]] = {}
+        margins: dict[str, dict[str, Any]] = {}
         used = 0
         for line in self.journal.read_text(encoding="utf-8").splitlines():
             try:
@@ -474,6 +674,11 @@ class SpreadAccount:
             if t.date() > day:
                 continue
             kind = rec.get("type")
+            if kind == "margin":
+                margins[str(rec.get("id"))] = {
+                    k: v for k, v in rec.items() if k not in ("account", "type", "t", "id")
+                }
+                continue
             if kind == "open":
                 opens[rec["id"]] = rec
             elif kind == "close":
@@ -490,6 +695,12 @@ class SpreadAccount:
             elif kind == "refused":
                 self.refusals.append(rec)
         self.positions = [_pos_from(r) for r in opens.values()]
+        for p in self.positions:
+            p.margin = margins.get(p.id, {})
+        self.closed = [
+            c if c.margin or c.id not in margins else replace(c, margin=margins[c.id])
+            for c in self.closed
+        ]
         return used
 
     # ------------------------------------------------------------------ view
@@ -550,6 +761,7 @@ class SpreadAccount:
                     "opened": p.opened_at.astimezone(IST).strftime("%d %b %H:%M"),
                     "reason": p.reason,
                     "legs": legs,
+                    "margin": p.margin,
                 }
             )
         return {
@@ -567,6 +779,21 @@ class SpreadAccount:
 
 def _part(lg: Leg, q: int, px: float, ch: float) -> Leg:
     return Leg(lg.symbol, lg.kind, lg.strike, lg.side, q, px, ch)
+
+
+_MARGIN_CLASS = {
+    "BULL_PUT": "credit_2leg",
+    "BEAR_CALL": "credit_2leg",
+    "BULL_CALL": "debit_2leg",
+    "BEAR_PUT": "debit_2leg",
+    "IRON_CONDOR": "four_leg",
+    "IRON_FLY": "four_leg",
+    "CALENDAR": "calendar",
+    "SYNTHETIC_LONG": "synthetic",
+    "SYNTHETIC_SHORT": "synthetic",
+    "MARRIED_FUTURE": "married_future",
+    "MARRIED_SHORT_FUTURE": "married_future",
+}
 
 
 def worst_case(credit: float, width: float) -> float:
@@ -639,6 +866,7 @@ def _closed_from(r: Mapping[str, Any]) -> ClosedSpread:
         reason=str(r.get("reason", "")),
         legs=tuple(r.get("legs") or ()),
         context=dict(r.get("context") or {}),
+        margin=dict(r.get("margin") or {}),
     )
 
 
@@ -654,6 +882,7 @@ def _closed_view(t: ClosedSpread) -> dict[str, Any]:
         "opened": t.opened_at.astimezone(IST).strftime("%d %b %H:%M"),
         "closed": t.closed_at.astimezone(IST).strftime("%d %b %H:%M"),
         "reason": t.reason,
+        "margin": t.margin,
     }
 
 
@@ -696,6 +925,7 @@ class CondorStrategy:
 
     def legs_in_use(self) -> list[str]:
         syms = [lg.symbol for p in self.account.positions for lg in p.legs if lg.open]
+        syms += self.account.executing_symbols()
         if self.plan is not None:
             syms += [lg.symbol for lg in self.plan.legs]
         return list(dict.fromkeys(syms))
@@ -728,7 +958,9 @@ class CondorStrategy:
         checks.append(
             Check(
                 "One structure a day",
-                opened_today < c.max_per_day and not self.account.positions,
+                opened_today < c.max_per_day
+                and not self.account.positions
+                and not self.account.executions,
                 "already holding one" if self.account.positions else f"{opened_today} opened today",
             )
         )
@@ -818,8 +1050,13 @@ class CondorStrategy:
             plan, why = self._make_plan(now, structure, expiry, strip, chain)
             checks.append(Check("Strikes and credit", plan is not None, why))
             if plan is not None:
+                self.account.prefetch_margin(plan.legs)
                 ok, gate_why = self.account.gate(
-                    max(0.0, plan.width - plan.credit_est) * plan.legs[0].qty, now
+                    max(0.0, plan.width - plan.credit_est) * plan.legs[0].qty,
+                    now,
+                    margin_inr=self.account.margin_for(
+                        plan.structure, plan.legs, 1, now.astimezone(IST).date()
+                    ),
                 )
                 checks.append(Check("Risk gate", ok, gate_why or "passes"))
                 if ok:
@@ -958,6 +1195,7 @@ class CondorStrategy:
             spot=p.spot,
             reason=p.reason,
             context=self.context(),
+            take_profit_pct=self.cfg.take_profit_pct,
         )
         self.decision = (
             "managing exits (take profit, stop, short-strike touch, order flow, time)"

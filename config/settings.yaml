@@ -143,6 +143,15 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   expiry_day_last_entry: "14:30"  # long options expiring today: no entries after this
   expiry_day_exit: "14:45"        # ...and closed at this time (breaking_retail.md: 14:45)
   paper_max_lots: 2               # owner 12 Nov: paper strategies may use 2 lots within limits
+  # 13 Nov review (owner approved batch 1). HYPOTHESIS values:
+  stop_hold_max_s: 5              # a model-price stop hold gives way after this long...
+  stop_override_mult: 1.5         # ...or past this x the stop distance, or at the per-trade limit
+  paper_fill_latency_ms: 200      # paper orders fill against the book this long after the decision
+  paper_leg_gap_ms: 300           # multi-leg orders: one leg at a time, this far apart, wings first
+  credit_charges_mult: 3          # credit spreads: take-profit >= this x round-trip charges
+  paper_margin_cap_pct: 100       # owner 13 Nov: each strategy's own broker margin <= 100% of
+                                  # capital (Rs 2L), never blocked by another strategy (live: 50%)
+  spread_expiry_exit: "15:00"     # short legs expiring today closed before the 15:10 settlement window
   manual_default_stop_pct: 25     # Track C ticket default; editable on the page
   key_file: data/state/cockpit.key   # engine<->gateway shared secret, created on first use
   journal_dir: data/state          # paper_bot.jsonl, paper_manual.jsonl
@@ -327,6 +336,13 @@ fundamentals:              # equity pillar from exchange filings (tasks.py eveni
   periods: 5               # latest quarters kept per company (YoY needs 5)
   pace_s: 1.0              # pause between NSE requests
   board_meeting_days: 45   # look-ahead for results dates -> config/events/macro_calendar.csv
+
+backup:                   # nightly, end of `tasks.py evening` (owner delegated 13 Nov 2026)
+  enabled: true
+  target: "C:/QuantBackup"  # other partition of the same disk: guards deletion/corruption only.
+                            # Point at an external drive (e.g. "E:/QuantBackup") for disk failure.
+  sources: [data/parquet, data/state]   # what cannot be re-downloaded; data/raw is skipped
+  min_free_gb: 5            # warn when the source or target drive has less free space
 
 paths:
   data: data

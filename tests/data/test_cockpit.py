@@ -492,3 +492,11 @@ def test_replay_compresses_long_silences() -> None:
     assert _wait(lambda: feed.done, timeout=5)
     assert time.monotonic() - t0 < 3.0  # played as ~1 s, not 2 hours
     assert feed.progress()["skipped_gaps"] == 1 and len(got) == 3
+
+
+def test_stock_label_is_the_trading_symbol_not_the_isin_key() -> None:
+    from engine.data.reference.instrument_master import Instrument, Kind
+
+    eq = Instrument("NSE_EQ|INE062A01020", "upstox", "NSE", "cm", "NSE_EQ|INE062A01020", "3045",
+                    "SBIN", Kind.EQUITY, None, None, None, 1, 0.05, "INE062A01020", "SBIN")
+    assert instrument_label(eq) == "SBIN EQ"

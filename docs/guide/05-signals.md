@@ -21,6 +21,12 @@ Options are priced off the forward, not spot or the future. For 3–5 strikes ne
 ### Implied volatility and greeks
 Black-76 on the **mid price** of each option, against that expiry's synthetic forward, solved with `scipy`. Time to expiry is counted in **trading minutes** to the session close (15:40 since 3 Aug 2026), so overnight and weekends don't inflate IV. Delta, gamma, theta (₹/lot/day), vega (₹/lot/vol point), vanna and charm follow from the same model.
 
+**One IV per strike.** Greeks for both the call and the put at a strike use the **out-of-the-money option's IV**: the call at or above the forward, the put below it. This is how the market quotes the smile (Sensibull does the same).
+- **Why:** a deep in-the-money option trades inside a wide spread with little time value, so the IV solved from its own mid is unreliable. On 13 Nov at 09:30 the 24400 call's own mid gave delta 0.99 and vega 0.7, while parity with the 24400 put (delta −0.05) says 0.95.
+- **What you see:** the option's own-mid IV is kept as `iv_own`, shown on hover.
+- **Fallbacks:** live contracts take the strike IV from the live OTM option at the same strike, else from the 1-minute chain, else their own.
+- **Remaining small differences from Sensibull** come from the forward, read a few seconds apart, and from the time convention: trading minutes here, calendar time there, which mainly changes theta and vega per day.
+
 An option is **settling** (no IV, no greeks, no readings) when it expires today and is in its last minutes: its price then tracks the settlement average, not an option model.
 
 ### IV percentile (IVP)
@@ -180,7 +186,7 @@ The front future's tape is split into **10-point zones** over a rolling **30 min
 - **Floor (bullish):** aggressive selling of at least **12×** the largest bid shown, over at least **8 minutes**, net delta negative, and price now **above** the zone. Sellers kept hitting a bid that kept reloading (an iceberg) and are now trapped.
 - **Ceiling (bearish):** the mirror image.
 
-Trade side is inferred from each ~0.2 s sample (a print at or above the ask is a buy, at or below the bid a sell, else by the side of the mid), which is coarser than true tick data. Zones show on the Setups panel, are stored with every trade's entry conditions, and drive the *absorption-zone wave rider* strategy.
+Trade side is inferred from each ~0.2 s sample against the quote **before** the trade (Lee–Ready): at or above the previous ask is a buy, at or below the previous bid a sell, else by the side of the previous mid, with the tick direction for an exact mid print. Judging against the post-trade quote would read a sweep that lifted the touch as selling. Sampling is still coarser than true tick data. Zones show on the Setups panel, are stored with every trade's entry conditions, and drive the *absorption-zone wave rider* strategy.
 
 ---
 
@@ -234,10 +240,14 @@ Code: `engine/cockpit/gates.py`. Owner rule (12 Nov 2026): a short hold ("scalp"
 - **True breakeven:** the exit price at which a long option bought at the ask nets zero after the full round trip's charges (brokerage, STT, exchange fees, SEBI fee, stamp duty, GST, all from `config/rules`), plus a 1-point slippage buffer, rounded up to the tick.
 - **Gate 1, impulse:** the option's expected 3-minute move, `ATR₁ₘ·√3·|Δ| + ½·Γ·(ATR₁ₘ·√3)²`, must be at least **3.5×** the breakeven points (**2.5×** for the 5-pillar breakthrough scalper). Otherwise there is no entry.
 - **Gate 2, breakeven ratchet:**
-  1. The initial stop is 12% of premium (or the rupee cap).
+  1. The initial stop is **−12% of premium or ₹1,200 on the position**, whichever is tighter. It is booked at entry, so the risk gate sees the real planned loss.
   2. When the bid clears entry + **2×** breakeven points, the stop moves to true breakeven: the trade can no longer lose money after costs.
-  3. After that, the stop trails **1.5×** breakeven points behind the bid.
+  3. Once the bid is beyond **3×** breakeven points, the stop trails **1.5×** breakeven points behind it.
   4. If the trade is still below breakeven after **180 s**, it is scratched.
+  5. **After an engine restart**, open scalps are put back under the ratchet using their real open time, so a scalp held past 180 s below breakeven is scratched on the first step.
+- **Strike band:** scalps trade only **0.55–0.65 delta** options (target 0.60), so intrinsic movement dominates theta. 0DTE keeps its ATM spec and is the one exception.
+- **Rule 2, the vacuum score:** a scalp also needs the rules.md 5-pillar confidence (book, volume delta, writer pain + OI unwinding, gamma impulse vs breakeven, IV velocity) at **65+**, and no absorption on the trigger bar. The breakthrough scalper is that score; spoof fade now checks it too.
+- **Charges plan:** the breakeven uses the configured brokerage plan (`shadow_scanner.cost_broker`). On Upstox Plus (₹30 an order) a ₹150 Nifty lot needs about 2.6 points. The owner's worked example of 2.10 points assumes ₹20 an order, which the tests reproduce to within a few paise.
 - **Model-price stop confirmation:** a long option's stop fires only if the Black-76 model price (from the forward and a smoothed IV) also says it should. A quote air pocket the index never made does not stop you out; the page shows when a stop is being held for this reason.
 - **Off-cycle entries:** no entries in the first 45 s of minutes :00, :15, :20, :30, :45, when retail algorithms fire.
 - **Absorption veto:** no entry on a trigger bar with ≥ 2.5× volume and a body under 0.35 ATR, or ≥ 2× volume with a rejection wick over 55% of the bar: effort without result.

@@ -13,6 +13,7 @@ Every number below is a **HYPOTHESIS** in the strategy's code or in `config/sett
 - **Defined risk only.** A short option leg is placed only after its protective long leg has filled, and bought back first on exit (CLAUDE.md rule 1; `engine/execution/leg_sequencer.py`). A short future needs a filled long call as cover; a long future needs a long put.
 - **Lots:** one lot, except where a strategy says otherwise; paper accounts may use up to `cockpit.paper_max_lots: 2` within the loss limits. Live trading would stay at one lot (CLAUDE.md rule 5).
 - **Times:**
+  - multi-leg positions whose short leg expires today: closed at 15:00, before the 15:10 settlement window;
   - no entries in the first 15 minutes or inside an event window;
   - no new entries after 15:00;
   - intraday positions are squared off at 15:20;
@@ -44,7 +45,7 @@ Sources:
 | `oi_credit` | OI-velocity credit spread | 2 legs | Intraday | spec B | on |
 | `calendar` | Term-structure calendar | 2 legs, 2 expiries | Overnight | spec C | waiting for 10 sessions of history |
 | `compression` | Compression + skew debit spread | 2 legs | Up to 2 days | spec D | needs 20 width readings; full meaning after 10 sessions |
-| `expiry_pin` | Expiry pin seller | 2 legs | To 15:20 | fix2.md | on (expiry days) |
+| `expiry_pin` | Expiry pin seller | 2 legs | To 15:00 | fix2.md | on (expiry days) |
 | `synthetic` | Hedged synthetic future | 3 legs | Up to 3 days | futures 1 | on |
 | `married` | Married future, both directions | option + future | Up to 5 days | futures 2 | on |
 | `mcx` | MCX mini futures | future | Intraday | futures 3 | **off: no MCX data or costs** |
@@ -70,7 +71,8 @@ Code: `engine/cockpit/condor.py`. Settings: `cockpit.condor`. Checked once a min
    - a setup still forming → wait;
    - none → **iron condor**.
 5. **Strikes:** shorts at about **0.16 delta**; wings **200, 150 or 100** points further out, the widest whose worst case fits the 5% per-trade limit. The credit must be ≥ **10% of the width**. All four contracts are added to the feed, and the structure is traded only when each has a live book.
-6. **Hedge first:** wings bought, then shorts sold; a failed short unwinds the filled legs.
+6. **Hedge first:** wings bought, then shorts sold, one leg at a time (300 ms apart); a failed short unwinds the filled legs.
+7. **Charges and margin:** the 50% take-profit must be worth at least **3×** the round-trip charges. At ₹30 an order a typical 16-point credit doesn't qualify, so expect fewer condors. The broker margin, about ₹74k live for 150-pt wings, must fit the 50% headroom.
 
 **Exits** (checked every publish):
 - **50%** of the credit captured;
@@ -166,8 +168,14 @@ Code: `engine/cockpit/plays_long.py`. These may hold for minutes only because ea
 ### Spoof rug-pull / eaten wall — `spoof_fade` (spoofing notes)
 - **Window:** 09:30–14:30.
 - **Trigger:** a **pulled** wall (spoof rug-pull) or an **eaten** wall on an index future or option ([05-signals.md §5.4](05-signals.md#54-spoofing-and-walls)).
-- **Trade:** the side the event reveals (pulled bid wall → down; eaten ask wall → up) with a 0.55-delta option.
-- **Gates:** charges gate and breakeven ratchet.
+- **Trade:** the side the event reveals (pulled bid wall → down; eaten ask wall → up) with a 0.60-delta option (0.55–0.65 band).
+- **Gates (the full charges-breakeven protocol):**
+  - no entry in the first 45 s of a round minute;
+  - expected 3-minute move ≥ 3.5× the charges breakeven;
+  - vacuum score 65+;
+  - no absorption on the trigger bar;
+  - breakeven ratchet with the 180-s scratch.
+- **Note:** the wall detector fires several events a second on flickering option books, so this strategy relies on those gates to filter noise; the thresholds are a tuning question.
 
 ### Absorption-zone wave rider — `zone_rider` (ride_wave.md)
 - **Window:** 09:45–14:00.
@@ -227,7 +235,7 @@ Code: `engine/cockpit/plays_spread.py`. Wings are always bought first and shorts
   - call OI there unwinding **≥ 20%**;
   - that put spiking **≥ 50%** above its 13:45 price.
 - **Structure:** **sell** that put with a cheap wing below (ask under ₹3): a credit spread.
-- **Exits:** 90% of the credit; 2× the credit; otherwise held to 15:20.
+- **Exits:** 90% of the credit; 2× the credit; otherwise closed at **15:00**, before the 15:10 settlement window.
 
 ### Hedged synthetic future — `synthetic` (futures 1)
 - **Window:** 09:45–14:00.

@@ -30,6 +30,9 @@ IST = ZoneInfo("Asia/Kolkata")
 PLANNED: dict[str, str] = {}
 
 
+_TASK = ""  # the running task's name, set in main()
+
+
 def run(*cmd: str) -> int:
     print("+", " ".join(cmd), flush=True)
     return subprocess.call(list(cmd), cwd=ROOT)
@@ -59,7 +62,7 @@ def task_event_arb(params: dict[str, str]) -> int:
     from ops.alerts.telegram import TelegramNotifier, format_digest
 
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     as_of = date.fromisoformat(params["DATE"]) if params.get("DATE") else _today_ist()
     res = run_scan(settings, ROOT, as_of, fetch=params.get("FETCH", "1") != "0")
     print(f"report: {res.report_path}")
@@ -220,7 +223,7 @@ def task_record(params: dict[str, str]) -> int:
     from ops.alerts.telegram import TelegramNotifier
 
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     sim = params.get("SIM") == "1"
     send = params.get("SEND") == "1"
     day = _today_ist()
@@ -332,7 +335,7 @@ def _evening_setup() -> tuple[Any, Any, Any]:
     from engine.shadow.live import load_shadow_live_config
 
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     _, _, cal = _eod_common()
     cfg = evening_config(settings.raw, load_shadow_live_config(settings).delivery_watch, ROOT)
     return settings, cfg, cal
@@ -364,7 +367,33 @@ def task_evening(params: dict[str, str]) -> int:
     for line in rep.lines:
         print("  " + line)
     print(f"{rep.errors} problem(s)")
-    return 1 if rep.errors else 0
+    backup_rc = task_backup({}) if "backup" not in params.get("SKIP", "") else 0
+    return 1 if rep.errors or backup_rc else 0
+
+
+def task_backup(params: dict[str, str]) -> int:
+    """Copy new/changed recordings and journals (data/parquet, data/state) to backup.target
+    (default C:/QuantBackup; TARGET= overrides). Never deletes from the target. Runs at the end
+    of `evening`. Point it at an external drive to survive a disk failure."""
+    sys.path.insert(0, str(ROOT))
+    from engine.core.config import load_settings
+    from engine.data.backup import run_backup
+
+    cfg = load_settings().raw.get("backup") or {}
+    if not cfg.get("enabled", True) and not params.get("TARGET"):
+        print("backup: disabled (backup.enabled: false)")
+        return 0
+    target = Path(params.get("TARGET") or cfg.get("target") or "C:/QuantBackup")
+    res = run_backup(
+        ROOT,
+        list(cfg.get("sources") or ["data/parquet", "data/state"]),
+        target,
+        min_free_gb=float(cfg.get("min_free_gb", 5)),
+    )
+    print(res.line() + f" -> {target}")
+    for e in res.errors[:10]:
+        print("  error: " + e)
+    return 1 if res.errors else 0
 
 
 def _swing_night(settings: Any, cal: Any) -> Any:
@@ -688,7 +717,7 @@ def task_shadow_live(params: dict[str, str]) -> int:
     from ops.alerts.telegram import TelegramNotifier
 
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     sim = params.get("SIM") == "1"
     day = _today_ist()
     stop = threading.Event()
@@ -1160,7 +1189,7 @@ def task_cockpit(params: dict[str, str]) -> int:
     from engine.core.logging_setup import setup_logging
 
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     ccfg = load_cockpit_config(settings, ROOT)
     run_gateway(
         ccfg,
@@ -1189,7 +1218,7 @@ def task_replay(params: dict[str, str]) -> int:
         print("Usage: tasks.py replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]", file=sys.stderr)
         return 2
     settings = load_settings()
-    setup_logging(settings.logging_config)
+    setup_logging(settings.logging_config, process=_TASK)
     ccfg = load_cockpit_config(settings, ROOT)
     stop = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
@@ -1218,6 +1247,8 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     name, rest = argv[0], argv[1:]
+    global _TASK
+    _TASK = name  # each task logs to logs/engine_<task>.log (see setup_logging)
     params = dict(a.split("=", 1) for a in rest if "=" in a)
     if name in PLANNED:
         print(f"'{name}' is not built yet — planned in {PLANNED[name]}.", file=sys.stderr)

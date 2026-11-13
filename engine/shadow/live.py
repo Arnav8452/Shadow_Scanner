@@ -510,10 +510,36 @@ class ShadowLiveRunner:
                 log.exception("cockpit hook failed (%d so far)", self.cockpit_errors)
 
     def start(self) -> None:
+        self._seed_opening_range()
         if self.cockpit is not None:
             self._cockpit(self.cockpit.attach, self)
+            if hasattr(self.cockpit, "warm_start"):
+                self._cockpit(self.cockpit.warm_start, self.store)
         self.adapter.start(self._enqueue)
         self.recenter(self.clock.now_ns(), "start")
+
+    def _seed_opening_range(self) -> None:
+        """A restart after the opening range has formed (a crash, a code update) would leave
+        every contract without it. Rebuild it from the recorder's quotes for today."""
+        now_ns = self.clock.now_ns()
+        if self.store is None or self.or_frozen or now_ns < self.or_end_ns:
+            return
+        start, end, now = from_ns(self.open_ns), from_ns(self.or_end_ns), from_ns(now_ns)
+        try:
+            rows = self.store.quotes(
+                now.date(), as_of=now, start=start, end=end, columns="symbol, ltp"
+            ).to_pylist()
+        except Exception as exc:  # a half-written file must not stop the engine
+            log.warning("opening range not rebuilt from the recording: %s", exc)
+            return
+        for r in rows:
+            sym, px = r.get("symbol"), r.get("ltp")
+            if not sym or not px or px <= 0:
+                continue
+            self.or_hi[sym] = max(self.or_hi.get(sym, px), px)
+            self.or_lo[sym] = min(self.or_lo.get(sym, px), px)
+        log.info("opening range rebuilt from the recording for %d contracts", len(self.or_hi))
+        self._freeze_opening_range()
 
     def spots(self) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -527,7 +553,7 @@ class ShadowLiveRunner:
         item = self.delivery.get(ins.symbol)
         default = (item.prev_high, item.prev_low, item.prev_close) if item else (0.0, 0.0, 0.0)
         hi, lo, close = self.prev_levels.get(ins.symbol, default)
-        return InstrumentMicrostructureState(
+        st = InstrumentMicrostructureState(
             symbol=ins.symbol,
             tick_size=ins.tick_size or 0.05,
             lot_size=max(1, ins.lot_size),
@@ -543,6 +569,9 @@ class ShadowLiveRunner:
                 else DeliveryBias.NEUTRAL
             ),
         )
+        if self.or_frozen and ins.symbol in self.or_hi:  # joined the feed after 09:30
+            st.orh_15m, st.orl_15m = self.or_hi[ins.symbol], self.or_lo[ins.symbol]
+        return st
 
     def recenter(self, now_ns: int, reason: str) -> None:
         want = select_watchlist(

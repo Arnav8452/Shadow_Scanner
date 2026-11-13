@@ -81,6 +81,7 @@ class DebitSpreadStrategy:
 
     def legs_in_use(self) -> list[str]:
         syms = [lg.symbol for p in self.account.positions for lg in p.legs if lg.open]
+        syms += self.account.executing_symbols()
         if self.plan is not None:
             syms += [lg.symbol for lg in self.plan.legs]
         return list(dict.fromkeys(syms))
@@ -99,7 +100,11 @@ class DebitSpreadStrategy:
             st["bullish"] is not None and st["bullish"] != bullish
         ):
             return None
-        if any(p.underlying == und for p in self.account.positions) or self.plan is not None:
+        if (
+            any(p.underlying == und for p in self.account.positions)
+            or self.plan is not None
+            or self.account.executions
+        ):
             return None
         kind = "CE" if bullish else "PE"
         grid = self.strikes_of(und, kind)
@@ -128,6 +133,7 @@ class DebitSpreadStrategy:
             expiry=expiry,
         )
         self.pin(self.legs_in_use())
+        self.account.prefetch_margin(self.plan.legs)
         self.decision = (
             f"ready: {'bull call' if bullish else 'bear put'} {k_long:g}/{k_short:g} {kind} "
             "(waiting for both books)"

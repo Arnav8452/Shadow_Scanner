@@ -89,7 +89,7 @@ Nothing trades on a single reading. Readings flicker in and out every second.
 **Partial**
 - **Heavyweight check** in the playbook uses the six largest Nifty members' day returns as a stand-in for their order flow (no stock tick data).
 - **Index weights:** derived nightly; two of the top ten differ from the NSE factsheet, and weight history is not kept.
-- **Margin:** SPAN is not modelled; worst-case loss is used as the margin proxy.
+- **Margin:** SPAN is not modelled from exchange files. The risk gate uses broker margin: live quotes from Upstox's margin calculator, else a table built from those quotes plus a 15% buffer.
 
 **Not built**
 - Pre-earnings straddles and stock F&O (deferred at ₹2 lakh), volatility-managed sizing, pairs, index-rebalance and post-earnings drift ideas.

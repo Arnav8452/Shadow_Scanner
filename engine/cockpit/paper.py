@@ -55,6 +55,8 @@ class PaperPosition:
     # (gain % that arms it, gain % the stop is raised to), e.g. ((15, 7), (25, 12))
     trail: tuple[tuple[float, float], ...] = ()
     context: dict[str, Any] = field(default_factory=dict)  # market state at entry
+    # When the bid first sat at/below the stop while the model price disagreed (air pocket?).
+    stop_held_since: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,15 @@ class PaperAccount:
         # breaking_retail.md: a stop fires only if the option's model price (index + smoothed
         # IV) also says the stop is reached, so a quote air-pocket alone does not stop us out.
         self.stop_confirm = stop_confirm
+        # A model-price hold is for quote air pockets, which last a few seconds. If the bid stays
+        # at/below the stop longer than this, falls past ``stop_override_mult`` x the stop
+        # distance, or the open loss reaches the per-trade limit, the stop fires anyway.
+        self.stop_hold_max_s = 5.0
+        self.stop_override_mult = 1.5
+        # Orders fill against the first book at least this long after the decision (order
+        # latency to the exchange); 0 = the decision's own book (tests, research).
+        self.fill_latency_s = 0.0
+        self.pending: dict[str, dict[str, Any]] = {}
         self.broker = PaperBroker(book, broker_name=broker_name)
         self.positions: dict[str, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
@@ -142,11 +153,14 @@ class PaperAccount:
         return AccountRiskState(
             realized_daily_pnl_inr=self.realized_net,
             realized_weekly_pnl_inr=self.weekly_prior_net + self.realized_net,
+            # Orders still on their way count as if filled at the price they were sent at.
             open_risk_inr=sum(
                 max(0.0, p.avg_price - p.stop_price) * p.qty for p in self.positions.values()
-            ),
-            margin_used_inr=sum(p.avg_price * p.qty for p in self.positions.values()),
-            trades_taken_today=self.trades_today,
+            )
+            + sum(o["decided_ask"] * o["stop_pct"] / 100 * o["qty"] for o in self.pending.values()),
+            margin_used_inr=sum(p.avg_price * p.qty for p in self.positions.values())
+            + sum(o["decided_ask"] * o["qty"] for o in self.pending.values()),
+            trades_taken_today=self.trades_today + len(self.pending),
             consecutive_losses_today=self._consecutive_losses(),
             last_loss_at=losses[-1].closed_at if losses else None,
         )
@@ -202,6 +216,36 @@ class PaperAccount:
         )
         if not gate.allowed:
             return self._refuse(symbol, now, "; ".join(gate.reasons), signal_id)
+        spec = {
+            "symbol": symbol,
+            "qty": qty,
+            "stop_pct": stop_pct,
+            "signal_id": signal_id,
+            "reason": reason,
+            "target_pct": target_pct,
+            "trail": tuple(trail),
+            "context": dict(context or {}),
+            "decided": now,
+            "decided_ask": ask,
+        }
+        if self.fill_latency_s > 0:
+            if symbol in self.pending:
+                return self._refuse(symbol, now, "an order is already on its way", signal_id)
+            spec["due"] = now.timestamp() + self.fill_latency_s
+            self.pending[symbol] = spec
+            return True, (
+                f"order sent: buy {qty} {symbol} near {ask:.2f} "
+                f"(fills against the book {self.fill_latency_s * 1000:.0f} ms later)"
+            )
+        return self._execute_open(spec, book, now)
+
+    def _execute_open(self, spec: dict[str, Any], book: Book, now: datetime) -> tuple[bool, str]:
+        symbol, qty, signal_id = spec["symbol"], int(spec["qty"]), str(spec["signal_id"])
+        stop_pct, target_pct, reason = spec["stop_pct"], spec["target_pct"], spec["reason"]
+        trail, context = spec["trail"], spec["context"]
+        if not book.asks or not book.bids or book.asks[0][0] <= 0:
+            return self._refuse(symbol, now, "no order book when the order arrived", signal_id)
+        ask = book.asks[0][0]
         self._seq += 1
         order = OrderRecord(
             f"{self.name.upper()}-{now:%H%M%S}-{self._seq:04d}",
@@ -241,6 +285,7 @@ class PaperAccount:
         )
         self.positions[symbol] = pos
         self.trades_today += 1
+        slip = round(fill - float(spec.get("decided_ask") or fill), 2)
         self._write(
             {
                 "type": "open",
@@ -248,6 +293,8 @@ class PaperAccount:
                 "symbol": symbol,
                 "qty": pos.qty,
                 "price": pos.avg_price,
+                "decided_ask": spec.get("decided_ask"),
+                "latency_slip": slip,
                 "stop": pos.stop_price,
                 "target": pos.target_price,
                 "trail": [list(t) for t in pos.trail],
@@ -257,7 +304,26 @@ class PaperAccount:
                 "context": pos.context,
             }
         )
-        return True, f"bought {pos.qty} {symbol} @ {fill:.2f}, stop {pos.stop_price:.2f}"
+        lag = (
+            f" (asked {float(spec['decided_ask']):.2f} at the decision, {slip:+.2f} later)"
+            if spec.get("decided_ask") is not None and self.fill_latency_s > 0
+            else ""
+        )
+        return True, f"bought {pos.qty} {symbol} @ {fill:.2f}{lag}, stop {pos.stop_price:.2f}"
+
+    def fill_pending(self, books: Mapping[str, Book], now: datetime) -> list[str]:
+        """Orders whose latency has passed fill against the book they now meet."""
+        out: list[str] = []
+        for sym, spec in list(self.pending.items()):
+            if now.timestamp() < float(spec["due"]):
+                continue
+            del self.pending[sym]
+            book = books.get(sym)
+            if book is None:
+                out.append(self._refuse(sym, now, "no book when the order arrived", "")[1])
+                continue
+            out.append(self._execute_open(spec, book, now)[1])
+        return out
 
     def close(self, symbol: str, book: Book, *, now: datetime, reason: str) -> tuple[bool, str]:
         pos = self.positions.get(symbol)
@@ -317,7 +383,7 @@ class PaperAccount:
 
     def check_exits(self, books: Mapping[str, Book], now: datetime) -> list[str]:
         """Stops on premium and the square-off time. Returns what happened."""
-        out: list[str] = []
+        out: list[str] = self.fill_pending(books, now)
         for symbol in list(self.positions):
             book = books.get(symbol)
             if book is None or not book.bids:
@@ -340,15 +406,36 @@ class PaperAccount:
                 )
             elif pos.target_price is not None and bid >= pos.target_price:
                 ok, text = self.close(symbol, book, now=now, reason="target on premium")
-            elif bid <= pos.stop_price and (
-                self.stop_confirm is None or self.stop_confirm(symbol, bid, pos.stop_price)
-            ):
+            elif bid <= pos.stop_price:
                 why = "trailing stop" if pos.stop_price > pos.avg_price else "stop on premium"
+                if self.stop_confirm is not None and not self.stop_confirm(
+                    symbol, bid, pos.stop_price
+                ):
+                    override = self._stop_override(pos, bid, now)
+                    if override is None:
+                        continue
+                    why += f" (model price disagreed; override: {override})"
                 ok, text = self.close(symbol, book, now=now, reason=why)
             else:
+                pos.stop_held_since = None
                 continue
             out.append(text if ok else f"{symbol}: {text}")
         return out
+
+    def _stop_override(self, pos: PaperPosition, bid: float, now: datetime) -> str | None:
+        """Why a model-price hold must give way now (None: keep holding for a moment)."""
+        if pos.stop_held_since is None:
+            pos.stop_held_since = now
+        held = (now - pos.stop_held_since).total_seconds()
+        if held >= self.stop_hold_max_s:
+            return f"bid at/below the stop for {held:.0f} s"
+        dist = pos.avg_price - pos.stop_price
+        if dist > 0 and pos.avg_price - bid >= self.stop_override_mult * dist:
+            return f"bid {bid:.2f} beyond {self.stop_override_mult:g}x the stop distance"
+        cap = self.limits.inr(self.limits.per_trade_max_loss_pct.get("directional", 0.0))
+        if cap > 0 and (pos.avg_price - bid) * pos.qty >= cap:
+            return f"open loss at the per-trade limit Rs {cap:,.0f}"
+        return None
 
     def flatten(self, books: Mapping[str, Book], now: datetime, reason: str) -> list[str]:
         out = []
@@ -404,6 +491,11 @@ class PaperAccount:
                     "net": round(net, 2),
                     "opened": p.opened_at.astimezone(IST).strftime("%H:%M:%S"),
                     "reason": p.reason,
+                    # A long option needs only its premium (plus charges): no SPAN, no exposure.
+                    "margin": {
+                        "final": round(p.avg_price * p.qty + p.entry_charges, 2),
+                        "source": "premium paid + entry charges (long option: no SPAN)",
+                    },
                 }
             )
         st = self.risk_state()
@@ -432,6 +524,9 @@ class PaperAccount:
             "consecutive_losses": st.consecutive_losses_today,
             "cooloff_until": cool_until,
             "daily_loss_limit": round(day_limit, 2),
+            "per_trade_limit": round(
+                self.limits.inr(self.limits.per_trade_max_loss_pct.get("directional", 0.0)), 2
+            ),
             "loss_room_left": round(day_limit + self.realized_net + min(0.0, unreal_net), 2),
             "refusals": self.refusals[-10:][::-1],
         }
@@ -439,6 +534,13 @@ class PaperAccount:
     # ------------------------------------------------------------------ journal
 
     def _refuse(self, symbol: str, now: datetime, why: str, signal_id: str) -> tuple[bool, str]:
+        # The same refusal again within a minute (numbers aside, e.g. the cool-off countdown)
+        # is not journaled again: a persistent trigger would otherwise write lines every step.
+        kind = (symbol, re.sub(r"[0-9.]+", "#", why))
+        last = getattr(self, "_last_refusal", None)
+        if last is not None and last[0] == kind and (now - last[1]).total_seconds() < 60:
+            return False, f"refused {symbol}: {why}"
+        self._last_refusal = (kind, now)
         rec = {
             "type": "refused",
             "t": now.isoformat(),
@@ -543,6 +645,10 @@ def _trade_view(t: ClosedTrade) -> dict[str, Any]:
         "opened": t.opened_at.astimezone(IST).strftime("%H:%M:%S"),
         "closed": t.closed_at.astimezone(IST).strftime("%H:%M:%S"),
         "reason": t.reason,
+        "margin": {
+            "final": round(t.entry_price * t.qty, 2),
+            "source": "premium paid (long option: no SPAN)",
+        },
     }
 
 

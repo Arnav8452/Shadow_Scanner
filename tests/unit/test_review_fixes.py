@@ -80,3 +80,21 @@ def test_integer_fields_reject_fractions() -> None:
 def test_report_drops_non_http_links() -> None:
     assert _safe_url("javascript:alert(1)") == "#"
     assert _safe_url("https://x.org/a?b=1&c=2") == "https://x.org/a?b=1&amp;c=2"
+
+
+def test_backup_copies_new_files_and_never_deletes(tmp_path: Path) -> None:
+    from engine.data.backup import run_backup
+
+    root, target = tmp_path / "repo", tmp_path / "bk"
+    (root / "data" / "state").mkdir(parents=True)
+    (root / "data" / "raw").mkdir(parents=True)
+    (root / "data" / "state" / "j.jsonl").write_text("a\n", encoding="utf-8")
+    (root / "data" / "raw" / "big.zip").write_text("x", encoding="utf-8")
+    r1 = run_backup(root, ["data/state"], target, min_free_gb=0)
+    assert r1.copied == 1 and (target / "data" / "state" / "j.jsonl").exists()
+    assert not (target / "data" / "raw").exists()  # re-downloadable data is skipped
+    r2 = run_backup(root, ["data/state"], target, min_free_gb=0)
+    assert r2.copied == 0 and r2.skipped == 1  # unchanged: not copied again
+    (root / "data" / "state" / "j.jsonl").unlink()  # an accidental delete on the source...
+    run_backup(root, ["data/state"], target, min_free_gb=0)
+    assert (target / "data" / "state" / "j.jsonl").exists()  # ...does not reach the backup

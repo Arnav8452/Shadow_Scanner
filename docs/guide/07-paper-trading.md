@@ -3,7 +3,14 @@
 ## 7.1 How a paper fill works
 
 - **Price:** a buy fills at the **ask**, a sell at the **bid**, walking down the recorded book level by level when the size is larger than the touch (`engine/execution/paper_broker.py`). Never at the last traded price. If the visible book cannot fill the whole quantity, the trade is marked *thin book*.
-- **Charges:** every fill pays the full charges for the configured plan (`shadow_scanner.cost_broker: upstox_plus`): brokerage, STT, exchange transaction charges, SEBI fee, stamp duty and GST. All rates come from `config/rules/*.csv` with effective dates; nothing is hard-coded.
+- **Charges:** every fill pays the full charges for the configured plan (`shadow_scanner.cost_broker: upstox_plus`, ₹30 an order; the owner chose it on 13 Nov 2026 because the bots will execute on it later): brokerage, STT, exchange transaction charges, SEBI fee, stamp duty and GST. All rates come from `config/rules/*.csv` with effective dates; nothing is hard-coded.
+- **Margin to open:** every position and closed trade shows what the same trade would need in the market.
+  - **Long options:** the premium paid plus entry charges, which is exact (no SPAN).
+  - **Spreads and anything with a short option or a future:** Upstox's margin calculator, quoted in the background at entry for the whole basket. The figure is NRML and includes hedge benefit; on 13 Nov a 25250/25000 bull put needed ₹42,985, a married future ₹64,654.
+  - Hover the figure for the source and the pre-benefit amount. Without a quote (simulation, replay, no network) the worst-case loss is shown as a proxy, marked ≈.
+  - The risk gate's 50% margin-headroom check uses this broker margin: the live quote for the exact legs when one is fresh (it is requested as soon as a plan is made), else the paper margin table in `config/rules/margin_rules.yaml`. The table holds 13 Nov quotes plus 15%: credit spread ₹49,500, debit spread ₹41,000, condor or fly ₹85,000, calendar ₹86,500, synthetic ₹66,000, married future ₹76,500 per lot.
+- **Latency:** an order fills against the first book at least **200 ms** after the decision (`cockpit.paper_fill_latency_ms`), not the book that triggered it. The fill message shows the ask at the decision and how far the price moved. Multi-leg orders fill **one leg at a time, 300 ms apart, wings first** (`cockpit.paper_leg_gap_ms`); a leg that can't fill unwinds the filled ones. Exits still fill at once.
+- **Stops held by the model price** give way after **5 s** at or below the stop, at once if the bid falls past **1.5×** the stop distance, or when the open loss reaches the per-trade limit (`cockpit.stop_hold_max_s`, `stop_override_mult`). The close reason says which.
 - **Marks:** open long positions are marked at the **bid** (what you could sell for now). Spreads are marked at the cost to close (buy back shorts at the ask, sell longs at the bid).
 - **Slippage stress:** the legacy signal ledger also records net P&L with slippage doubled. Use it as a sanity check: an edge that disappears at 2× slippage is not an edge.
 
@@ -23,7 +30,8 @@ Code: `engine/risk/limits.py` (`check_pre_trade_risk_gate`). Every paper entry, 
 | Directional cut-off | No directional entries after 14:00 | `after_directional_cutoff` |
 | Per-trade maximum loss | Directional 2.5% = ₹5,000; defined-risk spread 5% = ₹10,000 | `per_trade_risk_exceeded` |
 | Open risk across positions | 10% = ₹20,000 | `max_open_risk_exceeded` |
-| Margin headroom | Used + proposed ≤ 50% of capital | `margin_headroom_violated` |
+| Margin cap per strategy | That strategy's own used + proposed broker margin ≤ **100% of capital (₹2,00,000)**, so each strategy stays executable alone in the real account. Strategies never block each other: each has its own account (owner, 13 Nov 2026). Live trading keeps the approved 50% (`risk.margin_headroom_max_used_pct`). Long options count their premium. | `margin_headroom_violated` |
+| Charges vs target (credit spreads) | Take-profit ≥ 3× round-trip charges (`cockpit.credit_charges_mult`) | `charges: take-profit … is under 3x the round-trip charges …` |
 
 On top of the gate, the paper accounts refuse:
 - anything but **long options** on single-leg accounts (no naked shorts, ever);
@@ -51,6 +59,8 @@ Your manual trades are journaled in `data/state/paper_manual.jsonl` with their e
 ## 7.4 Journals and restarts
 
 Each account writes one JSON line per open, close and refusal to `data/state/paper_<account>.jsonl`. On restart the engine replays today's lines, restoring open positions and the day's loss streak. Overnight strategies (condor, calendar, compression, synthetic, married) restore their positions from earlier days too, and their contracts are added back into the feed.
+
+A restart **during the session** also rebuilds what the engine learned since the open, from the recorder's quotes: the 15-minute opening range of every recorded contract, and the index tapes (30-minute opening range, VWAP, CVD, ATR, relative volume) from 09:15. Option-side tape items (ATM straddle, IVs, per-strike OI changes) restart from the restart time, so strategies that need 6–15 minutes of OI history wait that long. The only data lost is the 30-level order book for the minute or so the engine was down; the main recorder is a separate process.
 
 Other state files in `data/state/`:
 

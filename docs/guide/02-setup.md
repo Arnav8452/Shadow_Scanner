@@ -163,7 +163,7 @@ After one manual day has worked, register each task once. Each script prints how
 powershell -ExecutionPolicy Bypass -File ops\scheduler\windows\register_recorder.ps1
 ```
 
-The recorder and engine exit by themselves on exchange holidays (from `config/rules/holidays.csv`). Logs go to `logs/*_task.log`.
+The recorder and engine exit by themselves on exchange holidays (from `config/rules/holidays.csv`). Each scheduled task's console output goes to `logs/<task>_task.log`.
 
 ## 2.8 PC settings that matter
 
@@ -183,9 +183,10 @@ The recorder and engine exit by themselves on exchange holidays (from `config/ru
 | `data/state/` | Paper journals (`paper_<account>.jsonl`), setups, signal study, ledger, screener cache, swing state, page key and token |
 | `data/replay/<date>/` | Journals from replays (wiped at the next replay of that date) |
 | `data/private/` | Reference trade logs (never committed, never in outputs) |
+| `C:\QuantBackup\` | Nightly backup of `data/parquet` and `data/state` ([§9.10](09-data-and-research.md#910-backup)) |
 | `reports/qc/` | Daily recording quality reports |
 | `reports/shadow_scanner/` | Scanner dashboard HTML, rewritten every minute |
 | `reports/event_arb/` | Event-arbitrage reports |
-| `logs/` | Process logs (secrets are redacted) |
+| `logs/` | `engine_<task>.log`: each process's full log, DEBUG level, rotated daily, 30 days kept (`engine_record.log`, `engine_shadow-live.log`, `engine_cockpit.log`, `engine_replay.log`…). `<task>_task.log`: the scheduled tasks' console output. Secrets are redacted. |
 
 All of `data/`, `reports/` and `logs/` are gitignored.

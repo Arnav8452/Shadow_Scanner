@@ -15,7 +15,7 @@ import statistics
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from engine.cockpit.analytics_live import LiveAnalytics
@@ -48,6 +48,8 @@ def instrument_label(ins: Instrument) -> str:
         return f"{ins.underlying} FUT {exp}"
     if ins.kind.is_option:
         return f"{ins.underlying} {ins.strike:g} {ins.kind.value} {exp}"
+    if ins.kind is Kind.EQUITY:  # cash stock: the trading symbol, not the broker's ISIN key
+        return f"{ins.underlying or ins.description or ins.symbol} EQ"
     return ins.symbol
 
 
@@ -164,6 +166,7 @@ class CockpitCore:
 
         self.plays: list[Any] = []  # playbook strategies (build_cockpit)
         self.tapes: dict[str, IndexTape] = {}
+        self._event_seen: dict[tuple[str, str], datetime] = {}
         self.otapes: dict[str, OptionTape] = {}
         self.otape_watch: set[str] = set()
         self._chain_rev_seen = -1
@@ -235,7 +238,7 @@ class CockpitCore:
 
     def _pin(self, owner: str, symbols: list[str]) -> list[str]:
         if self.runner is None or not hasattr(self.runner, "pin"):
-            return []
+            return list(symbols)  # no live feed to add to (tests): nothing is refused
         return list(self.runner.pin(owner, symbols))
 
     def _strike_grid(self, und: str, kind: str) -> tuple[Any, list[float]] | None:
@@ -284,6 +287,63 @@ class CockpitCore:
                         self.event(p.key, str(text), now)
             except Exception as exc:  # one strategy's bug must not stop the others
                 self.event("system", f"{p.key}: {type(exc).__name__}: {exc}", now)
+
+    def warm_start(self, store: Any) -> None:
+        """After a mid-session restart, rebuild today's index tapes from the recorder's quotes
+        (index spot and front future since the open), so the 30-min opening range, VWAP, CVD,
+        ATR and relative volume start at 09:15 rather than at the restart. Option-side tape
+        items (ATM straddle, IVs, per-strike OI) still start from the restart."""
+        if self.runner is None or store is None or not self.plays:
+            return
+        from types import SimpleNamespace
+
+        from engine.cockpit.tape import IndexTape
+
+        r = self.runner
+        now = datetime.fromtimestamp(r.clock.now_ns() / 1e9, IST)
+        open_dt = r.session.open_dt
+        if now <= open_dt + timedelta(minutes=1):
+            return
+        for und, spot_sym in r.spot_symbol.items():
+            futs = self.master.futures(und, now.date())[:1]
+            fut_sym = futs[0].symbol if futs else None
+            syms = [spot_sym] + ([fut_sym] if fut_sym else [])
+            rows = store.quotes(
+                now.date(),
+                as_of=now,
+                start=open_dt,
+                end=now,
+                symbols=syms,
+                columns="ts, symbol, ltp, volume, oi, bid, ask",
+            ).to_pylist()
+            t = IndexTape(und)
+            spot = 0.0
+            for q in rows:
+                px = q.get("ltp")
+                if not px or px <= 0:
+                    continue
+                ts = q["ts"]
+                if q["symbol"] == spot_sym:
+                    spot = float(px)
+                    t.on_sample(ts, spot=spot)
+                elif spot:
+                    fut = SimpleNamespace(
+                        symbol=fut_sym,
+                        ltp=float(px),
+                        cum_volume=float(q.get("volume") or 0),
+                        oi_now=int(q.get("oi") or 0),
+                        bids=((float(q.get("bid") or 0), 0, 0),),
+                        asks=((float(q.get("ask") or 0), 0, 0),),
+                    )
+                    t.on_sample(ts, spot=spot, fut=fut)
+            if t.bars:
+                self.tapes[und] = t
+                self.event(
+                    "system",
+                    f"{und} tape rebuilt from the recording: {len(t.bars)} minute bars since "
+                    f"{t.bars[0].start:%H:%M}",
+                    now,
+                )
 
     def _tape_samples(self, now: datetime) -> None:
         """Feed the minute tapes (index, front future, ATM straddle, IVs, skew, chain OI)."""
@@ -450,6 +510,17 @@ class CockpitCore:
 
     def event(self, kind: str, text: str, now: datetime | None = None) -> None:
         t = now or (from_ns(self.runner.clock.now_ns()) if self.runner else datetime.now(IST))
+        if not text:
+            return
+        # The same line from the same source within 30 s is a repeat, not news: one is enough.
+        last = self._event_seen.get((kind, text))
+        if kind != "system" and last is not None and 0 <= (t - last).total_seconds() < 30:
+            return
+        self._event_seen[(kind, text)] = t
+        if len(self._event_seen) > 2000:
+            self._event_seen = {
+                k: v for k, v in self._event_seen.items() if (t - v).total_seconds() < 30
+            }
         self.events.appendleft(
             {"t": t.astimezone(IST).strftime("%H:%M:%S"), "kind": kind, "text": text}
         )
@@ -689,6 +760,9 @@ class CockpitCore:
             spots = self.runner.spots()
             self._check_feed(now_ns, now)
             if not self.feed_frozen:
+                for sacct in self.spread_accounts():
+                    for text in sacct.process_executions(books, now):
+                        self.event(sacct.name, text, now)
                 for acct in self.long_accounts():
                     for text in acct.check_exits(books, now):
                         self.event(acct.name, text, now)
@@ -881,6 +955,10 @@ class CockpitCore:
         )
         if cs.decision != before and (cs.plan is not None or "managing exits" not in cs.decision):
             self.event("condor", cs.decision, now)
+
+    def spread_accounts(self) -> list[Any]:
+        base = [a for a in (self.spread, self.debit_acct) if a is not None]
+        return base + [p.account for p in self.plays if hasattr(p, "plan")]
 
     def long_accounts(self) -> list[PaperAccount]:
         base = [a for a in (self.bot, self.manual, self.score_acct, self.gamma_acct) if a]
@@ -1364,6 +1442,9 @@ class CockpitCore:
                 row["greeks"] = self.analytics.detail[sym]
             if ins is not None and ins.kind.is_option:
                 row["oi_read"] = self._oi_read(ins, st, row)
+            dv = getattr(r, "delivery", {}).get(sym)
+            if dv is not None:  # a delivery-spike stock from last night's watchlist
+                row["delivery"] = dv.bias
             last = r.last_eval.get(sym)
             row["score_1m"] = self._score_1m(
                 sym, last.confidence_score if last is not None else None, wall

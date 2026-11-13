@@ -48,8 +48,10 @@ from pathlib import Path
 from typing import Any
 
 from engine.cockpit.condor import Leg, cost_to_close
-from engine.cockpit.plays_base import Market, SpreadPlay, SpreadTrade, hhmm
+from engine.cockpit.plays_base import Market, SpreadPlay, SpreadTrade, fmt, hhmm
 from engine.core.rules import IST
+
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 
 def _atm(rows: list[dict[str, Any]], f: float) -> dict[str, Any] | None:
@@ -108,15 +110,18 @@ class IronFlyPlay(SpreadPlay):
         return False
 
     def look(self, now: datetime, m: Market) -> list[str] | None:
-        if (
-            not self.first_entry <= hhmm(now) <= self.last_entry
-            or self.entries_today >= self.max_entries
-        ):
-            return None
         if self.account.positions:
             return None
+        days = "; ".join(f"{u} {'/'.join(_DAYS[d] for d in ds)}" for u, ds in self.days.items())
+        today = now.astimezone(IST).weekday()
+        if not any(today in self.days.get(u, ()) for u in m.underlyings()):
+            self.note(f"not a trading day for it (trades {days}); today is {_DAYS[today]}")
+            return None
+        if not self.in_window(now, (self.first_entry, self.last_entry)):
+            return None
         for und in m.underlyings():
-            if now.astimezone(IST).weekday() not in self.days.get(und, ()):
+            if today not in self.days.get(und, ()):
+                self.note(f"{und}: not its day ({days})")
                 continue
             t = m.tape(und)
             strip = m.strip(und)
@@ -124,19 +129,19 @@ class IronFlyPlay(SpreadPlay):
             rv = t.realized_vol(30, from_open=True)
             st = t.straddle_stats()
             if not iv or rv is None or st is None:
-                self.decision = f"{und}: waiting for 30 min of tape and the straddle VWAP"
+                self.note(f"{und}: waiting for 30 min of tape and the straddle VWAP")
                 continue
             ratio = rv / (float(iv) / 100)
             closes = [b.straddle for b in t.done()[-self.below_vwap_bars :] if b.straddle]
             below = len(closes) == self.below_vwap_bars and all(c < st[0] for c in closes)
             if ratio >= self.rv_iv_max or not below:
-                self.decision = (
-                    f"{und}: RV/IV {ratio:.2f} (need < {self.rv_iv_max}), "
-                    f"straddle below VWAP {below}"
+                self.note(
+                    f"{und}: RV/IV {ratio:.2f} (needs < {self.rv_iv_max:g}); straddle "
+                    f"{'below' if below else 'not below'} its VWAP for {self.below_vwap_bars} bars"
                 )
                 continue
             if not self._flushed(m, und):
-                self.decision = f"{und}: waiting for the 9:20 straddle stop flush"
+                self.note(f"{und}: RV/IV {ratio:.2f} ok; waiting for the 9:20 straddle stop flush")
                 continue
             rows = m.chain_rows(und)
             f = float(strip.get("forward") or m.spot(und))
@@ -153,7 +158,7 @@ class IronFlyPlay(SpreadPlay):
                 ((wc or {}).get("ce") or {}).get("sym"),
             ]
             if not all(syms):
-                self.decision = f"{und}: wings {w:g} away not in the chain"
+                self.note(f"{und}: wings {w:g} away not in the chain")
                 continue
             lot = m.lot(str(syms[0]))
             legs = [
@@ -199,19 +204,30 @@ class OiCreditPlay(SpreadPlay):
     wing_pts: float = 250.0
 
     def look(self, now: datetime, m: Market) -> list[str] | None:
-        if not self.window[0] <= hhmm(now) <= self.window[1] or self.entries_today >= 2:
+        if self.entries_today >= 2:
+            self.note("2 entries today: done for the day")
+            return None
+        if not self.in_window(now, self.window):
             return None
         for und in m.underlyings():
             if any(p.underlying == und for p in self.account.positions):
                 continue
             t, rows = m.tape(und), m.chain_rows(und)
             if not rows:
+                self.note(f"{und}: waiting for the 1-min option chain (recorder)")
                 continue
             spot = m.spot(und)
             near = _scale(und, self.near_pts, m)
             z = t.cvd_z()
             cw = max(rows, key=lambda r: (r.get("ce") or {}).get("oi") or 0)
             pw = max(rows, key=lambda r: (r.get("pe") or {}).get("oi") or 0)
+            self.note(
+                f"{und}: index {fmt(spot, 0)}, call wall {float(cw['k']):g} "
+                f"({spot - float(cw['k']):+,.0f}), put wall {float(pw['k']):g} "
+                f"({spot - float(pw['k']):+,.0f}); needs to be within {near:g} pts of a wall "
+                f"whose OI falls {self.oi_drop_pct:g}% in 10 min, CVD z beyond "
+                f"±{self.cvd_z:g} (now {fmt(z)})"
+            )
             for bull, wall, kind in ((True, cw, "CE"), (False, pw, "PE")):
                 k = float(wall["k"])
                 if abs(spot - k) > near:
@@ -223,7 +239,11 @@ class OiCreditPlay(SpreadPlay):
                     or z is None
                     or (z < self.cvd_z if bull else z > -self.cvd_z)
                 ):
-                    self.decision = f"{und} near {k:g}: {kind} OI {d}% in 10 min, CVD z {z}"
+                    self.renote(
+                        f"{und} near the {kind} wall {k:g}: OI {fmt(d, 1, True)}% in 10 min "
+                        f"(needs -{self.oi_drop_pct:g}%), CVD z {fmt(z)} (needs "
+                        f"{'>= +' if bull else '<= -'}{self.cvd_z:g})"
+                    )
                     continue
                 a = _atm(rows, spot)
                 if a is None:
@@ -326,7 +346,7 @@ class CalendarPlay(SpreadPlay):
     def look(self, now: datetime, m: Market) -> list[str] | None:
         ts = term_spread_now(m, "NIFTY")
         if ts is None:
-            self.decision = "needs the near and a far (14+ day) expiry in the recorded chain"
+            self.note("needs the near and a far (14+ day) expiry in the recorded chain")
             return None
         spread, near, far = ts
         self.today_spread = round(spread, 2)
@@ -337,10 +357,16 @@ class CalendarPlay(SpreadPlay):
             else None
         )
         zs = "—" if z is None else f"{z:.2f}"
-        self.decision = (
-            f"term spread {spread:+.2f} vol pts (z {zs}; {len(hist)} sessions of history)"
+        self.note(
+            f"NIFTY term spread {near} vs {far}: {spread:+.2f} vol pts (needs > "
+            f"+{self.min_spread:g}), z {zs} (needs > {self.min_z:g}; "
+            + (
+                f"{len(hist)} sessions of history)"
+                if len(hist) >= 10
+                else f"history {len(hist)}/10 sessions, one added at each close)"
+            )
         )
-        if self.account.positions or not self.window[0] <= hhmm(now) <= self.window[1]:
+        if self.account.positions or not self.in_window(now, self.window):
             return None
         if spread <= self.min_spread or z is None or z <= self.min_z:
             return None
@@ -429,7 +455,10 @@ class CompressionDebitPlay(SpreadPlay):
                 ws = self.widths_today.setdefault(und, [])
                 if not ws or ws[-1] != w:
                     ws.append(w)
-        if not self.window[0] <= hhmm(now) <= self.window[1] or self.entries_today >= 1:
+        if self.entries_today >= 1:
+            self.note("1 entry today: done for the day")
+            return None
+        if not self.in_window(now, self.window):
             return None
         for und in m.underlyings():
             if any(p.underlying == und for p in self.account.positions):
@@ -439,19 +468,32 @@ class CompressionDebitPlay(SpreadPlay):
             box = t.box(60)
             bars15 = t.bars_n(15)
             if w is None or box is None or len(bars15) < 6:
+                self.note(f"{und}: building 15-min bars ({len(bars15)}/6) and the 60-min box")
                 continue
             p, n = self._percentile(und, w)
             if p is None or p > self.pct:
-                self.decision = f"{und}: 15-min width percentile {p} ({n} widths of history)"
+                self.note(
+                    f"{und}: 15-min band width at the {fmt(p, 0)}th percentile (needs <= "
+                    f"{self.pct:g}th"
+                    + (f"; {n}/20 widths of history yet)" if p is None else f" of {n} widths)")
+                )
                 continue
             last = t.done()[-1]
             up, down = last.close > box[0], last.close < box[1]
             avg15 = statistics.fmean(b.vol for b in bars15[:-1]) if len(bars15) > 1 else 0
+            vx = bars15[-1].vol / avg15 if avg15 else None
+            self.note(
+                f"{und}: compressed ({p:.0f}th pct); waiting for a close out of the 60-min box "
+                f"{box[1]:,.0f}-{box[0]:,.0f} on {self.vol_mult:g}x 15-min volume "
+                f"(index {fmt(last.close, 0)}, {fmt(vx)}x)"
+            )
             if not (up or down) or not avg15 or bars15[-1].vol < self.vol_mult * avg15:
                 continue
             sk = t.iv_change("skew25", 15)
             if sk is None or (up and sk >= 0) or (down and sk <= 0):
-                self.decision = f"{und}: box break without the skew move (Δskew {sk})"
+                self.renote(
+                    f"{und}: box break without the skew move (skew change {fmt(sk, 2, True)})"
+                )
                 continue
             kind = "CE" if up else "PE"
             lng, sht = m.by_delta(und, kind, 0.55), m.by_delta(und, kind, 0.25)
@@ -513,7 +555,13 @@ class ExpiryPinPlay(SpreadPlay):
     def look(self, now: datetime, m: Market) -> list[str] | None:
         h = hhmm(now)
         for und in m.underlyings():
-            if not m.expiry_today(und) or any(p.underlying == und for p in self.account.positions):
+            if any(p.underlying == und for p in self.account.positions):
+                continue
+            if not m.expiry_today(und):
+                nxt_exp = min(m.tables(und), default=None)
+                self.note(
+                    f"{und}: expiry days only" + (f" (next expiry {nxt_exp})" if nxt_exp else "")
+                )
                 continue
             t, rows = m.tape(und), m.chain_rows(und)
             if h == self.start:
@@ -522,7 +570,12 @@ class ExpiryPinPlay(SpreadPlay):
                     if pe.get("sym") and pe.get("ltp"):
                         self.base_px.setdefault(str(pe["sym"]), float(pe["ltp"]))
             if not self.start < h <= self.end:
+                self.note(f"{und}: expiry day; watches {self.start}-{self.end}")
                 continue
+            self.note(
+                f"{und}: no strike yet with put OI +{self.put_oi_up_pct:g}% and call OI "
+                f"-{self.call_oi_down_pct:g}% since 13:35"
+            )
             mins = max(
                 1,
                 int(
@@ -552,9 +605,9 @@ class ExpiryPinPlay(SpreadPlay):
                     or not b.bids
                     or b.bids[0][0] < base * (1 + self.spike_pct / 100)
                 ):
-                    self.decision = (
+                    self.renote(
                         f"{und} pin at {k:g} (put OI +{pu:.0f}%, call OI {cd:.0f}%): "
-                        "waiting for a put spike"
+                        f"waiting for that put to spike {self.spike_pct:g}% over its 13:45 price"
                     )
                     continue
                 wing = next(
@@ -604,10 +657,18 @@ class SyntheticFuturePlay(SpreadPlay):
         self.queue.append({"und": und, "bull": bullish, "ref": ref})
 
     def look(self, now: datetime, m: Market) -> list[str] | None:
+        self.note(
+            f"enters on a confirmed order-flow setup between {self.window[0]} and "
+            f"{self.window[1]} (see the Setups panel); none pending"
+        )
         if not self.queue:
             return None
         q = self.queue.pop(0)
         if not self.window[0] <= hhmm(now) <= self.window[1] or self.account.positions:
+            self.renote(
+                f"setup {q['ref']} skipped: outside {self.window[0]}-{self.window[1]}"
+                " or already holding"
+            )
             return None
         und, bull = q["und"], q["bull"]
         rows = m.chain_rows(und)
@@ -696,7 +757,7 @@ class MarriedFuturePlay(SpreadPlay):
                     else 30
                 )
                 self.basis.setdefault(und, []).append((f.ltp - s) / s * 365 / dte * 100)
-        if not self.window[0] <= hhmm(now) <= self.window[1] or self.account.positions:
+        if self.account.positions or not self.in_window(now, self.window):
             return None
         for und in m.underlyings():
             f = m.fut(und)
@@ -704,11 +765,23 @@ class MarriedFuturePlay(SpreadPlay):
                 m.runner.scanner.states.get(m.runner.spot_symbol.get(und, "")) if m.runner else None
             )
             series, basis = self.fut_oi.get(und, []), self.basis.get(und, [])
-            if f is None or st is None or not st.pdh or len(series) < 16 or len(basis) < 30:
+            if f is None or st is None or not st.pdh:
+                self.note(f"{und}: waiting for the front future and previous-day levels")
+                continue
+            if len(series) < 16 or len(basis) < 30:
+                self.note(
+                    f"{und}: collecting futures OI and basis once a minute "
+                    f"({min(len(series), len(basis))}/30 minutes)"
+                )
                 continue
             spot = m.spot(und)
             oi_chg = (series[-1][1] - series[-16][1]) / max(series[-16][1], 1) * 100
             earlier = statistics.fmean(basis[-30:-15])
+            self.note(
+                f"{und}: index {fmt(spot, 0)} vs PDH {fmt(st.pdh, 0)} / PDL {fmt(st.pdl, 0)}; "
+                f"futures OI {oi_chg:+.1f}% in 15 min (needs > +{self.fut_oi_up_pct:g}%); "
+                f"basis {basis[-1]:.1f}% p.a., {'rising' if basis[-1] > earlier else 'falling'}"
+            )
             # Long: break of the previous day's high, OI building, basis expanding into premium.
             # Short (mirror): break of the previous day's low, OI building (short build-up),
             # basis shrinking toward a discount.
@@ -788,12 +861,15 @@ class MarriedFuturePlay(SpreadPlay):
 @dataclass
 class McxMiniPlay(SpreadPlay):
     symbols: tuple[str, ...] = ("CRUDEOILM", "NATGASMINI")
+    off_reason: str = (
+        "off: no MCX feed or instrument master, and the 0.01% CTT is not verified into config/rules"
+    )
 
     def look(self, now: datetime, m: Market) -> list[str] | None:
         found = [
             s for s in self.symbols if any(s in str(k) for k in getattr(m.runner, "subscribed", []))
         ]
-        self.decision = (
+        self.note(
             "dormant: no MCX feed or instrument master in this engine, and MCX costs (CTT) are not "
             "in config/rules yet"
             if not found

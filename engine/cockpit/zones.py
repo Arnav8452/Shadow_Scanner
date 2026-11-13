@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from engine.cockpit.tape import trade_side
+
 
 @dataclass(frozen=True)
 class ZoneConfig:
@@ -52,6 +54,9 @@ class _Sample:
 class _Tape:
     samples: deque[_Sample] = field(default_factory=deque)
     last_cum: float | None = None
+    prev_bid: float = 0.0
+    prev_ask: float = 0.0
+    prev_px: float = 0.0
 
 
 class ZoneTracker:
@@ -81,14 +86,9 @@ class ZoneTracker:
             tape.last_cum = cum_volume
         w = self.cfg.width(und)
         zone = math.floor(ltp / w) * w
-        buy = sell = 0.0
-        if vol > 0:
-            if ask > 0 and ltp >= ask:
-                buy = vol
-            elif bid > 0 and ltp <= bid:
-                sell = vol
-            elif bid > 0 and ask > 0:
-                buy, sell = (vol, 0.0) if ltp > (bid + ask) / 2 else (0.0, vol)
+        # Against the quote before the trade (see engine.cockpit.tape.trade_side).
+        buy, sell = trade_side(vol, ltp, tape.prev_bid or bid, tape.prev_ask or ask, tape.prev_px)
+        tape.prev_bid, tape.prev_ask, tape.prev_px = bid, ask, ltp
         # Displayed size only counts for the zone the touch sits in.
         tape.samples.append(_Sample(now, zone, buy, sell, bid_qty, ask_qty))
         cutoff = now - timedelta(minutes=self.cfg.window_min)

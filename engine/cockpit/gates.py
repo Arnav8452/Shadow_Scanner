@@ -9,8 +9,9 @@ Charges come from ``config/rules`` through ``fno_charges`` (never the notes' har
   This is what lets a short-hold ("scalp") strategy trade at all: owner rule, scalping only
   where the expected move clears charges by a margin.
 - ``BreakevenRatchet`` (Gate 2): initial stop (12% of premium or the rupee cap), stop moved
-  to true breakeven once the bid clears 2x breakeven points, then trailed 1.5x breakeven
-  points behind the bid; a scratch exit if still below breakeven after ``scratch_s``.
+  to true breakeven once the bid clears 2x breakeven points, and trailed 1.5x breakeven
+  points behind the bid once it clears 3x; a scratch exit if still below breakeven after
+  ``scratch_s``.
 - ``model_price``: Black-76 fair value from the forward and a smoothed IV, so a stop is not
   triggered by a quote air-pocket the index never made (breaking_retail.md).
 - ``absorption`` and ``off_cycle``: effort-vs-result on the trigger bar, and no entries in the
@@ -81,6 +82,7 @@ class BreakevenRatchet:
     scratch_s: float = 180.0
     lock_mult: float = 2.0
     trail_mult: float = 1.5
+    trail_from_mult: float = 3.0  # owner protocol: trail only beyond 3x breakeven points
     state: str = "INITIAL_RISK"
 
     @classmethod
@@ -108,7 +110,9 @@ class BreakevenRatchet:
             return f"scratch: below charges breakeven after {self.scratch_s:.0f} s"
         if self.state == "INITIAL_RISK" and bid >= self.entry + self.lock_mult * self.be_points:
             self.stop, self.state = self.true_be, "BREAKEVEN_LOCKED"
-        elif self.state == "BREAKEVEN_LOCKED":
+        elif self.state == "BREAKEVEN_LOCKED" and bid >= (
+            self.entry + self.trail_from_mult * self.be_points
+        ):
             self.stop = max(self.stop, round(bid - self.trail_mult * self.be_points, 2))
         return None
 

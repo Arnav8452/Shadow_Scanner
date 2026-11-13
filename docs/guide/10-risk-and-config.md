@@ -44,6 +44,7 @@ None is met today. Do not try to work around this lock; changing it requires the
 | `daily_loss_limit_pct` / `weekly_loss_limit_pct` | 2 / 5 | ₹4,000 / ₹10,000 |
 | `max_open_risk_pct` | 10 | ₹20,000 at risk across open positions |
 | `max_lots_per_strategy` | 1 | Live; paper may use `cockpit.paper_max_lots: 2` |
+| `margin_headroom_max_used_pct` | 50 | Live. Paper: `cockpit.paper_margin_cap_pct: 100`, i.e. each strategy's own broker margin up to ₹2,00,000 on its own account (owner, 13 Nov 2026) |
 | `max_trades_per_day` | 5 | Per account |
 | `cooloff_after_loss_min` | 15 | — |
 | `block_first_minutes` | 15 | No entries 09:15–09:30 except opening-range strategies |

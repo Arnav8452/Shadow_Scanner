@@ -83,6 +83,31 @@ def test_setup_logging_writes_redacted_file(
             logging.getLogger().removeHandler(h)
 
 
+def test_each_process_gets_its_own_log_file(tmp_path: Path, repo_root: Path) -> None:
+    """Shared daily-rotated files break on Windows: a process cannot rename a log another
+    process holds open. Each task therefore writes to its own file."""
+    from engine.core.logging_setup import log_file_for
+
+    assert log_file_for(Path("logs/engine.log"), None) == Path("logs/engine.log")
+    assert log_file_for(Path("logs/engine.log"), "shadow-live") == Path(
+        "logs/engine_shadow-live.log"
+    )
+    assert log_file_for(Path("logs/engine.log"), "../x y") == Path("logs/engine_x-y.log")
+    setup_logging(repo_root / "ops" / "logging.yaml", log_dir=tmp_path, process="record")
+    try:
+        logging.getLogger("engine.test").info("hello from the recorder")
+        for h in logging.getLogger().handlers:
+            h.flush()
+        assert "hello from the recorder" in (tmp_path / "engine_record.log").read_text(
+            encoding="utf-8"
+        )
+        assert not (tmp_path / "engine.log").exists()
+    finally:
+        for h in list(logging.getLogger().handlers):
+            h.close()
+            logging.getLogger().removeHandler(h)
+
+
 # ---------- repo hygiene: secrets and private data never tracked ----------
 
 

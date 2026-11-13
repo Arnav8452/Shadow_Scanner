@@ -135,3 +135,14 @@ With `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, the system sends:
 - the event-arbitrage digest.
 
 Without them, alerts only print to the logs.
+
+## 9.10 Backup
+
+Recorded option books cannot be bought back, so the last step of the nightly `evening` job copies them away (`tasks.py backup`; settings under `backup:`).
+
+- **What:** `data/parquet` (recordings, 30-level books, EOD tables, fundamentals) and `data/state` (paper journals, setups, study, swing). `data/raw` is skipped because it can be downloaded again.
+- **How:** new or changed files only (size or time), keeping the folder layout. **Nothing is ever deleted from the target**, so an accidental delete or a corrupted day on the source cannot reach the backup.
+- **Where:** `C:\QuantBackup`. This PC has one physical disk (C: and D: are partitions of the same 512 GB NVMe), so this guards against deletion and corruption, not against the disk failing. For that, plug in an external drive and set `backup.target`, e.g. `"E:/QuantBackup"`.
+- **No cloud upload by default:** the private trade logs and personal data stay on this machine.
+- **Space:** the run warns when the source or target drive has under 5 GB free. On 13 Nov D: had 16 GB and C: 40 GB free, and a full recording day adds several hundred MB, so plan an external drive within weeks.
+- **By hand:** `uv run python tasks.py backup`, or `TARGET=E:/QuantBackup` for a one-off copy elsewhere.
