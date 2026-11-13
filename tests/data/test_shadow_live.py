@@ -22,9 +22,9 @@ from engine.shadow.live import (
     ShadowLiveConfig,
     ShadowLiveRunner,
     WatchSpec,
+    eod_previous_day_levels,
     load_shadow_live_config,
     oi_walls,
-    eod_previous_day_levels,
     previous_day_levels,
     select_watchlist,
 )
@@ -344,3 +344,45 @@ def test_silent_feed_is_restarted_in_market_hours_only(
     runner.step(0)
     assert restarts == [1]
     runner.finish()
+
+
+def test_held_60_to_75_readings_go_to_the_study_only(
+    master: InstrumentMaster, rs: RecorderSettings, repo_root: Path, tmp_path: Path
+) -> None:
+    from types import SimpleNamespace
+
+    clock = ManualClock(datetime(2026, 11, 11, 10, 0, tzinfo=IST))
+    runner = ShadowLiveRunner(
+        CFG, rs,
+        scanner=ShadowOrderBookScanner(load_settings(root=repo_root, environ={}).shadow_scanner),
+        master=master, adapter=SimFeed(master, clock, spots={}), clock=clock, session=SESSION,
+        depth_writer=DatasetWriter(tmp_path, "depth30", DEPTH30_SCHEMA), store=None,
+        report_path=tmp_path / "d.html", ledger_file=tmp_path / "l.jsonl", feed_label="x",
+    )  # fmt: skip
+    watch: list[str] = []
+    episodes: list[str] = []
+    runner.cockpit = SimpleNamespace(  # type: ignore[assignment]
+        on_watch_episode=lambda s: watch.append(s.signal_id),
+        on_episode=lambda s: episodes.append(s.signal_id),
+    )
+    t0 = datetime(2026, 11, 11, 10, 0, tzinfo=IST)
+
+    def sig(sid: str, sec: float, score: float, loc: float = 15.0, status: str = "PENDING_TRIGGER",
+            symbol: str = "X") -> SimpleNamespace:  # fmt: skip
+        return SimpleNamespace(
+            signal_id=sid, created_at=t0 + timedelta(seconds=sec),
+            grade=SimpleNamespace(value="WATCHLIST" if score >= 65 else "NOISE"),
+            status=SimpleNamespace(value=status), wave=SimpleNamespace(value="W"),
+            breakdown=SimpleNamespace(structural_location_pts=loc), direction="LONG",
+            symbol=symbol, confidence_score=score, entry_price=1.0, stop_loss=1.0, target_1=1.0,
+        )  # fmt: skip
+
+    hold = runner.scanner.config.signal_confirm_s
+    runner._on_signal(sig("A", 0, 68))  # type: ignore[arg-type]
+    runner._on_signal(sig("B", hold + 1, 68))  # type: ignore[arg-type]  # held: one episode
+    runner._on_signal(sig("C", hold + 5, 68))  # type: ignore[arg-type]  # same episode
+    runner._on_signal(sig("G", 0, 60, loc=2, symbol="G"))  # type: ignore[arg-type]
+    runner._on_signal(sig("H", hold + 1, 60, loc=2, symbol="G"))  # type: ignore[arg-type]  # no level
+    runner._on_signal(sig("P", 0, 70, status="BLOCKED_SPOOF", symbol="P"))  # type: ignore[arg-type]
+    runner._on_signal(sig("Q", hold + 1, 70, status="BLOCKED_SPOOF", symbol="P"))  # type: ignore[arg-type]
+    assert watch == ["B"] and episodes == []

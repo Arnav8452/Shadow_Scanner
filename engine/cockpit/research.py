@@ -96,11 +96,20 @@ def signal_ledger_stats(path: Path) -> dict[str, Any]:
 
 
 STUDY_BANDS = (
+    (60.0, 75.0, "60–75 (watch: never traded)"),
     (75.0, 80.0, "75–80"),
     (80.0, 90.0, "80–90"),
     (90.0, 101.0, "90+"),
 )
 STUDY_KEYS = ("15m", "30m", "60m", "close")
+
+
+def study_rows(path: Path) -> list[dict[str, Any]]:
+    """Finished signal-study rows: the journal holds every update, the last per signal wins."""
+    last: dict[str, dict[str, Any]] = {}
+    for i, r in enumerate(_jsonl(path)):
+        last[str(r.get("signal_id") or f"_row{i}")] = r
+    return [r for r in last.values() if r.get("done", True) and isinstance(r.get("results"), dict)]
 
 
 def _study_cell(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
@@ -128,7 +137,7 @@ def _study_cell(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
 
 def study_stats(path: Path) -> dict[str, Any]:
     """Signal study (``signal_study.jsonl``) by score band, setup and hour, at each horizon."""
-    rows = [r for r in _jsonl(path) if isinstance(r.get("results"), dict)]
+    rows = study_rows(path)
     days = sorted({str(r.get("t0", ""))[:10] for r in rows if r.get("t0")})
 
     def table(groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
@@ -200,12 +209,12 @@ CONTEXT_FEATURES: tuple[tuple[str, str, Any], ...] = (
     ("pcr", "PCR (OI)", ((0.7, "<0.7"), (1.0, "0.7–1.0"), (1.3, "1.0–1.3"), (99, "1.3+"))),
     ("vs_prev_day", "Vs previous day range", None),
     ("vs_opening_range", "Vs opening range", None),
-    ("breadth_pct", "Heavyweight breadth %", ((-25, "< −25"), (25, "−25–25"), (101, "> 25"))),
+    ("breadth_pct", "Heavyweight breadth %", ((-25, "< −25"), (25, "−25 to 25"), (101, "> 25"))),
     ("corr", "Heavyweight correlation", ((0.3, "<0.3"), (0.6, "0.3–0.6"), (2, "0.6+"))),
     ("event_window", "Inside event window", None),
     ("expiry_day", "Expiry day of that index", None),
-    ("gap_pct", "Opening gap %", ((-0.8, "< −0.8"), (-0.2, "−0.8–−0.2"), (0.2, "flat"),
-                                  (0.8, "0.2–0.8"), (99, "> 0.8"))),
+    ("gap_pct", "Opening gap %", ((-0.8, "< −0.8"), (-0.2, "−0.8 to −0.2"), (0.2, "flat"),
+                                  (0.8, "0.2 to 0.8"), (99, "> 0.8"))),
     ("efficiency", "Day so far: trend vs chop", ((0.3, "chop < 0.3"), (0.7, "0.3–0.7"),
                                                    (9, "trend > 0.7"))),
     ("vix_chg", "VIX change since open", ((-0.5, "falling"), (0.5, "flat"), (99, "rising"))),
@@ -213,27 +222,61 @@ CONTEXT_FEATURES: tuple[tuple[str, str, Any], ...] = (
 )  # fmt: skip
 
 
-def _bucket_of(value: Any, spec: Any) -> str | None:
-    if value is None:
-        return None
+UNKNOWN = "not recorded"
+
+
+def _bucket_of(value: Any, spec: Any) -> str:
+    """The bucket of one recorded value; a missing value has its own bucket, so every
+    feature's rows add up to the total (e.g. Sensex has no IV percentile history yet)."""
+    if value is None or value == "":
+        return UNKNOWN
+    if isinstance(value, bool):
+        return "yes" if value else "no"
     if spec is None:
-        return str(value)
+        return {"True": "yes", "False": "no"}.get(str(value), str(value))
     try:
         v = float(value)
     except (TypeError, ValueError):
-        return None
+        return UNKNOWN
     for hi, name in spec:
         if v < hi:
             return str(name)
     return str(spec[-1][1])
 
 
-def _aligned(ctx: dict[str, Any], up: bool) -> str | None:
+def _aligned(ctx: dict[str, Any], up: bool | None) -> str:
     """Does heavyweight breadth agree with the trade's direction?"""
+    if up is None:
+        return "no direction (spread) or not recorded"
     b = ctx.get("breadth_pct")
-    if b is None or abs(float(b)) < 25:
-        return "breadth neutral" if b is not None else None
+    if b is None:
+        return UNKNOWN
+    if abs(float(b)) < 25:
+        return "breadth neutral"
     return "with breadth" if (float(b) > 0) == up else "against breadth"
+
+
+_UP = re.compile(r"\((UP|LONG)\)|\blong wave\b|momentum up\b|\bbullish\b", re.I)
+_DOWN = re.compile(r"\((DOWN|SHORT)\)|\bshort wave\b|momentum down\b|\bbearish\b", re.I)
+
+
+def trade_direction(r: dict[str, Any]) -> bool | None:
+    """True = bought a call (bullish), False = a put, None = a spread or not known. From the
+    option type recorded at entry (since 13 Nov), else an old-style symbol, else the reason."""
+    if r.get("structure"):
+        return None
+    kind = (r.get("context") or {}).get("option_type")
+    if kind in ("CE", "PE"):
+        return bool(kind == "CE")
+    sym = str(r.get("symbol", ""))
+    if sym.endswith(("CE", "PE")):
+        return sym.endswith("CE")
+    reason = str(r.get("reason", ""))
+    if _UP.search(reason):
+        return True
+    if _DOWN.search(reason):
+        return False
+    return None
 
 
 def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
@@ -243,13 +286,21 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
     not an edge, until t ≈ 3 over 20–30 sessions."""
     trades: list[dict[str, Any]] = []
     for name in _accounts(journal_dir):
-        for r in _jsonl(journal_dir / f"paper_{name}.jsonl"):
-            if r.get("type") != "close" or not isinstance(r.get("context"), dict):
+        rows = list(_jsonl(journal_dir / f"paper_{name}.jsonl"))
+        # A close carries the exit reason; the entry's reason (and context) is on its open.
+        opens = {(r.get("symbol"), r.get("t")): r for r in rows if r.get("type") == "open"}
+        for r in rows:
+            if r.get("type") != "close":
                 continue
-            trades.append({"acct": name, "net": float(r.get("net_inr", 0.0)), "ctx": r["context"],
-                           "up": "PE" not in str(r.get("symbol", ""))})  # fmt: skip
+            o = opens.get((r.get("symbol"), r.get("opened_at"))) or {}
+            ctx = r.get("context") if isinstance(r.get("context"), dict) else o.get("context")
+            if not isinstance(ctx, dict):
+                continue
+            merged = {**r, "context": ctx, "reason": o.get("reason", r.get("reason", ""))}
+            trades.append({"acct": name, "net": float(r.get("net_inr", 0.0)), "ctx": ctx,
+                           "up": trade_direction(merged)})  # fmt: skip
     study: list[dict[str, Any]] = []
-    for r in _jsonl(journal_dir / "signal_study.jsonl"):
+    for r in study_rows(journal_dir / "signal_study.jsonl"):
         res = (r.get("results") or {}).get(horizon) or {}
         if "move_pct" not in res or not isinstance(r.get("context"), dict):
             continue
@@ -265,8 +316,7 @@ def context_stats(journal_dir: Path, horizon: str = "30m") -> dict[str, Any]:
                 if key == "_breadth_align"
                 else _bucket_of(x["ctx"].get(key), spec)
             )
-            if b is not None:
-                out[b].append(x)
+            out[b].append(x)
         return dict(sorted(out.items()))
 
     features = [*CONTEXT_FEATURES, ("_breadth_align", "Breadth vs direction", None)]
@@ -386,6 +436,78 @@ def mining_report(mined_dir: Path, name: str) -> dict[str, Any]:
     return {"name": name, "text": p.read_text(encoding="utf-8")}
 
 
+def net_deals(
+    deals: list[dict[str, Any]],
+    *,
+    jobber_ratio: float = 0.15,
+    jobber_max_net_cr: float = 5.0,
+    top: int = 25,
+) -> dict[str, Any]:
+    """Bulk/block deals netted per (day, symbol, client).
+
+    - The same trade in both the block and the bulk file (same day, symbol, client, side,
+      quantity, price) counts once.
+    - A client that bought and sold nearly the same value that day (|buy - sell| under
+      ``jobber_ratio`` of buy + sell) and netted under ``jobber_max_net_cr`` is an intraday
+      market maker: no direction, left out (listed separately so nothing is hidden). A large
+      net is kept even at a low ratio (13 Nov: GRANULES +Rs 24 cr net on Rs 195 cr traded).
+    - A net buy matched by another client's net sell of the same quantity at the same price is
+      a transfer between two parties (promoter group, block transfer), not open-market buying:
+      tagged.
+    """
+    seen: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for d in deals:
+        k = (d["day"], d["symbol"], d["client"], d["side"], d["qty"], d["price"])
+        if k in seen:
+            seen[k]["kind"] = "block+bulk" if seen[k]["kind"] != d["kind"] else d["kind"]
+        else:
+            seen[k] = dict(d)
+    by: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for d in seen.values():
+        g = by.setdefault((d["day"], d["symbol"], d["client"]), {
+            "day": d["day"], "symbol": d["symbol"], "client": d["client"], "kinds": set(),
+            "buy_cr": 0.0, "sell_cr": 0.0, "buy_qty": 0, "sell_qty": 0, "px": [],
+        })  # fmt: skip
+        g["kinds"].add(d["kind"])
+        side = "buy" if d["side"] == "BUY" else "sell"
+        g[f"{side}_cr"] += float(d["value_cr"])
+        g[f"{side}_qty"] += int(d["qty"] or 0)
+        g["px"].append(float(d["price"] or 0))
+    rows, jobbers = [], []
+    for g in by.values():
+        gross = g["buy_cr"] + g["sell_cr"]
+        net = g["buy_cr"] - g["sell_cr"]
+        both = g["buy_cr"] > 0 and g["sell_cr"] > 0
+        row = {
+            "day": g["day"], "symbol": g["symbol"], "client": g["client"],
+            "kind": "+".join(sorted(g["kinds"])), "net_cr": round(net, 2),
+            "buy_cr": round(g["buy_cr"], 2), "sell_cr": round(g["sell_cr"], 2),
+            "net_qty": g["buy_qty"] - g["sell_qty"],
+            "price": round(sum(g["px"]) / len(g["px"]), 2) if g["px"] else None, "note": "",
+        }  # fmt: skip
+        if both and gross > 0 and abs(net) / gross < jobber_ratio and abs(net) < jobber_max_net_cr:
+            jobbers.append(row)
+        else:
+            rows.append(row)
+    for r in rows:
+        if r["net_qty"] == 0:
+            continue
+        for o in rows:
+            if (
+                o is not r and o["day"] == r["day"] and o["symbol"] == r["symbol"]
+                and o["net_qty"] == -r["net_qty"] and o["price"] == r["price"]
+            ):  # fmt: skip
+                r["note"] = f"transfer with {o['client']}"
+                break
+    rows.sort(key=lambda r: -abs(r["net_cr"]))
+    return {
+        "rows": rows[:top],
+        "jobbers": sorted({j["client"] for j in jobbers}),
+        "jobber_rows": len(jobbers),
+        "jobber_cr": round(sum(j["buy_cr"] + j["sell_cr"] for j in jobbers), 2),
+    }
+
+
 def flows(raw_dir: Path) -> dict[str, Any]:
     """Latest participant positioning (OI and volume), F&O ban list and bulk/block deals."""
     from engine.data.eod.flows import latest_file, parse_ban_list, parse_deals
@@ -441,6 +563,7 @@ def flows(raw_dir: Path) -> dict[str, Any]:
             )
     deals.sort(key=lambda d: -d["value_cr"])
     out["deals"] = deals[:25]
+    out["deals_net"] = net_deals(deals)
     out["note"] = (
         "EOD files, known after ~19:30 IST. Participant figures are contracts; "
         "ban list applies to the trade date shown."

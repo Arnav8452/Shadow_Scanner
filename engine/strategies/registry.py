@@ -37,7 +37,8 @@ REGISTRY: tuple[StrategyItem, ...] = (
         "5.1", "Iron condor / credit spreads (Nifty)", "paper",
         "engine/cockpit/condor.py",
         "Iron condor / bull put / bear call chosen by the order-flow veto; hedge-first legs; "
-        "held overnight; adjustments not built",
+        "held overnight; untested side booked at 85% decay, first-candle gap rule, weekend "
+        "booking (80% of target, or little left vs the gap stress); economics on the card",
         "data/state/paper_condor.jsonl",
     ),
     StrategyItem(
@@ -48,9 +49,17 @@ REGISTRY: tuple[StrategyItem, ...] = (
         "data/state/paper_bot.jsonl",
     ),
     StrategyItem(
+        "5.2", "Log-3 momentum, the mined entry rule (log3_mom)", "paper",
+        "engine/cockpit/plays_long.py (Log3MomentumPlay), tasks.py log3-features",
+        "15-min move >= 0.05% its way, <= 0.10% off the day's extreme, beyond the opening "
+        "range -> ATM option; -10% / +30%. Mined from 10 sessions: a HYPOTHESIS under test.",
+        "data/state/paper_log3_mom.jsonl",
+    ),
+    StrategyItem(
         "5.2", "Order-flow signal study (Track A)", "research",
         "engine/shadow/, engine/cockpit/study.py (tasks.py shadow-live)",
-        "Does a confirmed reading predict the index? Scalping retired 12 Nov 2026 (owner).",
+        "Does a confirmed reading predict the index? 75+ readings, plus a never-traded 60-75 "
+        "band (with a structural level) to compare against. Survives restarts since 13 Nov.",
         "data/state/signal_study.jsonl",
     ),
     StrategyItem(
@@ -77,9 +86,18 @@ REGISTRY: tuple[StrategyItem, ...] = (
         "data/state/swing/*.json",
     ),
     StrategyItem(
-        "5.7", "Volatility-managed sizing overlay", "not built",
-        "-",
-        "Realised-vol estimators exist (engine/analytics/realized_vol.py); no sizing overlay.",
+        "5.7", "Volatility-managed sizing overlay", "paper",
+        "engine/cockpit/vol_sizing.py (cockpit.vol_sizing)",
+        "Median RV20 / RV20, clamped 0.5-1.5; never sizes up; 2 lots -> floor(2 x factor); "
+        "entries skipped under 0.6. Applied to every paper account.",
+        "data/state/index_daily.json",
+    ),
+    StrategyItem(
+        "6", "Gap stress and the overnight carry rule", "paper",
+        "engine/cockpit/stress.py (cockpit.gap_scenarios, gap_carry)",
+        "+-5/8% gaps with IV shifts on every spread card; overnight structures over the "
+        "per-trade spread limit are closed from 15:10 instead of carried.",
+        "data/state/paper_condor.jsonl",
     ),
     StrategyItem(
         "5.8", "Swing: cash stocks", "paper",

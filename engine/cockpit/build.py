@@ -231,7 +231,12 @@ def build_cockpit(
         acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
         acct.leg_gap_s = ccfg.paper_leg_gap_ms / 1000
         acct.charges_mult = ccfg.credit_charges_mult
+
+    def kind_of(sym: str) -> str | None:
+        return master.get(sym).kind.value if sym in master else None
+
     for acct in [*core.long_accounts()]:
+        acct.kind_of = kind_of
         acct.fill_latency_s = ccfg.paper_fill_latency_ms / 1000
         acct.stop_hold_max_s = ccfg.stop_hold_max_s
         acct.stop_override_mult = ccfg.stop_override_mult

@@ -190,6 +190,9 @@ class PaperAccount:
         self.pending: dict[str, dict[str, Any]] = {}
         self.liquidity: LiquidityMonitor | None = None  # shared, set by the cockpit
         self.vol_sizing: Any = None  # SPEC 5.7 VolSizing, set by the cockpit
+        # "CE"/"PE" of a contract (instrument master), set by the cockpit: recorded with every
+        # entry so research can tell a bullish trade from a bearish one.
+        self.kind_of: Callable[[str], str | None] | None = None
         self.vacuum_wait_s = 3.0  # a stop exit waits this long for quotes to come back
         # Net P&L of open positions at the bid (after entry charges), refreshed every step:
         # an open loss counts toward the daily and weekly loss limits like a realized one.
@@ -289,6 +292,10 @@ class PaperAccount:
             vac = self.liquidity.vacuum(symbol, book)
             if vac:
                 return self._refuse(symbol, now, vac, signal_id)
+        if self.kind_of is not None:
+            k = self.kind_of(symbol)
+            if k in ("CE", "PE"):
+                context = {**dict(context or {}), "option_type": k}
         if self.vol_sizing is not None:
             # SPEC 5.7: smaller (never larger) when recent realized vol is high.
             lots, note, vctx = self.vol_sizing.size(symbol, lots, now.astimezone(IST).date())

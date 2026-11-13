@@ -119,6 +119,9 @@ class ShadowLiveConfig:
     alert_grades: tuple[str, ...] = ("A_PLUS",)
     max_alerts_per_day: int = 10
     alert_cooldown_min: int = 15
+    # Readings from this score up to the 75 tradeable line, held as long as a tradeable one,
+    # go to the signal study only (never traded): a 60-75 band to compare 75+ against.
+    study_min_score: float = 60.0
     delivery_watch: DeliveryWatchConfig = field(default_factory=DeliveryWatchConfig)
 
 
@@ -177,6 +180,7 @@ def load_shadow_live_config(settings: Settings) -> ShadowLiveConfig:
         alert_grades=tuple(str(g) for g in raw.get("alert_grades", ["A_PLUS"])),
         max_alerts_per_day=int(raw.get("max_alerts_per_day", 10)),
         alert_cooldown_min=int(raw.get("alert_cooldown_min", 15)),
+        study_min_score=float(raw.get("study_min_score", 60.0)),
         delivery_watch=delivery_watch_config(raw.get("delivery_watch"), REPO_ROOT),
     )
     if not 1 <= cfg.max_symbols <= 50:
@@ -454,6 +458,7 @@ class ShadowLiveRunner:
         self.stats = ShadowLiveStats()
         self.seq = 0
         self._episodes: dict[tuple[str, str, str], int] = {}
+        self._watch_since: dict[tuple[str, str], int] = {}
         self.ledger_written = 0
         self.open_ns = to_ns(session.open_dt)
         self.or_end_ns = to_ns(session.open_dt + timedelta(minutes=cfg.opening_range_min))
@@ -665,7 +670,11 @@ class ShadowLiveRunner:
         A signal *episode* is (symbol, direction, setup) at a tradeable grade; it is counted and
         alerted once, and continues while it keeps reappearing within the cool-down."""
         self.stats.evaluations += 1
-        if sig.grade.value not in ("A_PLUS", "ACTIONABLE") or not getattr(sig, "confirmed", True):
+        if sig.grade.value not in ("A_PLUS", "ACTIONABLE"):
+            self._watch_episode(sig)
+            return
+        self._watch_since.pop((sig.symbol, sig.direction), None)
+        if not getattr(sig, "confirmed", True):
             return
         key = (sig.symbol, sig.direction, sig.wave.value)
         now_ns = to_ns(sig.created_at)
@@ -687,6 +696,34 @@ class ShadowLiveRunner:
                 f"{sig.direction} {sig.symbol} score {sig.confidence_score:.0f} "
                 f"entry {sig.entry_price:.2f} SL {sig.stop_loss:.2f} T1 {sig.target_1:.2f}"
             )
+
+    def _watch_episode(self, sig: ShadowSignal) -> None:
+        """A 60-75 reading (below the tradeable line, not a spoof pull) held for the same time
+        a tradeable one must hold: one study-only episode per cool-down. Never traded."""
+        key = (sig.symbol, sig.direction)
+        if self.cockpit is None or not hasattr(self.cockpit, "on_watch_episode"):
+            return
+        status = getattr(getattr(sig, "status", None), "value", "")
+        loc = getattr(getattr(sig, "breakdown", None), "structural_location_pts", 0.0)
+        if (
+            sig.confidence_score < self.cfg.study_min_score
+            or status == "BLOCKED_SPOOF"
+            # no structural level: the score is capped at 60 by the location gate, so the band
+            # would fill with readings that have no level; keep it to readings that had one
+            or loc < self.scanner.config.min_location_pts
+        ):
+            self._watch_since.pop(key, None)
+            return
+        now_ns = to_ns(sig.created_at)
+        since = self._watch_since.setdefault(key, now_ns)
+        if now_ns - since < self.scanner.config.signal_confirm_s * NS_PER_S:
+            return
+        ep = (sig.symbol, sig.direction, "WATCH:" + sig.wave.value)
+        last = self._episodes.get(ep)
+        self._episodes[ep] = now_ns
+        if last is not None and now_ns - last < self.cfg.alert_cooldown_min * 60 * NS_PER_S:
+            return
+        self._cockpit(self.cockpit.on_watch_episode, sig)
 
     # ------------------------------------------------------------------ timers
 

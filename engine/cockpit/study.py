@@ -11,6 +11,10 @@ stop/target levels. For every confirmed signal episode this records:
 
 Nothing is traded here. Results go to ``signal_study.jsonl`` and the Research tab shows them by
 score band and horizon. Every threshold tried on this data counts as a trial (deflated Sharpe).
+
+Every change to an entry is journaled at once (the last line per ``signal_id`` wins), so a
+restart resumes it. A horizon that fell due while the engine was down is marked skipped, never
+measured late at the wrong price. Readers use only ``done`` rows.
 """
 
 from __future__ import annotations
@@ -87,20 +91,49 @@ class SignalStudy:
         self.horizons = tuple(horizons_min)
         self.entries: list[StudyEntry] = []
         self.done_today: list[dict[str, Any]] = self._load_today(close_at)
+        # A horizon more than this late (the engine was down) is skipped, not measured late.
+        self.late_s = 120.0
 
     def _load_today(self, close_at: datetime) -> list[dict[str, Any]]:
+        """Today's finished rows; today's unfinished ones become live entries again."""
         if self.journal is None or not self.journal.exists():
             return []
         day = close_at.astimezone(IST).date().isoformat()
-        out = []
+        last: dict[str, dict[str, Any]] = {}
         for line in self.journal.read_text(encoding="utf-8").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
             if str(rec.get("t0", ""))[:10] == day:
+                last[str(rec.get("signal_id"))] = rec
+        out = []
+        for rec in last.values():
+            if rec.get("done"):
                 out.append(rec)
+                continue
+            try:
+                self.entries.append(StudyEntry(
+                    signal_id=str(rec["signal_id"]), t0=datetime.fromisoformat(rec["t0"]),
+                    symbol=rec["symbol"], label=rec["label"], underlying=rec["underlying"],
+                    bullish=rec.get("direction") == "UP", score=float(rec["score"]),
+                    wave=str(rec["wave"]), spot0=float(rec["spot0"]),
+                    vehicle=str(rec.get("vehicle") or ""),
+                    vehicle_label=str(rec.get("vehicle_label") or ""), lot=int(rec["lot"]),
+                    opt_ask0=float(rec.get("opt_ask0") or 0.0),
+                    results=dict(rec.get("results") or {}),
+                    context=dict(rec.get("context") or {}),
+                ))  # fmt: skip
+            except (KeyError, TypeError, ValueError):
+                continue
         return out
+
+    def _save(self, e: StudyEntry) -> None:
+        if self.journal is None:
+            return
+        self.journal.parent.mkdir(parents=True, exist_ok=True)
+        with self.journal.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(e.row(), default=str) + "\n")
 
     # ------------------------------------------------------------------ recording
 
@@ -142,6 +175,7 @@ class SignalStudy:
             context=dict(context or {}),
         )
         self.entries.append(entry)
+        self._save(entry)
         return entry
 
     def _measure(
@@ -194,6 +228,7 @@ class SignalStudy:
         for e in self.entries:
             if e.done:
                 continue
+            before = len(e.results)
             for h in self.horizons:
                 key = f"{h}m"
                 due = e.t0 + timedelta(minutes=h)
@@ -203,11 +238,19 @@ class SignalStudy:
                     if now >= self.close_at:  # the position would be squared off first
                         e.results[key] = {"skipped": "after square-off"}
                 elif now >= due:
-                    self._measure(e, key, now, spots.get(e.underlying), books.get(e.vehicle))
+                    if (now - due).total_seconds() > self.late_s:
+                        e.results[key] = {"skipped": "engine down at the horizon"}
+                    else:
+                        self._measure(e, key, now, spots.get(e.underlying), books.get(e.vehicle))
             if now >= self.close_at and "close" not in e.results:
-                self._measure(e, "close", now, spots.get(e.underlying), books.get(e.vehicle))
+                if (now - self.close_at).total_seconds() > self.late_s:
+                    e.results["close"] = {"skipped": "engine down at the square-off"}
+                else:
+                    self._measure(e, "close", now, spots.get(e.underlying), books.get(e.vehicle))
             if all(f"{h}m" in e.results for h in self.horizons) and "close" in e.results:
                 self._finish(e)
+            elif len(e.results) != before:
+                self._save(e)
 
     def finish(self, now: datetime, spots: Mapping[str, float], books: Mapping[str, Book]) -> None:
         """Session end: measure what is still open at the last prices, then write everything."""
@@ -222,12 +265,8 @@ class SignalStudy:
 
     def _finish(self, e: StudyEntry) -> None:
         e.done = True
-        row = e.row()
-        self.done_today.append(row)
-        if self.journal is not None:
-            self.journal.parent.mkdir(parents=True, exist_ok=True)
-            with self.journal.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(row, default=str) + "\n")
+        self.done_today.append(e.row())
+        self._save(e)
 
     # ------------------------------------------------------------------ view
 

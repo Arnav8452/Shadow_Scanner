@@ -47,6 +47,10 @@ class SwingConfig:
     min_touches: int = 2
     touch_tol_pct: float = 0.75  # pivots within this % form one level
     clear_pct: float = 0.5  # "clearly above": close this % beyond the level
+    # ...but not more than this % beyond it: a close far past the level (13 Nov: PAGEIND 9.4%
+    # under its support) is a gap or news move to chase, and the next-open entry and the
+    # 6% stop no longer relate to the level.
+    max_extension_pct: float = 4.0
     vol_mult: float = 1.5
     vol_avg_days: int = 20
     coil_filter: bool = False
@@ -140,6 +144,7 @@ def scan_symbol(symbol: str, bars: Sequence[Bar], cfg: SwingConfig) -> Candidate
     vmult = t.volume / avg_vol
     tol = cfg.touch_tol_pct / 100.0
     clear = cfg.clear_pct / 100.0
+    ext = cfg.max_extension_pct / 100.0
     window = bars[-cfg.coil_days - 1 : -1]
     coil_range = (max(b.high for b in window) - min(b.low for b in window)) / prev.close * 100.0
     coil = coil_range <= cfg.coil_max_range_pct
@@ -149,7 +154,7 @@ def scan_symbol(symbol: str, bars: Sequence[Bar], cfg: SwingConfig) -> Candidate
             (lv, n)
             for lv, n in levels(hist, span=cfg.pivot_span, tol_pct=cfg.touch_tol_pct,
                                 min_touches=cfg.min_touches, high=True)
-            if prev.close <= lv * (1 + tol) and t.close >= lv * (1 + clear)
+            if prev.close <= lv * (1 + tol) and lv * (1 + clear) <= t.close <= lv * (1 + ext)
         ]  # fmt: skip
         if res:
             lv, n = max(res)
@@ -162,7 +167,7 @@ def scan_symbol(symbol: str, bars: Sequence[Bar], cfg: SwingConfig) -> Candidate
             (lv, n)
             for lv, n in levels(hist, span=cfg.pivot_span, tol_pct=cfg.touch_tol_pct,
                                 min_touches=cfg.min_touches, high=False)
-            if prev.close >= lv * (1 - tol) and t.close <= lv * (1 - clear)
+            if prev.close >= lv * (1 - tol) and lv * (1 - ext) <= t.close <= lv * (1 - clear)
         ]  # fmt: skip
         if sup:
             lv, n = min(sup)

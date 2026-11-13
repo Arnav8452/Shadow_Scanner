@@ -4,6 +4,34 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Research tab review (owner's PDF of 13 Nov): bugs fixed (13 Nov 2026, evening)
+
+**Signal study (0 sessions):**
+- **Main bug:** an entry was journaled only when it finished at the close, so every restart lost it. Today had 8 restarts, and the only 75+ signal (09:37) was lost. Now each update is journaled (the last line per signal wins), restarts resume, and horizons missed while down are marked skipped.
+- **Owner's suggestion, built:** a 60–75 band of held readings, study only. Readings without a structural level are excluded: the location gate caps them at exactly 60, and they would flood the band.
+
+**"Which conditions did the results come from?":**
+1. Every trade counted as bullish (`"PE" not in symbol`, but symbols are instrument keys). Accounts now record CE/PE at entry; older trades take direction from their entry reason; spreads have none.
+2. Trades missing a value silently vanished from that feature (IV percentile showed 4 of 9). There is now a "not recorded" row, so rows add up to the total.
+3. Labels: yes/no instead of True/False; "−0.8 to −0.2" instead of "−0.8–−0.2".
+
+**Paper accounts by day:** the page drew only bot, manual and condor columns. It now shows every account per day, with the day's total.
+
+**Swing scanner:**
+- **IV rank was always unknown:** the stock IV history had 1 day and needs 60. `tasks.py stock-iv-history` backfills it from the bhavcopies on disk (since 3 Nov 2025).
+- **No limit on how far past the level a breakout closes:** added a 4% cap (PAGEIND closed 9.4% below its support).
+
+**Bulk deals (owner's suggestion, refined):**
+- Netted per (day, symbol, client); jobbers dropped when churn < 15% *and* net < ₹5 cr. The 15% rule alone would have dropped GRANULES' +₹24 cr net.
+- Block and bulk duplicates deduped (GALLANTT showed four rows for one transfer). Matched two-party transfers tagged.
+
+**Strategy status table:** 5.7 vol sizing → paper; the condor's "adjustments not built" corrected; Log-3 momentum and gap stress added.
+
+**Seen, not changed:**
+- The retired micro ledger shows HIT_T1/HIT_T2 exits losing money after charges: its targets sat inside the costs. It is retired and kept only for comparison.
+- Recorder QC failed for 12 Nov: a 2.1-hour feed gap and 128 missing snapshot minutes. Worth tracing.
+- The swing paper account runs on its own ₹2L, separate from the F&O capital.
+
 ## Zone rider: tighter risk, time stops, EMA trail (13 Nov 2026, evening)
 
 Owner's second zone-rider note; all four points adopted:

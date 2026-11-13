@@ -294,6 +294,7 @@ shadow_live:             # V1 live shadow scanner (watch-only) on Upstox Plus fu
   alert_grades: [A_PLUS]     # Telegram alerts (SEND=1) are labelled HYPOTHESIS
   max_alerts_per_day: 10
   alert_cooldown_min: 15     # one alert per signal episode (symbol, direction, setup)
+  study_min_score: 60        # held readings 60-75 WITH a structural level -> signal study only (never traded)
   watch:                     # 2 spots + VIX + 2 futures + 30 Nifty + 10 Sensex options = 45
     - {name: NIFTY, futures_months: 1, option_strikes_each_side: 7, expiry: current_weekly}
     - {name: SENSEX, futures_months: 1, option_strikes_each_side: 2, expiry: current_weekly}
@@ -324,6 +325,7 @@ swing:                     # SPEC §5.8 nightly swing scanner. HYPOTHESIS values
   min_touches: 2             # SPEC: touched >= 2-3 times
   touch_tol_pct: 0.75        # pivots within this % are one level
   clear_pct: 0.5             # "clearly" through the level
+  max_extension_pct: 4       # ...but not more than 4% past it (a gap/news move is not a breakout entry)
   vol_mult: 1.5              # SPEC: 1.5-2x average volume
   coil_filter: false         # SPEC: optional tight-range filter
   iv_rank_low: 50            # IV rank <= this -> ATM option, else cash

@@ -181,6 +181,8 @@ What this means:
 - **Possible next:** a backtest runner on the expired-option 1-minute candles, giving about two years of OI and price history for the OI, straddle and breakout strategies. Candles have no bid/ask, so fills would use a spread model taken from our recorded spreads, doubled. That is a documented exception to "fills at recorded bid/ask", fit for screening ideas, not for the final verdict.
 - **Only recording can supply:** anything that reads the order book (the score's book pillar, RER, OBI, spoofed and eaten walls, absorption zones, the opening-range breakout), and the final bid/ask-fill verdict on any strategy.
 
+**Stock IV history** (for the swing scanner's IV rank, which needs 60 sessions): `uv run python tasks.py stock-iv-history` backfills `data/parquet/eod/stock_iv.parquet` from the F&O bhavcopies already downloaded (since 3 Nov 2025). Until 13 Nov it held one day, so every candidate showed "IV rank unknown" and was traded in cash.
+
 ## 9.12 The paper-trade audit
 
 **Removed trades:** on 13 Nov, at the owner's request, today's breakthrough trades at 09:37 and 10:51 and all five spoof-fade trades were taken out of the journals, with the 33,598 refusals they caused. They ran under rules fixed that day: 20% stops instead of the Gate-2 stop, no 180-s scratch after a restart, entries in the first 45 s of a minute, the old 2B-lock ratchet. The originals and the removed lines are in `data/state/removed/2026-11-13/`.

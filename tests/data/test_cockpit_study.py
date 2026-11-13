@@ -170,8 +170,12 @@ def test_study_measures_each_horizon_and_the_close(repo_root: Path, tmp_path: Pa
     assert not e.done
     st.update(OPEN.replace(hour=15, minute=20), {"NIFTY": 25050.0}, {CE: _book(110.0, 110.1)})
     assert e.done and e.results["close"]["move_pts"] == 50.0
-    rows = [json.loads(x) for x in (tmp_path / "signal_study.jsonl").read_text().splitlines()]
-    assert len(rows) == 1 and rows[0]["direction"] == "UP"
+    from engine.cockpit.research import study_rows
+
+    lines = (tmp_path / "signal_study.jsonl").read_text().splitlines()
+    assert len(lines) > 1  # every update is journaled (a restart resumes it)
+    rows = study_rows(tmp_path / "signal_study.jsonl")
+    assert len(rows) == 1 and rows[0]["direction"] == "UP" and rows[0]["done"]
     s = {x["horizon"]: x for x in summarize(rows, ["15m", "30m", "60m", "close"])}
     assert s["15m"]["hit_pct"] == 100.0 and s["30m"]["hit_pct"] == 0.0
     # A restart the same day reloads finished rows into the view.

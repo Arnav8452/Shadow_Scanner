@@ -669,6 +669,35 @@ class CockpitCore:
 
     # ------------------------------------------------------------------ engine hooks
 
+    def on_watch_episode(self, sig: ShadowSignal) -> None:
+        """A held 60-75 reading: into the signal study only (the 60-75 band), so 75+ can be
+        compared against something every day. No event line, no setup, no trade."""
+        if self.study is None or self.runner is None:
+            return
+        view = self.signal_view(sig)
+        if view is None:
+            return
+        und, bullish, vehicle = view
+        if self.reading_excluded(sig, und):
+            return
+        vb = self.books().get(vehicle) if vehicle else None
+        self.study.add(
+            signal_id=sig.signal_id,
+            now=sig.created_at,
+            symbol=sig.symbol,
+            label=self.label(sig.symbol),
+            underlying=und,
+            bullish=bullish,
+            score=sig.confidence_score,
+            wave=sig.wave.value,
+            spot=self.runner.spots().get(und, 0.0),
+            vehicle=vehicle or "",
+            vehicle_label=self.label(vehicle) if vehicle else "",
+            lot=self.master.get(vehicle).lot_size if vehicle and vehicle in self.master else 1,
+            vehicle_book=vb,
+            context=self.market_context(und, sig.created_at),
+        )
+
     def on_episode(self, sig: ShadowSignal) -> None:
         """A confirmed order-flow episode: log it, add it to the signal study, and let the
         directional strategy (SPEC 5.2) use it as an entry confirmation."""

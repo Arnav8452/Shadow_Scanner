@@ -768,6 +768,25 @@ def task_eod_backfill(params: dict[str, str]) -> int:
     return task_iv_history({"FROM": params["FROM"], "TO": params["TO"]})
 
 
+def task_stock_iv_history(params: dict[str, str]) -> int:
+    """Backfill data/parquet/eod/stock_iv.parquet (each F&O stock's ATM IV from its EOD
+    bhavcopy, our Black-76) for FROM..TO (default: the last 400 calendar days), so the swing
+    scanner's IV rank (needs 60 sessions) works now instead of in three months. Days already
+    present are skipped; days without a downloaded bhavcopy add nothing."""
+    raw_dir, book, cal = _eod_common()
+    from datetime import timedelta
+
+    from engine.data.eod.download import weekdays
+    from engine.data.eod.stock_iv import update_stock_iv
+
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else _today_ist()
+    start = date.fromisoformat(params["FROM"]) if params.get("FROM") else end - timedelta(days=400)
+    path = raw_dir.parent / "parquet" / "eod" / "stock_iv.parquet"
+    added = update_stock_iv(path, raw_dir, weekdays(start, end), book=book, calendar=cal)
+    print(f"stock IV: {added} row(s) added for {start}..{end} -> {path}")
+    return 0
+
+
 def task_iv_history(params: dict[str, str]) -> int:
     """Rebuild data/parquet/eod/iv_history.parquet (tier C: EOD closes) from downloaded
     bhavcopies. FROM/TO default to the last 400 calendar days."""
