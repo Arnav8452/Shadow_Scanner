@@ -184,6 +184,31 @@ class Store:
         )
         return self.query(sql, params)
 
+    def quote_minutes(
+        self,
+        day: date,
+        *,
+        as_of: datetime,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        symbols: Iterable[str] | None = None,
+    ) -> pa.Table:
+        """1-minute bars of the recorded last-traded price per symbol (``minute`` = the bar's
+        UTC start): open, high, low, close, the cumulative volume and OI at the bar's last
+        quote. Much smaller than the raw quotes (a warm start reads ~300 minutes, not ~1.5M
+        quotes). Point in time like ``quotes``."""
+        where, params = self._filters(as_of, start=start, end=end, symbols=symbols)
+        if not self.has("quotes", day):
+            return pa.table({})
+        sql = (
+            "SELECT symbol, date_trunc('minute', ts) AS minute, "
+            "arg_min(ltp, ts) AS open, max(ltp) AS high, min(ltp) AS low, "
+            "arg_max(ltp, ts) AS close, max(volume) AS volume, arg_max(oi, ts) AS oi "
+            f"FROM {self.source_sql('quotes', day)} WHERE {where} AND ltp > 0 "
+            "GROUP BY symbol, minute ORDER BY minute, symbol"
+        )
+        return self.query(sql, params)
+
     def ts_span(
         self,
         dataset: str,

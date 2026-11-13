@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from engine.cockpit.plays_long import PutPanicPlay
 from engine.data.reference.instrument_master import Kind
 from tests.data.conftest import WEEKLY, opt_symbol
@@ -130,3 +132,72 @@ def test_term_spread_backfill_recovers_the_iv_from_synchronous_candles(repo_root
     iv = atm_iv(day, exp, {k: (calls, puts)}, book=book, calendar=None, r=r)
     assert iv is not None and abs(iv - 15.0) < 0.05
     assert atm_iv(day, exp, {k: (calls[:4], puts[:4])}, book=book, calendar=None, r=r) is None
+
+
+def test_warm_start_rebuilds_option_tapes_strike_oi_and_the_straddle() -> None:
+    from datetime import timedelta
+    from types import SimpleNamespace
+
+    from engine.cockpit.core import CockpitCore
+    from engine.cockpit.tape import IndexTape
+    from tests.data.conftest import build_master
+    from tests.data.test_plays import D
+
+    master = build_master(range(24900, 25150, 50))
+    ce, pe = opt_symbol(WEEKLY, 25000, Kind.CALL), opt_symbol(WEEKLY, 25000, Kind.PUT)
+    t = IndexTape("NIFTY")
+    rows = []
+    for i in range(0, 40 * 60, 20):  # 09:15-09:55, a quote every 20 s
+        ts = D + timedelta(seconds=i)
+        t.on_sample(ts, spot=25000.0 + (i // 600))
+        c = 100.0 + i / 60  # the call rises a rupee a minute
+        rows.append({"ts": ts, "symbol": ce, "ltp": c, "volume": 1000 + i, "oi": 50_000 + i})
+        rows.append({"ts": ts, "symbol": pe, "ltp": 90.0, "volume": 500 + i, "oi": 40_000})
+    store = SimpleNamespace(quotes=lambda *a, **k: SimpleNamespace(to_pylist=lambda: list(rows)))
+    core = SimpleNamespace(master=master, otapes={})
+    now = D + timedelta(minutes=40)
+    n = CockpitCore._warm_options(core, store, "NIFTY", t, D, now)  # type: ignore[arg-type]
+    assert n == 2
+    ot = core.otapes[ce]
+    assert ot.open_920 == pytest.approx(105.0)  # the 09:20 price, not the restart's
+    assert ot.vwap() is not None and len(ot.closes) == 40
+    assert len(t.oi) == 40 and t.oi[-1][1][(25000.0, "CE")] > 50_000
+    assert t.atm_strike == 25000.0
+    assert t.bars[5].straddle == pytest.approx(rows[2 * 17]["ltp"] + 90.0)  # 09:20's last quote
+
+
+def test_log3_momentum_buys_after_a_push_near_the_high_beyond_the_range(
+    repo_root: Path,
+    tmp_path: Path,
+    mkt: FakeMarket,  # noqa: F811
+) -> None:
+    from engine.cockpit.plays_long import Log3MomentumPlay, momentum_state
+    from tests.data.test_plays import D, feed_trend
+
+    p = Log3MomentumPlay("log3_mom", "Log-3", "log3", _account(repo_root, tmp_path, "l3"))
+    now = feed_trend(mkt, 60, 25000, 0.1, 1000, start=D)  # a quiet hour: no push
+    mkt.now = now.replace(second=50)
+    assert p.look(mkt.now, mkt) == []
+    assert "15-min" in " ".join(p.notes)
+    now = feed_trend(mkt, 16, mkt.spots["NIFTY"], 3.0, 1000, start=now)  # +48 pts in 16 min
+    mkt.now = now.replace(second=50)
+    f = momentum_state(mkt.tape("NIFTY").done(), True)
+    assert f is not None and f["mom15_pct"] >= 0.05 and f["beyond_or_pct"] > 0
+    out = p.look(mkt.now, mkt)
+    assert out and out[0].startswith("bought"), (out, p.notes)
+    pos = next(iter(p.account.positions.values()))
+    assert "Log-3 momentum up" in pos.reason
+    assert pos.stop_price == pytest.approx(pos.avg_price * 0.9, rel=0.01)
+
+
+def test_margin_of_an_account_view_uses_quotes_then_the_worst_case() -> None:
+    from engine.cockpit.core import CockpitCore
+
+    a = {
+        "positions": [
+            {"margin": {"final": 73568.4}, "max_loss": 7625},
+            {"margin": {}, "max_loss": 5000},  # quote pending: worst case as the proxy
+            {"margin": {"final": 9750.0}},  # a long option: premium + charges
+        ]
+    }
+    assert CockpitCore._margin_of(a) == pytest.approx(88318.4)

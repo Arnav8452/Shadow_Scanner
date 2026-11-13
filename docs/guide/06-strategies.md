@@ -44,6 +44,7 @@ Sources:
 | `breakthrough` | Breakthrough scalper (5 pillars) | 0.55Δ option, 1–2 lots | Minutes | rules.md | on |
 | `spoof_fade` | Spoof rug-pull / eaten wall | 0.55Δ option | Minutes | spoofing notes | on |
 | `zone_rider` | Absorption-zone wave rider | 0.60Δ option | To 15:20 | ride_wave.md | on |
+| `log3_mom` | Log-3 momentum (mined rule) | ATM option | Minutes to 15:20 | log3_entry_features | on |
 | `iron_fly` | Straddle-VWAP iron fly | 4 legs | Intraday | spec A | on |
 | `oi_credit` | OI-velocity credit spread | 2 legs | Intraday | spec B | on |
 | `calendar` | Term-structure calendar | 2 legs, 2 expiries | Overnight | spec C | waiting for 10 sessions of history |
@@ -201,6 +202,15 @@ Code: `engine/cockpit/plays_long.py`. These may hold for minutes only because ea
 ## 6.3 Multi-leg playbook
 
 Code: `engine/cockpit/plays_spread.py`. Wings are always bought first and shorts bought back first. One structure per strategy per day.
+
+### Log-3 momentum — `log3_mom` (mined from a reference log, 13 Nov 2026)
+- **Where the rule comes from:** `tasks.py log3-features` measured the index at each of a funded trader's entries (10 sessions). 93% of the entries came after a 15-minute push of at least 0.05% in the trade's direction, against 29% of other minutes. See [09-data-and-research.md §9.7](09-data-and-research.md#97-research-tools).
+- **Window:** 10:00–14:00.
+- **Trigger (all three, on completed 1-minute index bars):** 15-minute move **≥ +0.05%** in the trade's direction; within **0.10%** of the day's high (calls) or low (puts); beyond the 15-minute opening range that way.
+- **Trade:** buy the ATM option (~0.50 delta) that way, 1 lot.
+- **Exits, as the log:** **−10%** stop, **+30%** target, the 15:20 square-off.
+- **Limits:** one entry per index and direction per 30 minutes; the shared risk gate.
+- **Why it runs:** a paper test of a mined rule against the other directional accounts. 10 sessions are not evidence; this account is how the rule gets its 20+.
 
 ### Straddle-VWAP iron fly — `iron_fly` (spec A)
 - **Days:** Nifty Monday and Tuesday; Sensex Thursday. **Window:** 09:45–13:00.

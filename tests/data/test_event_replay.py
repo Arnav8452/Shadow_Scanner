@@ -415,3 +415,34 @@ def test_first_events_come_from_one_window_read(multi_window_day: Path) -> None:
     rest = list(it)
     # 7 windows of the first part of the day, then one jump over the 2 h silence (not ~120 reads)
     assert store.quote_reads < 15 and rest[-1].recv_ns == T0 + 7_260_500 * 1_000_000
+
+
+def test_quote_minutes_aggregates_recorded_quotes_point_in_time(
+    tmp_path: Path, master: InstrumentMaster
+) -> None:
+    session = MarketSession("NSE", "fo", DAY, time(9, 15), time(15, 40), None, None, True)
+    clock = ManualClock(datetime(2026, 11, 11, 10, 0, tzinfo=IST))
+    rec = Recorder(
+        RecorderConfig(record_all_ticks=True),
+        quotes=DatasetWriter(tmp_path, "quotes", QUOTES_SCHEMA),
+        events=DatasetWriter(tmp_path, "recorder_events", EVENTS_SCHEMA),
+        session_open=session.open_dt,
+        session_close=session.close_dt,
+        source="test",
+        start_ns=clock.now_ns(),
+    )
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    rec.set_universe([master.get(sym)], depth_symbols={sym}, tick_symbols={sym}, now_ns=clock.now_ns(), reason="t")
+    for px in (120.0, 125.0, 118.0, 121.0):  # 10:00:00-10:00:45
+        rec.on_event(Quote(sym, clock.now_ns(), ltp=px, bid=px - 0.5, ask=px + 0.5, oi=1000 + int(px)))
+        clock.advance(15)
+    rec.on_event(Quote(sym, clock.now_ns(), ltp=130.0, bid=129.5, ask=130.5, oi=2000))  # 10:01
+    rec.close(clock.now_ns())
+    st = Store(tmp_path)
+    rows = st.quote_minutes(DAY, as_of=datetime(2026, 11, 11, 23, 0, tzinfo=IST), symbols=[sym]).to_pylist()
+    assert [(r["open"], r["high"], r["low"], r["close"], r["oi"]) for r in rows] == [
+        (120.0, 125.0, 118.0, 121.0, 1121),
+        (130.0, 130.0, 130.0, 130.0, 2000),
+    ]
+    early = st.quote_minutes(DAY, as_of=datetime(2026, 11, 11, 10, 0, 20, tzinfo=IST), symbols=[sym])
+    assert [r["close"] for r in early.to_pylist()] == [125.0]  # nothing after as_of

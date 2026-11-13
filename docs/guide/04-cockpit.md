@@ -129,6 +129,9 @@ Click a row to open it in the instrument panel.
 Tabs: **Overview**, **Playbook**, **Condor / spreads (5.1)**, **Directional (5.2)**, **Debit spreads**, **Gamma 5.10**, **Score-follow**, **Manual**, **Signal study**, **Events**. Your last tab is remembered.
 
 **Overview**: one row per strategy (all of [06-strategies.md](06-strategies.md)), with *today net across all* at the top.
+- **Margin** column: the rupees that strategy's open positions would block in a real account: the broker's live quote for spreads and futures (SPAN + exposure, hedge benefit included), the premium plus charges for a long option, or the worst-case loss while a quote is pending.
+- **Live capacity** (top line, also on Playbook): the margin of all open paper positions together vs the live account's limit (`risk.margin_headroom_max_used_pct`, 50% = ₹1,00,000). Paper accounts are capped separately, so this tells you whether today's open positions would fit one real account together. A 150-point Nifty iron condor alone is about ₹73,600.
+- **Every opening event** also states the margin (*bought 65 … margin ₹9,826 (premium + charges)*; *opened iron condor … margin to open ≈ ₹73,600*).
 
 | Column | Meaning |
 |---|---|

@@ -699,6 +699,100 @@ class ZoneRiderPlay(LongPlay):
         return out
 
 
+def momentum_state(bars: list[Any], bullish: bool) -> dict[str, float] | None:
+    """The Log-3 entry features on completed 1-minute index bars, signed for the direction:
+    15-minute momentum %, distance from the day's extreme % (high for calls, low for puts) and
+    the distance beyond the 15-minute opening range % (0 inside it)."""
+    if len(bars) < 16:
+        return None
+    orb = [b for b in bars if b.start.astimezone(IST).strftime("%H:%M") < "09:30"]
+    if not orb:
+        return None
+    sign = 1.0 if bullish else -1.0
+    px, ref = bars[-1].close, bars[-16].close
+    or_hi, or_lo = max(b.high for b in orb), min(b.low for b in orb)
+    beyond = (px - or_hi) / or_hi * 100 if bullish else (or_lo - px) / or_lo * 100
+    ext = max(b.high for b in bars) if bullish else min(b.low for b in bars)
+    return {
+        "mom15_pct": sign * (px - ref) / ref * 100,
+        "from_extreme_pct": abs(ext - px) / px * 100,
+        "beyond_or_pct": max(0.0, beyond),
+    }
+
+
+@dataclass
+class Log3MomentumPlay(LongPlay):
+    """Log-3 momentum (HYPOTHESIS from ``tasks.py log3-features``, 13 Nov 2026): the funded
+    trader's entries came after a 15-minute push of >= ~0.05% in the trade's direction, near the
+    day's extreme and beyond the opening range (93% of entries vs 29% of other minutes, 10
+    sessions). 10:00-14:00: all three hold -> buy the ATM option (~0.50 delta) that way. Exits
+    as the log: -10% stop, +30% target, the square-off. One entry per index and direction per
+    30 minutes. A paper test of the mined rule, run beside the other directional accounts."""
+
+    window: tuple[str, str] = ("10:00", "14:00")
+    mom_min_pct: float = 0.05
+    near_extreme_pct: float = 0.10
+    delta: float = 0.50
+    stop_pct: float = 10.0
+    target_pct: float = 30.0
+    gap_min: float = 30.0
+    last_at: dict[tuple[str, bool], datetime] = field(default_factory=dict)
+
+    def look(self, now: datetime, m: Market) -> list[str] | None:
+        if not self.in_window(now, self.window):
+            return None
+        out: list[str] = []
+        for und in m.underlyings():
+            if any(mg.und == und for mg in self.managed.values()):
+                continue
+            bars = m.tape(und).done()
+            parts = []
+            for bull in (True, False):
+                f = momentum_state(bars, bull)
+                if f is None:
+                    parts = ["needs 16 minutes of bars and the opening range"]
+                    break
+                ok = (
+                    f["mom15_pct"] >= self.mom_min_pct
+                    and f["beyond_or_pct"] > 0
+                    and f["from_extreme_pct"] <= self.near_extreme_pct
+                )
+                parts.append(
+                    f"{'up' if bull else 'down'}: 15-min move {f['mom15_pct']:+.2f}% its way "
+                    f"(needs >= "
+                    f"+{self.mom_min_pct:g}), {f['from_extreme_pct']:.2f}% off the "
+                    f"{'high' if bull else 'low'} (needs <= {self.near_extreme_pct:g}), "
+                    f"{'beyond' if f['beyond_or_pct'] > 0 else 'inside'} the opening range"
+                )
+                last = self.last_at.get((und, bull))
+                if not ok or (last is not None and now - last < timedelta(minutes=self.gap_min)):
+                    continue
+                pick = m.by_delta(und, "CE" if bull else "PE", self.delta)
+                if pick is None:
+                    parts.append("no ~0.5 delta option in the chain")
+                    continue
+                self.last_at[(und, bull)] = now
+                out.append(
+                    self.enter(
+                        m,
+                        und,
+                        pick[0],
+                        lots=1,
+                        bullish=bull,
+                        stop_pct=self.stop_pct,
+                        target_pct=self.target_pct,
+                        reason=(
+                            f"{und} Log-3 momentum {'up' if bull else 'down'}: 15-min "
+                            f"{f['mom15_pct']:+.2f}%, {f['from_extreme_pct']:.2f}% off the "
+                            f"{'high' if bull else 'low'}, beyond the opening range"
+                        ),
+                    )
+                )
+                break
+            self.note(f"{und}: " + "; ".join(parts))
+        return out
+
+
 def divergence(t: Any, minutes: int = 30) -> str | None:
     """ride_wave.md's 30-minute filter: a higher low in price with a lower low in CVD is bullish
     absorption (sellers absorbed); a lower high with a higher high in CVD is bearish."""

@@ -624,7 +624,8 @@ class SpreadAccount:
             ex["on_done"],
             True,
             f"opened {structure.replace('_', ' ').lower()} {_strikes(pos)}: {what} pts "
-            f"(₹{abs(credit) * qty:,.0f}{lag}), worst case ₹{pos.max_loss_inr:,.0f}",
+            f"(₹{abs(credit) * qty:,.0f}{lag}), worst case ₹{pos.max_loss_inr:,.0f}, "
+            f"margin to open ≈ ₹{float(ex.get('margin') or 0):,.0f}",
             pos,
         )
 

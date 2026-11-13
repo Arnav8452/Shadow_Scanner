@@ -37,4 +37,4 @@ It is personal software for one owner's own trading in Indian index options and 
 - [REVIEW_2026-11-09.md](../REVIEW_2026-11-09.md), [REVIEW_2026-11-10.md](../REVIEW_2026-11-10.md): system reviews.
 - `new/` (not committed): the owner's strategy notes, which the playbook strategies were built from.
 
-This guide describes the system as of 12 Nov 2026. When the code and this guide disagree, the code wins; please fix the guide.
+This guide describes the system as of 13 Nov 2026. When the code and this guide disagree, the code wins; please fix the guide.

@@ -4,6 +4,23 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Owner checklist (candle backtest, margin capacity, warm start): assessed and built (13 Nov 2026, afternoon)
+
+From `new/candle_backtest_margin_and_warmstart_checklist.md`:
+
+| Item | Verdict | Done |
+|---|---|---|
+| Candle backtest only for price/OI/IV strategies; never for order-book ones; spread haircut per leg | Right | Recorded as the rule for the runner (not built yet) |
+| ₹73,611 condor margin is a leg-ordering artefact (~₹45k expected) | **Wrong.** Quoted live in 3 orders and as intraday: final ₹73,534–73,568 every time; only the pre-hedge "required" changes (₹76k wings first, ₹1.88L shorts first) | — |
+| Live capacity: one condor leaves ₹26k of the ₹1L live headroom | Right | Overview/Playbook show all open positions' margin vs the live limit, a Margin column per strategy, and the margin in every opening event |
+| 1. Warm-start option tapes | Right: an option's `open_920` became the restart-time price | Option tapes (closes, ranges, VWAP, 09:20 anchor), per-strike OI and the ATM straddle rebuilt from the recorder; `Store.quote_minutes` aggregates in DuckDB (startup ~14 s, not 54 s) |
+| 2. Wings on P1's feed to free P2's 10-pin cap | Right problem; needs P2 to read P1's live quotes across processes | Not built; the delta picker now prefers contracts already live, which eases it |
+| 3. Log-3 rule as a paper account | Right | `log3_mom`: 15-min move ≥ 0.05% its way, ≤ 0.10% off the extreme, beyond the OR; ATM; −10% / +30% |
+| 4. Candle backtester (Oct 2024 →) | Right, large | Not built (next) |
+| 5. BSE F&O bhavcopy | Right | Not built |
+
+Also: CI had failed since the 13 Nov morning pushes only because mypy could not find `pdfplumber` (an optional extra CI does not install); it is now in the stub-less override. The root README was replaced by a GitHub front page that points to `docs/guide/README.md` for the whole system.
+
 ## Why other strategies were not trading: 3 flaws, 2 data gaps fixed (13 Nov 2026, afternoon)
 
 Owner asked why nothing but the condor, spoof-fade and breakthrough traded. Ten strategies were idle for real reasons: no 75+ order-flow reading since 09:37 (12 Nov's 50 signals all fell in 11:00–13:00), expiry-day-only or Mon/Tue/Thu schedules, IVP 67 < 80, conditions not met. Fixed:

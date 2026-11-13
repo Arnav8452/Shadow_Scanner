@@ -70,6 +70,11 @@ warn_unreachable = true
 module = ["pyarrow", "pyarrow.*", "fyers_apiv3", "fyers_apiv3.*", "websocket", "websocket.*"]
 ignore_missing_imports = true  # no type stubs published
 
+[[tool.mypy.overrides]]
+# Optional extra (`uv sync --extra mining`, trade-log PDFs): absent in CI.
+module = ["pdfplumber", "pdfplumber.*"]
+ignore_missing_imports = true
+
 [tool.uv]
 # This network intercepts TLS; use the Windows certificate store (harmless elsewhere).
 system-certs = true

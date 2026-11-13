@@ -186,6 +186,7 @@ def build_cockpit(
     )
     debit.load_journal(day)
     core.debit_acct = debit
+    core.live_margin_limit = settings.risk.inr(settings.risk.margin_headroom_max_used_pct)
     quoter = None
     if source == "live":
         from engine.cockpit.margin import MarginQuoter
@@ -343,6 +344,13 @@ def make_plays(
         ),
         L.ZoneRiderPlay(
             "zone_rider", "Absorption-zone wave rider", "ride_wave.md", long_acct("zone_rider")
+        ),
+        L.Log3MomentumPlay(
+            "log3_mom",
+            "Log-3 momentum (mined rule)",
+            "log3_entry_features",
+            long_acct("log3_mom"),
+            rules=L.Log3MomentumPlay.__doc__ or "",
         ),
         S.IronFlyPlay("iron_fly", "Straddle-VWAP iron fly", "spec A", spread_acct("iron_fly")),
         S.OiCreditPlay(

@@ -389,7 +389,10 @@ class PaperAccount:
             if spec.get("decided_ask") is not None and self.fill_latency_s > 0
             else ""
         )
-        return True, f"bought {pos.qty} {symbol} @ {fill:.2f}{lag}, stop {pos.stop_price:.2f}"
+        return True, (
+            f"bought {pos.qty} {symbol} @ {fill:.2f}{lag}, stop {pos.stop_price:.2f}, "
+            f"margin ₹{fill * pos.qty + pos.entry_charges:,.0f} (premium + charges)"
+        )
 
     def fill_pending(self, books: Mapping[str, Book], now: datetime) -> list[str]:
         """Orders whose latency has passed fill against the book they now meet."""

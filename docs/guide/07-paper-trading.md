@@ -72,7 +72,14 @@ Your manual trades are journaled in `data/state/paper_manual.jsonl` with their e
 
 Each account writes one JSON line per open, close and refusal to `data/state/paper_<account>.jsonl`. On restart the engine replays today's lines, restoring open positions and the day's loss streak. Overnight strategies (condor, calendar, compression, synthetic, married) restore their positions from earlier days too, and their contracts are added back into the feed.
 
-A restart **during the session** also rebuilds what the engine learned since the open, from the recorder's quotes: the 15-minute opening range of every recorded contract, and the index tapes (30-minute opening range, VWAP, CVD, ATR, relative volume) from 09:15. The married-future strategy's once-a-minute futures OI and basis are rebuilt the same way, so it no longer waits 30 minutes after a restart. Option-side tape items (ATM straddle, IVs, per-strike OI changes) restart from the restart time, so strategies that need 6–15 minutes of OI history wait that long. The only data lost is the 30-level order book for the minute or so the engine was down; the main recorder is a separate process.
+A restart **during the session** also rebuilds what the engine learned since the open, from the recorder's quotes: the 15-minute opening range of every recorded contract, and the index tapes (30-minute opening range, VWAP, CVD, ATR, relative volume) from 09:15. The married-future strategy's once-a-minute futures OI and basis are rebuilt the same way, so it no longer waits 30 minutes after a restart.
+- **Option side (since 13 Nov):** for near-expiry options across the day's range (about 30 Nifty and 45 Sensex contracts), the warm start rebuilds:
+  - each option's 1-minute closes, ranges, VWAP and its **09:20 anchor price**;
+  - per-strike OI each minute;
+  - the ATM straddle and its volume.
+- **Why it mattered:** before, an option's "09:20 price" after a restart was the price at the restart, so writer-pain, flush and straddle-VWAP rules measured from the wrong anchor.
+- **How fast:** it reads 1-minute bars aggregated by DuckDB from the recorder's quotes, about 1 s for both indices. Raw quotes were 1.5 million rows for 30 contracts by midday.
+- **Still restarting:** only the minute IV series (ATM, 25-delta skew, term spread). They look back 3–15 minutes. The only data lost is the 30-level order book for the minute or so the engine was down; the main recorder is a separate process.
 
 Other state files in `data/state/`:
 

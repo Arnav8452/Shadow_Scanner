@@ -1097,21 +1097,28 @@ function studyView(st) {
 }
 
 let rightHtml = "";
+// Live capacity: all open paper positions' margin together vs the live account's limit.
+function capacityTxt() {
+  const c = snap && snap.capacity;
+  if (!c) return "";
+  const over = c.live_limit > 0 && c.in_use > c.live_limit;
+  return ` Margin of all open positions: <b class="${over ? "down" : ""}">${inr(c.in_use)}</b>${c.live_limit > 0 ? ` vs the live limit ${inr(c.live_limit)} (${over ? "would NOT fit one real account together" : "would fit one real account"}; paper accounts are capped separately)` : ""}.`;
+}
 function overviewParts(rows) {
   const tot = rows.reduce((t, r) => t + (r.day_net || 0), 0);
-  const head = `<div class="muted small" style="padding:4px 10px 0">Every strategy runs on its own paper account, defined risk, the same approved risk gate and full costs. Today net across all: <b class="${cls(tot)}">${inr(tot)}</b>. Click a row for its detail. Results need 20+ sessions before anything is concluded; the Research tab splits them by entry conditions.</div>`;
-  const thead = `<tr><th>Strategy</th><th>Ref</th><th>Status</th><th class="n">Today net</th><th class="n">Realized</th><th class="n">Trades</th><th class="n">W / L</th><th class="n">Open</th><th>Rules / now</th></tr>`;
-  const body = rows.map((r) => [r.key, `<td><b>${esc(r.title)}</b></td><td class="muted">${esc(r.ref)}</td><td class="${r.enabled ? "up" : "muted"}">${r.enabled ? "on" : "off"}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n ${cls(r.realized)}">${r.realized == null ? "—" : inr(r.realized)}</td><td class="n">${r.trades}</td><td class="n">${r.wins} / ${r.losses}</td><td class="n">${r.open}</td><td class="small muted" style="white-space:normal;min-width:260px" title="${esc(r.rules)}"><div class="clamp">${esc(r.rules)}</div></td>`]);
+  const head = `<div class="muted small" style="padding:4px 10px 0">Every strategy runs on its own paper account, defined risk, the same approved risk gate and full costs. Today net across all: <b class="${cls(tot)}">${inr(tot)}</b>.${capacityTxt()} Click a row for its detail. Results need 20+ sessions before anything is concluded; the Research tab splits them by entry conditions.</div>`;
+  const thead = `<tr><th>Strategy</th><th>Ref</th><th>Status</th><th class="n">Today net</th><th class="n">Realized</th><th class="n">Trades</th><th class="n">W / L</th><th class="n">Open</th><th class="n" title="Margin in rupees the open positions would block in the market (broker quote; premium for long options)">Margin</th><th>Rules / now</th></tr>`;
+  const body = rows.map((r) => [r.key, `<td><b>${esc(r.title)}</b></td><td class="muted">${esc(r.ref)}</td><td class="${r.enabled ? "up" : "muted"}">${r.enabled ? "on" : "off"}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n ${cls(r.realized)}">${r.realized == null ? "—" : inr(r.realized)}</td><td class="n">${r.trades}</td><td class="n">${r.wins} / ${r.losses}</td><td class="n">${r.open}</td><td class="n">${r.margin ? inr(r.margin) : "—"}</td><td class="small muted" style="white-space:normal;min-width:260px" title="${esc(r.rules)}"><div class="clamp">${esc(r.rules)}</div></td>`]);
   return [head, thead, body];
 }
 function playbookParts(plays, portfolio) {
   const byKey = Object.fromEntries((portfolio || []).map((r) => [r.key, r]));
-  const head = `<div class="muted small" style="padding:4px 10px 0">The playbook strategies from the owner's notes, each on its own paper account. "Now" is rebuilt every step: the live value next to the threshold each condition needs (hover a cell for the full text). Click a row for the rules, positions and refusals. Paper only; every threshold is a HYPOTHESIS.</div>`;
-  const thead = `<tr><th>Strategy</th><th>State</th><th class="n">Today net</th><th class="n">Trades</th><th class="n">Open</th><th>Now</th></tr>`;
+  const head = `<div class="muted small" style="padding:4px 10px 0">The playbook strategies from the owner's notes, each on its own paper account. "Now" is rebuilt every step: the live value next to the threshold each condition needs (hover a cell for the full text). Click a row for the rules, positions and refusals. Paper only; every threshold is a HYPOTHESIS.${capacityTxt()}</div>`;
+  const thead = `<tr><th>Strategy</th><th>State</th><th class="n">Today net</th><th class="n">Trades</th><th class="n">Open</th><th class="n" title="Margin in rupees the open positions would block in the market">Margin</th><th>Now</th></tr>`;
   const body = plays.map((v) => {
     const r = byKey["play:" + v.key] || {};
     const st = !v.enabled ? '<span class="muted">off</span>' : (r.open ? '<span class="up">holding</span>' : '<span class="muted">watching</span>');
-    return ["play:" + v.key, `<td><b>${esc(v.title)}</b><div class="muted small">${esc(v.ref)}</div></td><td>${st}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n">${r.trades ?? 0}</td><td class="n">${r.open ?? 0}</td><td class="small" style="white-space:normal;min-width:320px" title="${esc(v.decision || "")}"><div class="clamp">${esc(v.decision || "")}</div></td>`];
+    return ["play:" + v.key, `<td><b>${esc(v.title)}</b><div class="muted small">${esc(v.ref)}</div></td><td>${st}</td><td class="n ${cls(r.day_net)}">${r.day_net == null ? "—" : inr(r.day_net)}</td><td class="n">${r.trades ?? 0}</td><td class="n">${r.open ?? 0}</td><td class="n">${r.margin ? inr(r.margin) : "—"}</td><td class="small" style="white-space:normal;min-width:320px" title="${esc(v.decision || "")}"><div class="clamp">${esc(v.decision || "")}</div></td>`];
   });
   return [head, thead, body];
 }

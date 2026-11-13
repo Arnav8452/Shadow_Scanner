@@ -15,7 +15,7 @@ import statistics
 import time
 from collections import deque
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from engine.cockpit.analytics_live import LiveAnalytics
@@ -115,6 +115,36 @@ def _outcome_row(o: ShadowLedgerOutcome, label: str) -> dict[str, Any]:
     }
 
 
+def _minute_samples(
+    store: Any, now: datetime, start: datetime, symbols: list[str]
+) -> list[dict[str, Any]]:
+    """Quote-like samples for a warm start: each recorded 1-minute bar as four samples (open,
+    high, low, close at 10/22/34/46 s, volume and OI on the close), from the store's per-minute
+    aggregate when it has one (raw quotes are ~1.5M rows for 30 contracts by midday)."""
+    if hasattr(store, "quote_minutes"):
+        out: list[dict[str, Any]] = []
+        for r in store.quote_minutes(
+            now.date(), as_of=now, start=start, end=now, symbols=symbols
+        ).to_pylist():
+            m = r["minute"]
+            if m.tzinfo is None:
+                m = m.replace(tzinfo=UTC)
+            for i, key in enumerate(("open", "high", "low", "close")):
+                last = key == "close"
+                out.append({
+                    "ts": m + timedelta(seconds=10 + 12 * i), "symbol": r["symbol"],
+                    "ltp": r[key], "volume": r["volume"] if last else 0,
+                    "oi": r["oi"] if last else None,
+                })  # fmt: skip
+        return out
+    rows: list[dict[str, Any]] = store.quotes(
+        now.date(), as_of=now, start=start, end=now, symbols=symbols,
+        columns="ts, symbol, ltp, volume, oi",
+    ).to_pylist()  # fmt: skip
+    rows.sort(key=lambda q: q["ts"])
+    return rows
+
+
 class CockpitCore:
     def __init__(
         self,
@@ -167,6 +197,10 @@ class CockpitCore:
         self.plays: list[Any] = []  # playbook strategies (build_cockpit)
         self.tapes: dict[str, IndexTape] = {}
         self._event_seen: dict[tuple[str, str], datetime] = {}
+        # Live trading's margin limit in rupees (risk.margin_headroom_max_used_pct of capital):
+        # the paper accounts are capped separately, so the page shows whether all open paper
+        # positions together would fit one real account.
+        self.live_margin_limit: float | None = None
         from engine.cockpit.paper import LiquidityMonitor
 
         self.liquidity: LiquidityMonitor | None = LiquidityMonitor()
@@ -292,10 +326,15 @@ class CockpitCore:
                 self.event("system", f"{p.key}: {type(exc).__name__}: {exc}", now)
 
     def warm_start(self, store: Any) -> None:
-        """After a mid-session restart, rebuild today's index tapes from the recorder's quotes
-        (index spot and front future since the open), so the 30-min opening range, VWAP, CVD,
-        ATR and relative volume start at 09:15 rather than at the restart. Option-side tape
-        items (ATM straddle, IVs, per-strike OI) still start from the restart."""
+        """After a mid-session restart, rebuild today's tapes from the recorder's quotes, so
+        nothing a strategy measures from the open restarts at the restart time:
+
+        - index spot and front future: 30-min opening range, VWAP, CVD, ATR, relative volume;
+        - futures OI and basis (married future);
+        - near-expiry options around the day's range: each option's 1-minute closes, ranges,
+          VWAP and its 09:20 anchor price; per-strike OI each minute; the ATM straddle and its
+          volume. Only the minute IV series (ATM, skew, term) restart: they look back 3-15
+          minutes."""
         if self.runner is None or store is None or not self.plays:
             return
         from types import SimpleNamespace
@@ -352,13 +391,96 @@ class CockpitCore:
                             now,
                         )
             if t.bars:
+                try:
+                    n_opt = self._warm_options(store, und, t, open_dt, now)
+                except Exception as exc:  # a half-written file must not stop the engine
+                    n_opt = 0
+                    log.warning("option tapes not rebuilt for %s: %s", und, exc)
                 self.tapes[und] = t
                 self.event(
                     "system",
                     f"{und} tape rebuilt from the recording: {len(t.bars)} minute bars since "
-                    f"{t.bars[0].start:%H:%M}",
+                    f"{t.bars[0].start:%H:%M}"
+                    + (
+                        f"; {n_opt} option tapes, strike OI and the ATM straddle too"
+                        if n_opt
+                        else ""
+                    ),
                     now,
                 )
+
+    def _warm_options(self, store: Any, und: str, t: Any, open_dt: datetime, now: datetime) -> int:
+        """Option side of the warm start for one underlying (see ``warm_start``)."""
+        from engine.cockpit.tape import OptionTape
+
+        exps = self.master.option_expiries(und, now.astimezone(IST).date())
+        if not exps or not t.bars:
+            return 0
+        lo = min(b.low for b in t.bars) * 0.99
+        hi = max(b.high for b in t.bars) * 1.01
+        opts = [
+            o
+            for o in self.master.options(und, exps[0])
+            if o.strike is not None and lo <= float(o.strike) <= hi and o.kind.is_option
+        ]
+        if not opts:
+            return 0
+        info = {
+            o.symbol: (float(o.strike or 0), "CE" if o.kind is Kind.CALL else "PE") for o in opts
+        }
+        rows = _minute_samples(store, now, open_dt, list(info))
+        bars = {b.start: b for b in t.bars}
+        tapes: dict[str, OptionTape] = {}
+        last_px: dict[tuple[float, str], float] = {}
+        last_cum: dict[tuple[float, str], float] = {}
+        last_oi: dict[tuple[float, str], int] = {}
+        minute: datetime | None = None
+
+        def close_minute(m: datetime) -> None:
+            if last_oi:
+                chain: dict[float, dict[str, Any]] = {}
+                for (k, kind), oi in last_oi.items():
+                    chain.setdefault(k, {"k": k})[kind.lower()] = {"oi": oi}
+                t.on_chain(m, list(chain.values()))
+            b = bars.get(m)
+            if b is None:
+                return
+            ks = sorted({k for k, kind in last_px if (k, "CE") in last_px and (k, "PE") in last_px})
+            if not ks:
+                return
+            k = min(ks, key=lambda x: abs(x - b.close))
+            b.straddle = last_px[(k, "CE")] + last_px[(k, "PE")]
+            t.atm_strike = k
+            cum = last_cum.get((k, "CE"), 0.0) + last_cum.get((k, "PE"), 0.0)
+            if t.straddle_last_cum is not None and cum >= t.straddle_last_cum:
+                b.straddle_vol += cum - t.straddle_last_cum
+            t.straddle_last_cum = cum
+
+        for q in rows:
+            px = q.get("ltp")
+            if not px or px <= 0:
+                continue
+            ts = q["ts"]
+            m = ts.astimezone(IST).replace(second=0, microsecond=0)
+            if minute is not None and m != minute:
+                close_minute(minute)
+            minute = m
+            sym = q["symbol"]
+            key = info[sym]
+            vol = float(q.get("volume") or 0)
+            tapes.setdefault(sym, OptionTape()).on_sample(ts, float(px), vol)
+            last_px[key] = float(px)
+            if vol > 0:
+                last_cum[key] = vol
+            if q.get("oi"):
+                last_oi[key] = int(q["oi"])
+        if minute is not None:
+            close_minute(minute)
+        for sym, ot in tapes.items():
+            have = self.otapes.get(sym)
+            if have is None or len(have.closes) < len(ot.closes):
+                self.otapes[sym] = ot
+        return len(tapes)
 
     def _tape_samples(self, now: datetime) -> None:
         """Feed the minute tapes (index, front future, ATM straddle, IVs, skew, chain OI)."""
@@ -1303,9 +1425,36 @@ class CockpitCore:
         ]
 
     def portfolio(self, snap: dict[str, Any]) -> list[dict[str, Any]]:
-        """One row per paper strategy for the overview: status, today's result, open risk."""
+        """One row per paper strategy for the overview: status, today's result, open risk and
+        the margin its open positions would block in the market (rupees)."""
         accts = snap.get("accounts", {})
         cfg = self.cfg
+        rows = self._portfolio_rows(snap, accts, cfg)
+        for r in rows:
+            r["margin"] = round(r.pop("_margin", 0.0), 0)
+        used = sum(r["margin"] for r in rows)
+        live = float(self.live_margin_limit or 0)
+        snap["capacity"] = {
+            "in_use": used,
+            "live_limit": live,
+            "live_fits": live <= 0 or used <= live,
+        }
+        return rows
+
+    @staticmethod
+    def _margin_of(a: dict[str, Any]) -> float:
+        """Margin in rupees of an account view's open positions: the broker quote (or premium
+        for a long option), else the worst-case loss as the proxy."""
+        tot = 0.0
+        for p in a.get("positions", []):
+            mg = p.get("margin") or {}
+            v = mg.get("final")
+            tot += float(v if v else (p.get("max_loss") or 0))
+        return tot
+
+    def _portfolio_rows(
+        self, snap: dict[str, Any], accts: dict[str, Any], cfg: Any
+    ) -> list[dict[str, Any]]:
 
         def long_row(key: str, title: str, ref: str, enabled: bool, rules: str) -> dict[str, Any]:
             a = accts.get(key) or {}
@@ -1314,6 +1463,7 @@ class CockpitCore:
                 "day_net": a.get("day_net"), "realized": a.get("realized_net"),
                 "open": len(a.get("positions", [])), "trades": a.get("trades_today", 0),
                 "wins": a.get("wins", 0), "losses": a.get("losses", 0),
+                "_margin": self._margin_of(a),
             }  # fmt: skip
 
         d = cfg.directional
@@ -1343,6 +1493,7 @@ class CockpitCore:
                     "trades": a.get("trades_today", 0),
                     "wins": sum(1 for t in closed if (t.get("net") or 0) > 0),
                     "losses": sum(1 for t in closed if (t.get("net") or 0) < 0),
+                    "_margin": self._margin_of(a),
                 }
             )
         for key, title, ref, enabled, block in (
@@ -1364,6 +1515,7 @@ class CockpitCore:
                     "trades": a.get("trades_today", 0),
                     "wins": sum(1 for t in a.get("closed", []) if t.get("net", 0) > 0),
                     "losses": sum(1 for t in a.get("closed", []) if t.get("net", 0) < 0),
+                    "_margin": self._margin_of(a),
                 }
             )
         return rows
