@@ -445,6 +445,144 @@ def task_backfill_history(params: dict[str, str]) -> int:
     return 0
 
 
+# RBI MPC decision days (RBI press releases: 2025-26 schedule of 26 Mar 2025, 2026-27 of 23 Mar
+# 2026) and the Union Budget, inside the IV-history window. Research input only.
+INDEX_EVENTS = {
+    "RBI_MPC": ["2025-12-05", "2026-02-06", "2026-04-08", "2026-06-05", "2026-08-05", "2026-10-07"],
+    "UNION_BUDGET": ["2026-02-01"],
+}
+
+
+def task_event_iv_study(params: dict[str, str]) -> int:
+    """Event IV crush study, pre-registered in docs/research/mechanisms.md (H1 the crush, H2 the
+    event move is overpriced, H3 index events). Results meetings from NSE's board-meeting list
+    (fetched once per 2-month block, cached), stock ATM IV from stock_iv.parquet, index IV from
+    iv_history.parquet. Report: reports/research/event_iv_crush_<date>.md."""
+    raw_dir, book, cal = _eod_common()
+    from datetime import timedelta
+
+    import pyarrow.parquet as pq
+
+    from engine.analytics.expiry_clock import expiry_clock
+    from engine.core.clock import market_session
+    from engine.data.fundamentals.nse import board_meetings_url, fetch_list, parse_board_meetings
+    from engine.research.event_iv import run_study, summarize, verdicts
+
+    eod = raw_dir.parent / "parquet" / "eod"
+    stock = pq.read_table(eod / "stock_iv.parquet").to_pylist()
+    index = [r for r in pq.read_table(eod / "iv_history.parquet").to_pylist() if r.get("atm_iv")]
+    first = min(r["trade_date"] for r in stock)
+    last = max(r["trade_date"] for r in stock)
+
+    hist = raw_dir / "fundamentals" / "lists" / "board_meetings_history"
+    meetings = []
+    start = date(first.year, first.month, 1)
+    while start <= last:
+        end = min(date(start.year + (start.month + 1) // 12, (start.month + 1) % 12 + 1, 1)
+                  - timedelta(days=1), last)  # fmt: skip
+        path = hist / f"{start.isoformat()}_{end.isoformat()}.json"
+        if not path.exists() or end >= _today_ist() - timedelta(days=2):
+            res = fetch_list(board_meetings_url(start, end), path, now=datetime.now(IST))
+            if res.status not in ("ok", "cached"):
+                print(f"board meetings {start}..{end}: {res.status} {res.detail}")
+        if path.exists():
+            meetings += parse_board_meetings(path.read_text("utf-8"))
+        start = end + timedelta(days=1)
+
+    clocks: dict[tuple[date, date, str], float] = {}
+
+    def t_var_for(exch: str):  # type: ignore[no-untyped-def]
+        def t_var(day: date, expiry: date) -> float:
+            key = (day, expiry, exch)
+            if key not in clocks:
+                close = market_session(book, exch, "fo", day, allow_unverified=exch != "NSE")
+                clocks[key] = expiry_clock(
+                    close.close_dt, expiry, book=book, calendar=cal, exchange=exch
+                ).t_var
+            return clocks[key]
+
+        return t_var
+
+    sessions = sorted({r["trade_date"] for r in stock})
+    rows = {(r["underlying"], r["trade_date"]): r for r in stock}
+    names = {r["underlying"] for r in stock}
+    events = sorted(
+        {
+            (m.symbol, m.meeting_date)
+            for m in meetings
+            if m.is_results and m.symbol in names and first < m.meeting_date < last
+        }
+    )
+    res = run_study(rows, events, sessions, t_var_for("NSE"))
+    s = summarize(res)
+    v = verdicts(s)
+
+    lines = [
+        f"# Event IV crush study, {_today_ist():%d %b %Y}",
+        "",
+        "Pre-registered in `docs/research/mechanisms.md` (14 Nov 2026) before this ran; the "
+        "thresholds below are the registered ones. Our own EOD ATM IV (tier C: closing prices).",
+        "",
+        f"Sample: {first} to {last}, {len(sessions)} sessions, {len(names)} F&O stocks; "
+        f"{len(events)} results meetings, {s['n_events']} with comparable IV on both sides "
+        f"(same expiry, after D+1); control: {s.get('n_control', 0)} two-session windows away "
+        "from results.",
+        "",
+        "## H1: does IV fall over a results meeting?",
+        "",
+        f"- Events where IV fell: **{s.get('fell_pct')}%** (needs ≥ 70%); median change "
+        f"**{s.get('median_change')} vol pts** (needs ≤ −3); mean {s.get('mean_change')}.",
+        f"- Control windows: median {s.get('control_median')} vol pts (needs within ±0.5); "
+        f"fell in {s.get('control_fell_pct')}%.",
+        f"- **H1: {v['H1']}**",
+        "",
+        "## H2: was the event move overpriced?",
+        "",
+        f"- Events with an implied event move: {s.get('n_h2')}; realized below implied in "
+        f"**{s.get('realized_below_pct')}%** (needs > 55%); realized/implied mean "
+        f"**{s.get('mean_ratio')}** (needs < 0.9), median {s.get('median_ratio')}; t of "
+        f"mean log(realized/implied) **{s.get('t_log_ratio')}** (needs ≤ −2).",
+        f"- **H2: {v['H2']}** (before costs; stock option lots are large, see the note).",
+        "",
+        "## H3: index events (descriptive; too few for a verdict)",
+        "",
+        "| Index | Event | Day | IV before | IV after | Change | Implied move | Realized |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    irows = {(r["underlying"], r["trade_date"]): r for r in index}
+    isessions = sorted({r["trade_date"] for r in index})
+    for kind, days in INDEX_EVENTS.items():
+        for ds in days:
+            d = date.fromisoformat(ds)
+            for und, exch in (("NIFTY", "NSE"), ("BANKNIFTY", "NSE"), ("SENSEX", "BSE")):
+                r = run_study(irows, [(und, d)], isessions, t_var_for(exch), exclude_days=0)
+                for m in r["events"]:
+                    imp = f"{m.implied_move * 100:.2f}%" if m.implied_move else "—"
+                    lines.append(
+                        f"| {und} | {kind} | {d} | {m.iv_before:.2f} | {m.iv_after:.2f} | "
+                        f"{m.iv_change:+.2f} | {imp} | {m.realized_move * 100:.2f}% |"
+                    )
+    lines += [
+        "",
+        "## Notes",
+        "",
+        "- D-1 and D+1 are the sessions around the meeting date; results released after the "
+        "close on D are inside the window.",
+        "- EOD closes, not mids: a stale close on a thin strike moves its IV. The median and the "
+        "control guard against that, not fully.",
+        "- Tradability is a separate question: one stock-option lot is usually ₹5-15 lakh of "
+        "notional. Only defined-risk spreads could fit ₹1-2 lakh, and their costs must be "
+        "counted before any conclusion.",
+        "- Any later split (sector, liquidity, IV level) is a new trial.",
+    ]
+    out = ROOT / "reports" / "research" / f"event_iv_crush_{_today_ist().isoformat()}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    print(f"-> {out}")
+    return 0
+
+
 def task_scorecard(params: dict[str, str]) -> int:
     """Promotion scorecard over every paper journal: sessions, trades, net, net with charges
     doubled, t-statistic, deflated Sharpe over all strategies tried, kill rules, and a verdict
