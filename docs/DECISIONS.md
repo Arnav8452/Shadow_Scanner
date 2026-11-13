@@ -4,6 +4,32 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Testing/live plan, condor and zone-rider reviews; faulty trades removed (13 Nov 2026, evening)
+
+**`new/testing_pipeline_and_live_transition_plan.md`:** agreed with the 3 stages.
+- **Stage A, candles:** the session building it was briefed with the condor variants (short delta 0.16/0.20, stop 2×/1.5×, condor vs 2-leg spread). Correction: OI ignition (S2) and OI credit (B) are not candle-testable; their CVD z needs bid/ask for trade side. Both haircuts are reported: ours `max(₹1.50, 1.5%)` and the plan's `max(₹1, 0.75%)`.
+- **Stage B, replay:** already built (`replay DATE= SPEED=0`).
+- **Stage C, the gate:** built as `tasks.py scorecard` (nightly).
+- **Kill rules:** built (`engine/risk/kill_rules.py`, ₹10k drawdown in 15 trades or 5 losses in a row).
+- **Pruning:** pruning spoof_fade/score/iron_fly is the scorecard's "prune" verdict after 20 sessions; disabling stays the owner's call.
+- **Not code:** the 2-bot live roster, liquid-ETF collateral (₹1L at ~6%) and the live-gate steps stay owner actions. Live stays locked.
+
+**Condor review (agent):**
+- **Right:** fee drag (₹299 round trip = 28% of a ₹1,063 target); 76% break-even win rate at a 2× stop; 1.0% return on ₹73.6k margin; carrying a weekend for the last ₹345 against ₹8.3k of gap risk.
+- **Built:**
+  - a weekend reward-vs-gap exit (book when what is left < 10% of the worst gap loss);
+  - economics on every condor card (net TP/stop, break-even win %, TP % of margin).
+- **Wrong:** "0.20Δ shorts → net R:R near 1:1.8". With a 50% TP and a 2× stop, R:R ≈ (0.5C − ch)/(C + ch) ≈ 1:3 for any credit; only the TP/stop multiples move it, so it goes to the backtest. Today's condor booked +₹556 net at 15:10 (80% rule).
+
+**Zone-rider review (agent):** all three points right, built:
+- divergence entries get a structural stop 0.12% beyond the 30-min extreme;
+- a structural stop now sets the premium backstop (1.5 × delta × distance, ≥ 5%), so the gate books the real planned loss;
+- a step trail: +12% → breakeven, +20% → lock +10%;
+- the per-trade vs daily conflict (₹5,000 > ₹4,000): long-option stops now fit the smaller of the per-trade cap and what is left of the day. Fills above the decision price and restored positions are clamped too: the 13:42 trade's ₹5,136 came from a fill drift.
+- **Owner decision still open:** lowering `per_trade_max_loss_pct.directional` itself.
+
+**Removed (owner):** today's breakthrough 09:37 (−₹2,801) and 10:51 (−₹834) and all 5 spoof-fade trades, with the 33,598 refusals they caused. All ran under rules fixed today. Kept: breakthrough 11:56 (followed every rule). Backups are in `data/state/removed/2026-11-13/`.
+
 ## Owner checklist (candle backtest, margin capacity, warm start): assessed and built (13 Nov 2026, afternoon)
 
 From `new/candle_backtest_margin_and_warmstart_checklist.md`:

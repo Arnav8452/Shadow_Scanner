@@ -421,6 +421,7 @@ class LongPlay(Status):
         target_pct: float | None = None,
         spot_stop: float | None = None,
         stop_inr: float | None = None,
+        trail: tuple[tuple[float, float], ...] = (),
     ) -> str:
         now = m.now
         if self.entries_today >= self.max_entries:
@@ -452,6 +453,15 @@ class LongPlay(Status):
         entry = b.asks[0][0]
         if stop_inr is not None and entry > 0:  # rupee risk per unit -> % of premium
             stop_pct = max(1.0, min(90.0, stop_inr / entry * 100))
+        if spot_stop is not None and entry > 0:
+            # A structural (index) stop defines the loss: the premium stop becomes a backstop at
+            # 1.5x the option's expected move to it (delta), for gamma and gaps, never under 5%.
+            # The risk gate then books the loss the structure implies, not a wide % stop.
+            d = abs(float(m.detail(sym).get("delta") or 0.0))
+            sp = m.spot(und)
+            if d > 0 and sp > 0:
+                move = abs(sp - spot_stop) * d * 1.5
+                stop_pct = max(5.0, min(stop_pct, move / entry * 100))
         if ratchet and entry > 0:
             # Gate 2, initial risk window: -12% of premium or Rs 1,200 on the position (and in
             # volatility mode within 2 x the option's 1-minute ATR, never tighter than its
@@ -461,11 +471,12 @@ class LongPlay(Status):
             if atr:
                 dist = max(min(dist, 2.0 * atr), m.breakeven(entry, qty)[1])
             stop_pct = max(1.0, min(stop_pct, dist / entry * 100))
-        cap = float(acct.limits.inr(acct.limits.per_trade_max_loss_pct.get("directional", 0.0)))
+        cap = acct.loss_room_inr()
         if cap > 0 and entry > 0 and entry * qty * stop_pct / 100 > cap:
-            # The planned loss would breach the per-trade limit (a Sensex 0.6-delta option at
-            # Rs 900 x 20 with a 35% stop is Rs 6,300 > 5,000): tighten the stop to fit, as long
-            # as it stays a real stop; otherwise skip the contract instead of being refused.
+            # The planned loss would breach the per-trade limit or what is left of the daily
+            # loss limit (a Sensex 0.6-delta option at Rs 900 x 20 with a 35% stop is Rs 6,300):
+            # tighten the stop to fit, as long as it stays a real stop; otherwise skip the
+            # contract instead of being refused.
             fit = cap * 0.98 / (entry * qty) * 100
             if fit < self.min_fit_stop_pct:
                 self.retry_at[und] = now + timedelta(seconds=self.retry_s)
@@ -484,6 +495,7 @@ class LongPlay(Status):
             lots=lots,
             stop_pct=stop_pct,
             target_pct=target_pct,
+            trail=trail,
             reason=f"{self.ref} {reason}",
             context=m.context(und),
         )

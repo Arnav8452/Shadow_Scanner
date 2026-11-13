@@ -235,6 +235,28 @@ class PaperAccount:
             last_loss_at=losses[-1].closed_at if losses else None,
         )
 
+    def loss_room_inr(self) -> float:
+        """The most a new long option may plan to lose: the per-trade directional limit, and
+        never more than what is left of the daily loss limit (today's realized and open
+        losses counted). A stop wider than the day's room would let one trade breach it (a
+        Rs 5,000 per-trade cap against a Rs 4,000 daily limit, 13 Nov 2026)."""
+        cap = self.limits.inr(self.limits.per_trade_max_loss_pct.get("directional", 0.0))
+        day = self.limits.inr(self.limits.daily_loss_limit_pct)
+        if day <= 0:
+            return float(cap)
+        room = day + min(0.0, self.realized_net + min(0.0, self.open_net))
+        return float(max(0.0, min(cap, room) if cap > 0 else room))
+
+    def _fit_stop(self, pos: PaperPosition) -> None:
+        """Raise a long position's stop so its planned loss fits ``loss_room_inr`` (after a
+        fill above the decision price, or a position restored under an older, wider rule)."""
+        room = self.loss_room_inr()
+        if room <= 0 or pos.qty <= 0:
+            return
+        floor = round(pos.avg_price - room * 0.98 / pos.qty, 2)
+        if floor > pos.stop_price:
+            pos.stop_price = floor
+
     # ------------------------------------------------------------------ orders
 
     def open_long_option(
@@ -363,6 +385,7 @@ class PaperAccount:
             trail=tuple(trail),
             context=dict(context or {}),
         )
+        self._fit_stop(pos)
         self.positions[symbol] = pos
         self.trades_today += 1
         slip = round(fill - float(spec.get("decided_ask") or fill), 2)
@@ -730,6 +753,8 @@ class PaperAccount:
                 trail=tuple((float(a), float(b)) for a, b in rec.get("trail") or ()),
                 context=dict(rec.get("context") or {}),
             )
+        for pos in self.positions.values():
+            self._fit_stop(pos)  # rules tightened since the position opened apply now
         return used
 
 

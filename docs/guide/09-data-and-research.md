@@ -183,6 +183,8 @@ What this means:
 
 ## 9.12 The paper-trade audit
 
+**Removed trades:** on 13 Nov, at the owner's request, today's breakthrough trades at 09:37 and 10:51 and all five spoof-fade trades were taken out of the journals, with the 33,598 refusals they caused. They ran under rules fixed that day: 20% stops instead of the Gate-2 stop, no 180-s scratch after a restart, entries in the first 45 s of a minute, the old 2B-lock ratchet. The originals and the removed lines are in `data/state/removed/2026-11-13/`.
+
 `tasks.py audit` checks every journaled paper trade against the hard rules and writes `reports/audit/<date>.md`. It also runs every night at the end of `evening`. The rules:
 - **R1:** defined risk, and wings before shorts;
 - **R2:** per-trade risk;

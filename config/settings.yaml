@@ -116,6 +116,7 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
     hold_earnings_weight_pct: 10  # results of this much index weight before the exit blocks
     weekend_book_pct: 80          # owner 13 Nov: before a weekend/holiday, book at >= 80% of target...
     weekend_book_time: "15:10"    # ...from this time
+    weekend_reward_gap_ratio: 0.10  # ...or when what is left to the take-profit < 10% of the worst gap loss
     side_stop_mult: 2.2           # owner 13 Nov: close if either side costs >= 2.2x its credit to close
     untested_decay_pct: 85        # SPEC 5.1: book the untested side at 85% decay while the other is tested (1 adjustment)
     first_candle_end: "09:30"     # SPEC 5.1: no stop exits in the first 15-min candle (gap rule); time exit still applies
@@ -181,6 +182,10 @@ risk:                    # APPROVED (owner, 11 Nov 2026)
   max_trades_per_day: 5
   cooloff_after_loss_min: 15
   block_first_minutes: 15          # except ORB strategy
+  kill_rules:                      # per strategy (engine/risk/kill_rules.py); paper: reported by the scorecard only
+    max_drawdown_inr: 10000        # HYPOTHESIS (testing plan): Rs 10,000 below the peak within...
+    window_trades: 15              # ...the last 15 trades
+    max_consecutive_losses: 5      # or 5 losing trades in a row
   directional_no_entry_after: "14:00"
   stock_fno_expiry_exit_days_before: 2   # SPEC §6 default E-2
   margin_headroom_max_used_pct: 50.0     # used + proposed margin <= 50% of capital

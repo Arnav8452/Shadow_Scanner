@@ -29,6 +29,7 @@ Code: `engine/risk/limits.py` (`check_pre_trade_risk_gate`). Every paper entry, 
 | Opening block | First 15 minutes (except opening-range strategies) | `blocked_first_15_minutes` |
 | Directional cut-off | No directional entries after 14:00 | `after_directional_cutoff` |
 | Per-trade maximum loss | Directional 2.5% = ₹5,000; defined-risk spread 5% = ₹10,000 | `per_trade_risk_exceeded` |
+| Loss room (long options) | A planned loss never above what is left of the **daily** limit (₹4,000 minus today's losses): strategies tighten the stop to fit (or skip under a 10% stop), and a fill above the decision price, or a restored position, gets its stop raised to fit | — (the stop is fitted, not refused) |
 | Open risk across positions | 10% = ₹20,000 | `max_open_risk_exceeded` |
 | Margin cap per strategy | That strategy's own used + proposed broker margin ≤ **100% of capital (₹2,00,000)**, so each strategy stays executable alone in the real account. Strategies never block each other: each has its own account (owner, 13 Nov 2026). Live trading keeps the approved 50% (`risk.margin_headroom_max_used_pct`). Long options count their premium. | `margin_headroom_violated` |
 | Charges vs target (credit spreads) | Take-profit ≥ 3× round-trip charges (`cockpit.credit_charges_mult`) | `charges: take-profit … is under 3x the round-trip charges …` |

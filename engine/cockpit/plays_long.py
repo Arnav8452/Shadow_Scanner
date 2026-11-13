@@ -607,6 +607,12 @@ class ZoneRiderPlay(LongPlay):
     clear_pts: float = 10.0
     delta: float = 0.60
     min_days: int = 5
+    # A divergence entry has no zone to be wrong at: its structural stop is the 30-minute
+    # extreme the divergence formed at, plus this margin (13 Nov 2026: 0.12% = ~98 Sensex
+    # points, about Rs 1,200 on a 0.6-delta option, instead of a 29% premium stop = Rs 5,136).
+    div_stop_pct: float = 0.12
+    # Step trail for the afternoon wave (no target): +12% -> charges breakeven, +20% -> +10%.
+    trail_steps: tuple[tuple[float, float], ...] = ((12.0, 1.0), (20.0, 10.0))
     used: set[tuple[str, float]] = field(default_factory=set)
     div_at: dict[str, datetime] = field(default_factory=dict)
 
@@ -673,7 +679,22 @@ class ZoneRiderPlay(LongPlay):
             ):
                 # One trade per divergence episode (the pattern spans 30 minutes of bars).
                 self.div_at[und] = now
-                trig = (div == "bullish", 0.0, None, f"30-min CVD absorption divergence ({div})")
+                win = t.done()[-30:]
+                ext = min(b.low for b in win) if div == "bullish" else max(b.high for b in win)
+                lvl = (
+                    ext * (1 - self.div_stop_pct / 100)
+                    if div == "bullish"
+                    else ext * (1 + self.div_stop_pct / 100)
+                )
+                # trig stops are on the future; the index level is converted back below.
+                fut_basis = (px - m.spot(und)) if px else 0.0
+                trig = (
+                    div == "bullish",
+                    0.0,
+                    lvl + fut_basis,
+                    f"30-min CVD absorption divergence ({div}); stop beyond the 30-min "
+                    f"{'low' if div == 'bullish' else 'high'} {ext:,.0f} by {self.div_stop_pct:g}%",
+                )
             if trig is None:
                 continue
             bull, zkey, stop, why = trig
@@ -693,6 +714,7 @@ class ZoneRiderPlay(LongPlay):
                     bullish=bull,
                     stop_pct=35,
                     spot_stop=(stop - basis) if stop is not None else None,
+                    trail=self.trail_steps,
                     reason=f"{und} {'long' if bull else 'short'} wave: {why}",
                 )
             )

@@ -115,6 +115,8 @@ Let it run live on paper for **20+ sessions** without changing it. Then:
 
 **Verdict:**
 - **Promising:** net > 0 after costs *and* at 2× slippage, t ≈ 3, a deflated Sharpe that survives the trial count. Write kill rules, ask the owner.
+- **The scorecard does this for every account:** `uv run python tasks.py scorecard` (also nightly in `evening`) writes `reports/scorecard/<date>.md` with each account's sessions, trades, net, net with charges doubled, t-statistic, deflated Sharpe (deflated by every account being tried at once; `TRIALS=` adds variants tested elsewhere) and a verdict: **collecting** (< 20 sessions or trades), **prune** (enough data, net ≤ 0), **kill rule**, **unproven** or **candidate**.
+- **Kill rules** (`engine/risk/kill_rules.py`, `risk.kill_rules` in settings): ₹10,000 below the peak within the last 15 trades, or 5 losing trades in a row. On paper they are reported, never acted on; live, a killed strategy takes no new entries until the owner re-enables it.
 - **Unproven:** anything else. Keep it running or switch it off; do not tweak it to fit the last 20 sessions (that just adds a trial and uses up your data).
 
 Record what you built, the decision and open questions in `docs/DECISIONS.md` (3–5 lines, newest first).

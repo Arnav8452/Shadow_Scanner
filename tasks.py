@@ -382,6 +382,7 @@ def task_evening(params: dict[str, str]) -> int:
     print(f"{rep.errors} problem(s)")
     backup_rc = task_backup({}) if "backup" not in params.get("SKIP", "") else 0
     task_audit({})  # nightly rule audit of the day's paper trades (report only)
+    task_scorecard({})  # promotion scorecard over every journal (report only)
     return 1 if rep.errors or backup_rc else 0
 
 
@@ -416,6 +417,37 @@ def task_backfill_history(params: dict[str, str]) -> int:
         journal_dir=journal_dir, master=master,
     ):  # fmt: skip
         print(line)
+    return 0
+
+
+def task_scorecard(params: dict[str, str]) -> int:
+    """Promotion scorecard over every paper journal: sessions, trades, net, net with charges
+    doubled, t-statistic, deflated Sharpe over all strategies tried, kill rules, and a verdict
+    (collecting / prune / kill rule / unproven / candidate). Report in reports/scorecard/.
+    TRIALS= extra variants tested elsewhere (raises the deflated-Sharpe bar)."""
+    sys.path.insert(0, str(ROOT))
+    from engine.cockpit.scorecard import render, scorecard
+    from engine.core.config import load_settings
+    from engine.risk.kill_rules import KillRules
+
+    settings = load_settings()
+    raw = settings.raw
+    jd = ROOT / str((raw.get("cockpit") or {}).get("journal_dir", "data/state"))
+    kr = (raw.get("risk") or {}).get("kill_rules") or {}
+    rules = KillRules(
+        max_drawdown_inr=float(kr.get("max_drawdown_inr", 10_000)),
+        window_trades=int(kr.get("window_trades", 15)),
+        max_consecutive_losses=int(kr.get("max_consecutive_losses", 5)),
+    )
+    capital = float(settings.risk.inr(100.0))
+    extra = int(params.get("TRIALS", "0"))
+    scores = scorecard(jd, capital=capital, rules=rules, extra_trials=extra)
+    text = render(scores, now=datetime.now(IST), trials=max(1, len(scores) + extra))
+    out = ROOT / "reports" / "scorecard" / f"{_today_ist().isoformat()}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    print(text)
+    print(f"-> {out}")
     return 0
 
 

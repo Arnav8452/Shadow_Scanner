@@ -78,6 +78,10 @@ class CondorConfig:
     # 13 Nov 2026 (owner): before a weekend or holiday, book a structure that has captured at
     # least this % of its take-profit (do not carry gap risk for the last few rupees).
     weekend_book_pct: float = 80.0
+    # Also book before a closure when what is left to the take-profit is under this share of
+    # the worst +-5/8% gap loss (13 Nov: Rs 345 left vs Rs 8,300 at risk = 4%), once at least a
+    # quarter of the take-profit is in hand. 0 = off.
+    weekend_reward_gap_ratio: float = 0.10
     weekend_book_time: str = "15:10"
     # ...and close the whole condor if either side's cost to close reaches this x that side's
     # credit (a combined stop lets the winning side hide the tested one).
@@ -435,6 +439,7 @@ class SpreadAccount:
         max_loss_inr: float | None = None,
         take_profit_pct: float | None = None,
         on_done: Any = None,
+        stop_mult: float | None = None,
     ) -> tuple[bool, str]:
         """``max_loss_inr`` overrides the structure's worst case for the risk gate when a hard
         (spot-conditioned) stop defines the planned loss, e.g. a synthetic future.
@@ -502,6 +507,19 @@ class SpreadAccount:
         ok, why = self.gate(max_loss, now, lots, margin_inr=margin)
         if not ok:
             return self._done(on_done, *self._refuse(structure, now, why))
+        if take_profit_pct and stop_mult and est_credit > 0:
+            # What one trade can make and lose after every order's charges, the win rate that
+            # breaks even, and the take-profit as a return on the margin it blocks.
+            rt = self.round_trip_charges(legs, books, day)
+            net_tp = est_credit * take_profit_pct / 100 * qty - rt
+            net_stop = est_credit * (stop_mult - 1) * qty + rt
+            context = {**dict(context or {}), "economics": {
+                "net_tp": round(net_tp, 0), "net_stop": round(net_stop, 0),
+                "charges": round(rt, 0),
+                "breakeven_win_pct": round(net_stop / (net_tp + net_stop) * 100, 1)
+                if net_tp + net_stop > 0 else None,
+                "tp_on_margin_pct": round(net_tp / margin * 100, 2) if margin else None,
+            }}  # fmt: skip
         ex: dict[str, Any] = {
             "structure": structure, "underlying": underlying, "expiry": expiry,
             "legs": [*wings, *shorts], "todo": [*wings, *shorts], "filled": [],
@@ -911,7 +929,9 @@ class SpreadAccount:
                     "stress": self.gap_stress(p.legs, p.underlying),
                     "stress_cap": self.gap_cap(),
                     "context": {
-                        k: p.context[k] for k in ("wing_cost_pct", "adjustments") if k in p.context
+                        k: p.context[k]
+                        for k in ("wing_cost_pct", "adjustments", "economics")
+                        if k in p.context
                     },
                 }
             )
@@ -1347,6 +1367,7 @@ class CondorStrategy:
             reason=p.reason,
             context=self.context(),
             take_profit_pct=self.cfg.take_profit_pct,
+            stop_mult=self.cfg.stop_mult,
         )
         self.decision = (
             "managing exits (take profit, stop, short-strike touch, order flow, time)"
@@ -1445,6 +1466,23 @@ class CondorStrategy:
                     f"booked before the market closure: {got / target * 100:.0f}% of the "
                     f"take-profit captured (>= {c.weekend_book_pct:g}%)"
                 )
+            if (
+                tomorrow_closed
+                and c.weekend_reward_gap_ratio > 0
+                and local.strftime("%H:%M") >= c.weekend_book_time
+                and target > 0
+                and got >= target * 0.25
+            ):
+                w = worst(
+                    self.account.gap_stress([lg for lg in pos.legs if lg.open], pos.underlying)
+                )
+                left = (target - got) * pos.qty
+                if w is not None and w[1] < 0 and left < c.weekend_reward_gap_ratio * -w[1]:
+                    return (
+                        f"booked before the market closure: Rs {left:,.0f} left to the "
+                        f"take-profit vs Rs {-w[1]:,.0f} at risk in a {w[0]} gap "
+                        f"(under {c.weekend_reward_gap_ratio:.0%})"
+                    )
         for side, kind in (("put", "PE"), ("call", "CE")):
             legs = [lg for lg in pos.legs if lg.kind == kind and lg.open]
             sh = [lg for lg in legs if lg.side == "SELL"]

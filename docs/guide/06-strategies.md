@@ -86,6 +86,9 @@ Code: `engine/cockpit/condor.py`. Settings: `cockpit.condor`. Checked once a min
 - **15:00 on the day before expiry**.
 - **Either side** costing **2.2×** its own credit to close. A combined stop lets the winning side hide the tested one.
 - **Before a weekend or holiday**, from 15:10: book the structure if it has captured **≥ 80%** of its take-profit, rather than carry gap risk for the last few rupees.
+- **Also before a closure**, from 15:10: book when what is left to the take-profit is under **10%** of the worst ±5/8% gap loss (`weekend_reward_gap_ratio`), once a quarter of the take-profit is in hand. On 13 Nov: ₹345 left against ₹8,300 at risk = 4%.
+- **Economics at entry** (on the card): the take-profit and the stop after all 8 orders' charges, the win rate that only breaks even, and the take-profit as a % of the margin. A 1-lot, 150-pt Nifty condor with a 32.7-pt credit: +₹764 / −₹2,425, needs 76% wins, 1.0% of ₹73,600 margin.
+- **What would change that ratio:** the take-profit and stop multiples, not the credit size. With a 50% take-profit and a 2× stop, reward ≈ 0.5C − charges and risk ≈ C + charges, about 1 : 3 whatever C is. Short delta (0.16 vs 0.20), the stop (2× vs 1.5×) and condor vs one-sided 2-leg spread are being compared on two years of candles before any default changes.
 
 **Adjustments (SPEC 5.1):**
 - **Untested side booked:** when one side has decayed **85%** and the other costs at least its credit to close, that side is closed and the tested side stays on. At most one adjustment per condor. Take-profit and stops then count what the booked side cost.
@@ -195,7 +198,12 @@ Code: `engine/cockpit/plays_long.py`. These may hold for minutes only because ea
   - a futures **absorption floor (ceiling)** cleared by **10 points**, with 5-minute CVD agreeing;
   - a **30-minute CVD divergence** (price makes a new low but CVD doesn't, or the mirror).
 - **Vehicle:** a **0.60 delta** option with ≥ 5 days left.
-- **Exits:** stop when the index crosses back through the zone; otherwise held to the 15:20 square-off.
+- **Exits:**
+  - **Structural stop:** the index crosses back through the zone; for a **divergence** entry (no zone), the index goes **0.12%** beyond the 30-minute high (bearish) or low (bullish) the divergence formed at. That is about 98 Sensex points, roughly ₹1,200 on the option.
+  - **Premium backstop:** 1.5× the option's expected move to the structural stop (delta), at least 5% of premium, for gaps. The risk gate books this as the planned loss.
+  - **Step trail:** at **+12%** the stop moves to the charges breakeven (+1%); at **+20%** it locks **+10%**.
+  - Otherwise held to the 15:20 square-off (no target, so a trend wave can run).
+- **Why (13 Nov):** a divergence entry at 13:42 had only a 29% premium stop: Sensex would have had to rally 421 points (−₹5,136) before the trade admitted it was wrong, more than the whole ₹4,000 daily limit, and a winning wave had no protection.
 
 ---
 
