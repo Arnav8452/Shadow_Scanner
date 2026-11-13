@@ -898,7 +898,14 @@ function requestChain() {
   send({ type: "chain", underlying: und, expiry: exp });
 }
 function renderChainPage() {
-  if (tab !== "chain" || !snap) return;
+  if (tab !== "chain") return;
+  if (!snap) {
+    // No snapshot from this source (live engine stopped, or no replay running): never leave the
+    // other source's chain on screen under this label (13 Nov: a replay's 09:14 chain stayed up
+    // in Live mode, and the view buttons did nothing).
+    $("fc-table").innerHTML = `<tr><td class="empty">${source === "replay" ? "No replay running: start one above." : "Live engine not running: no chain. Use Replay for a recorded day."}</td></tr>`;
+    $("fc-stats").innerHTML = ""; lastHtml.fc = null; return;
+  }
   const unds = Object.keys(snap.strip || {});
   if (!fcUnd) fcUnd = unds[0];
   $("fc-und").innerHTML = unds.map((u) => `<button data-u="${esc(u)}" class="${u === fcUnd ? "on" : ""}">${esc(u)}</button>`).join("");
@@ -1195,7 +1202,7 @@ segment("filters", "f", (v) => { filter = v; lastSort = 0; schedule(); });
 segment("rtabs", "r", (v) => { rtab = v; rightHtml = ""; view.rtab = v; saveView(); schedule(); });
 segment("sorts", "o", (v) => { sortMode = v; lastSort = 0; schedule(); });
 segment("itab-seg", "i", (v) => { itab = v; lastHtml.ibody = ""; requestChain(); schedule(); });
-segment("srcs", "src", (v) => { source = v; snap = null; book = null; send({ type: "source", value: v }); $("replaybar").classList.toggle("show", v === "replay"); renderStatus(); clearDesk(); });
+segment("srcs", "src", (v) => { source = v; snap = null; book = null; chainMsg = null; lastHtml.fc = null; send({ type: "source", value: v }); $("replaybar").classList.toggle("show", v === "replay"); renderStatus(); clearDesk(); renderChainPage(); });
 function showTab(v) {
   tab = v; for (const b of $("tabs").children) b.classList.toggle("on", b.dataset.tab === v);
   $("desk").classList.toggle("hide", v !== "desk"); $("research").classList.toggle("show", v === "research");

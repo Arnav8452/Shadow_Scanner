@@ -18,10 +18,12 @@ attention, not signals; they are counted as trials if ever traded.
 
 from __future__ import annotations
 
+import itertools
 import json
+import math
 import statistics
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -177,10 +179,20 @@ def screen(
     now: datetime,
     events: Sequence[Any] = (),
     ban: Sequence[str] = (),
+    results_dates: Mapping[str, date] | None = None,
     vol_window: int = 20,
     ivp_lookback: int = 252,
     ivp_min_obs: int = 60,
+    rich_iv_rv: float = 1.1,
+    big_move_pct: float = 5.0,
 ) -> dict[str, Any]:
+    """``results_dates``: next results board meeting per symbol (NSE's full list), on top of
+    the events calendar (which carries only the index heavyweights).
+
+    "Rich premium" needs IV in the top 30% of its year AND above 20-day realized vol (the
+    futures' close-to-close, roll days skipped) by ``rich_iv_rv``, no results within 7 days,
+    and no move of ``big_move_pct`` or more that day (its IV is the event's, not a premium to
+    sell)."""
     """Rows for the newest session whose file was public by ``now`` (19:30 rule)."""
     local = now.astimezone(IST)
     last_known = (
@@ -197,10 +209,16 @@ def screen(
         return {"day": None, "rows": [], "note": "bhavcopy unreadable"}
     vol_days = days[-1 - vol_window : -1]
     vol_hist: dict[str, list[int]] = defaultdict(list)
-    for d in vol_days:
+    closes: dict[str, list[tuple[str, float]]] = defaultdict(list)  # (near expiry, close)
+    for d in [*vol_days, t]:
         s = cache.summary(d) or {}
         for sym, rec in s.items():
-            vol_hist[sym].append(int(rec.get("contracts") or 0))
+            if d != t:
+                vol_hist[sym].append(int(rec.get("contracts") or 0))
+            f = rec.get("fut") or {}
+            if f:
+                k = min(f)
+                closes[sym].append((k, float(f[k])))
     # IV history only from summaries already cached (tasks.py screener-history builds a year).
     iv_hist: dict[str, list[float]] = defaultdict(list)
     cached = [d for d in cache.cached_days() if d < t][-ivp_lookback:]
@@ -219,6 +237,10 @@ def screen(
             continue
         if ev.start_ts >= now and (ev.symbol not in results or ev.start_ts < results[ev.symbol]):
             results[ev.symbol] = ev.start_ts
+    for sym, d in (results_dates or {}).items():
+        ts = datetime.combine(d, datetime.min.time(), IST).replace(hour=9, minute=15)
+        if ts.date() >= local.date() and (sym not in results or ts < results[sym]):
+            results[sym] = ts
     banned = set(ban)
     rows = []
     for sym, rec in cur.items():
@@ -243,13 +265,39 @@ def screen(
         res_days = (res.astimezone(IST).date() - local.date()).days if res else None
         spot = rec.get("spot")
         mp = rec.get("max_pain")
+        rets = [
+            math.log(b / a)
+            for (ka, a), (kb, b) in itertools.pairwise(closes.get(sym, []))
+            if ka == kb and a > 0 and b > 0  # the same contract: no roll jump
+        ]
+        rv = (
+            round(math.sqrt(sum(x * x for x in rets) / len(rets) * 252) * 100, 1)
+            if len(rets) >= 10
+            else None
+        )
+        is_index = rec.get("kind") == "index"
+        big_move = fut_chg is not None and abs(fut_chg) >= big_move_pct
         flags = []
         if sym in banned:
             flags.append("F&O ban: no new positions")
-        if ivp is not None and ivp >= 70 and (res_days is None or res_days > 7):
-            flags.append("rich premium: credit spread / condor candidate (5.1)")
+        if big_move:
+            flags.append(f"big move ({fut_chg:+.1f}%): IV is the event's, not a premium to sell")
+        if (
+            ivp is not None and ivp >= 70 and (res_days is None or res_days > 7) and not big_move
+            and iv is not None and (rv is None or iv >= rv * rich_iv_rv)
+        ):  # fmt: skip
+            vs = f"IV {iv:.0f} vs RV20 {rv:.0f}" if rv else f"IVP {ivp}"
+            flags.append(
+                f"rich premium ({vs}): credit spread / condor candidate (5.1)"
+                if is_index
+                else f"rich premium ({vs}); stock options are not traded at ₹2L"
+            )
         if ivp is not None and ivp <= 25:
-            flags.append("cheap options: buying candidate (5.2 / 5.8)")
+            flags.append(
+                "cheap options: buying candidate (5.2)"
+                if is_index
+                else "cheap options: swing option candidate (5.8)"
+            )
         if res_days is not None and res_days <= 10:
             flags.append(f"results in {res_days} d: IV crush risk (5.5)")
         if vol_x is not None and vol_x >= 2:
@@ -266,6 +314,7 @@ def screen(
                 "iv_chg": round(iv - p_iv, 2) if iv and p_iv else None,
                 "ivp": ivp,
                 "ivp_days": len(hist),
+                "rv20": rv,
                 "vol_x": vol_x,
                 "fut_oi_chg_pct": oi_chg,
                 "quadrant": _quadrant(fut_chg, oi_chg),

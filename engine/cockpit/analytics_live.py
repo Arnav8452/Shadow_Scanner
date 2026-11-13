@@ -18,7 +18,7 @@ import math
 import statistics
 import threading
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -478,9 +478,15 @@ class LiveAnalytics:
             [und, exp, now, now - timedelta(seconds=lookback_s)],
         )
         legs: dict[float, dict[str, dict[str, float]]] = {}
+        # Before 09:15 Upstox's previous close for an option is two sessions old (13 Nov:
+        # 25000 PE 142.55 = 11 Nov's close, while its last price 69.05 was 12 Nov's), so every
+        # pre-open change would be against the wrong day: show no change until the open.
+        pre_open = now.astimezone(IST).time() < time(9, 15)
         for kind, strike, bid, ask, oi, ltp, pc, vol in rows:
             if strike is None:
                 continue
+            if pre_open:
+                pc = 0.0
             legs.setdefault(float(strike), {})[str(kind)] = {
                 "bid": float(bid or 0.0),
                 "ask": float(ask or 0.0),

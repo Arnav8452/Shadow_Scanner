@@ -4,6 +4,25 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Screener and Option chain tabs reviewed; priority list status (13 Nov 2026, evening)
+
+**Priority list** (`priority_tasks.md`):
+1. Option warm start: done.
+2. Wings on P1's feed: not built.
+3. `log3_mom`: done.
+4. Candle backtester: running in its own session.
+5. BSE F&O bhavcopy: not built.
+
+**Screener tab:**
+- **Results:** the column was empty for most stocks; the events calendar has only the heavyweights. It now also reads NSE's full board-meeting list. ABB at IVP 100 was "rich premium" with results the next day.
+- **"Rich premium":** fired on about half the list on IVP alone. It now also needs IV ≥ 1.1× the futures' RV20 and no ±5% move that day (PAGEIND −13%), and stock rows say stock options are not traded at ₹2L. 12 Nov: 33 flags; Nifty dropped out (IV 16.3 < RV20 17.2).
+- **Max pain** 3–10% below price for most stocks is real, not a bug: OI was built below, before the rally (Reliance: 1,100–1,200 puts, 1,300–1,350 calls).
+- Flags only look run together in copied text; on screen they are separate chips.
+
+**Option chain tab:**
+- **Pre-open changes were wrong:** before 09:15, Upstox's option prev_close is two sessions old (25000 PE: 142.55 vs 69.05), so puts showed −50 to −70% on a −0.35% index. The change is blank until 09:15.
+- **Stale chain on mode switch:** with no snapshot from the selected source, the other source's chain stayed on screen (a replay's 09:14 chain under "Live") and the view buttons did nothing. The chain now clears on a mode switch and says why it is empty.
+
 ## Research tab review (owner's PDF of 13 Nov): bugs fixed (13 Nov 2026, evening)
 
 **Signal study (0 sessions):**

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from engine.cockpit.research import STUDY_BANDS, context_stats, net_deals, study_rows
 from engine.strategies.swing_scanner import Setup, SwingConfig, scan_symbol
@@ -89,3 +90,62 @@ def test_swing_breakout_too_far_past_the_level_is_not_taken() -> None:
     assert scan_symbol("AAA", bars_from(far), CFG) is None
     loose = SwingConfig(**{**CFG.__dict__, "max_extension_pct": 10.0})
     assert scan_symbol("AAA", bars_from(far), loose) is not None
+
+
+def _sums(last_move: float, iv_last: float, daily_move: float) -> dict:
+    from datetime import date
+
+    base = date(2026, 6, 1)
+    sums: dict = {}
+    px = 1000.0
+    for i in range(80):
+        px *= 1 + (daily_move if i % 2 else -daily_move)
+        sums[base + timedelta(days=i)] = {"ACME": {
+            "kind": "stock", "spot": px, "contracts": 100, "fut": {"2026-12-30": px},
+            "fut_oi": 10_000, "atm_iv": 20.0 + (i % 10) * 0.1}}  # fmt: skip
+    last = base + timedelta(days=80)
+    sums[last] = {"ACME": {"kind": "stock", "spot": px * (1 + last_move), "contracts": 100,
+                           "fut": {"2026-12-30": px * (1 + last_move)}, "fut_oi": 10_000,
+                           "atm_iv": iv_last}}  # fmt: skip
+    return sums
+
+
+def test_screener_rich_premium_needs_iv_over_realized_and_no_event() -> None:
+    from datetime import datetime
+
+    from engine.cockpit.screener import screen
+    from engine.core.rules import IST
+    from tests.data.test_cockpit_screener import _Cache
+
+    def row(sums: dict, **kw: object) -> dict:
+        last = max(sums)
+        out = screen(_Cache(sums), now=datetime.combine(last, datetime.min.time(), IST)
+                     .replace(hour=20), **kw)  # fmt: skip
+        return out["rows"][0]
+
+    calm = row(_sums(0.0, 30.0, 0.005))  # RV20 ~8%, IV 30 at IVP 100: rich
+    assert any(f.startswith("rich premium (IV 30 vs RV20") for f in calm["flags"])
+    assert any("stock options are not traded" in f for f in calm["flags"])
+    wild = row(_sums(0.0, 30.0, 0.025))  # RV20 ~40% > IV 30: not rich
+    assert not any(f.startswith("rich") for f in wild["flags"]) and wild["rv20"] > 30
+    moved = row(_sums(-0.08, 30.0, 0.005))  # -8% day: the IV is the event's
+    assert any(f.startswith("big move") for f in moved["flags"])
+    assert not any(f.startswith("rich") for f in moved["flags"])
+    last = max(_sums(0.0, 30.0, 0.005))
+    res = row(_sums(0.0, 30.0, 0.005), results_dates={"ACME": last + timedelta(days=3)})
+    assert res["results"] and not any(f.startswith("rich") for f in res["flags"])
+
+
+def test_chain_ignores_the_feeds_previous_close_before_the_open(repo_root: Path) -> None:
+    from datetime import date, datetime
+
+    from engine.cockpit.analytics_live import LiveAnalytics
+    from engine.core.rules import IST
+
+    rows = [("PE", 25000.0, 68.0, 70.0, 100, 69.05, 142.55, 10)]
+    store = SimpleNamespace(source_sql=lambda *a: "x", rows=lambda *a: rows)
+    pre = datetime(2026, 11, 13, 9, 8, tzinfo=IST)
+    legs = LiveAnalytics._legs(None, store, "NIFTY", date(2026, 11, 17), pre)  # type: ignore[arg-type]
+    assert legs[25000.0]["PE"]["prev_close"] == 0.0  # two sessions old before 09:15
+    legs = LiveAnalytics._legs(None, store, "NIFTY", date(2026, 11, 17), pre.replace(hour=10))  # type: ignore[arg-type]
+    assert legs[25000.0]["PE"]["prev_close"] == 142.55

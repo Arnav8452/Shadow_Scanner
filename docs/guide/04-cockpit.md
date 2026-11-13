@@ -225,6 +225,9 @@ Three sub-tabs:
 
 ## 4.3 Option chain tab
 
+- **Before 09:15** the change column is blank: until the open, Upstox's previous close for an option is two sessions old (13 Nov: the 25000 PE showed 142.55, 11 Nov's close, against a last price of 69.05, 12 Nov's), so every pre-open change would be against the wrong day.
+- **Live vs Replay:** with no snapshot from the selected source (live engine stopped, no replay running) the table says so. Before 13 Nov the other source's chain could stay on screen under the wrong label.
+
 A full Sensibull-style chain from the recorder's 1-minute snapshots, with every number computed by us.
 
 **Bar:** index buttons · **Expiry** picker (every recorded expiry, including the next monthly) · **LTP view / Greeks view / All columns** · **Per lot** (greeks and OI per lot instead of per unit) · a stats line: spot and change, synthetic forward, ATM IV and IVP, PCR by OI and by volume, **max pain**, total call and put OI with change, lot, trading minutes left, time.
@@ -254,12 +257,12 @@ All ~220 F&O underlyings (indices and stocks) from the latest NSE end-of-day fil
 |---|---|
 | **Fut price · Chg %** | Front future close and change. |
 | **ATM IV · IV chg · IVP** | Our ATM IV from closes, its change, and its percentile over up to 252 sessions (needs 60+). IVP ≥ 70 is amber, ≤ 25 green. |
-| **Results** | Next results date and days away. |
+| **Results** | Next results date and days away, from NSE's full board-meeting list (every F&O stock) and the events calendar. Before 13 Nov only the index heavyweights had one, so "—" meant unknown. |
 | **Volume ×** | Contracts traded vs the 20-session average (green at 2×+). |
 | **Fut OI % chg** | Futures OI change. |
 | **Price / OI** | Quadrant: *long build-up* (price ↑ OI ↑), *short build-up* (↓ ↑), *short covering* (↑ ↓), *long unwinding* (↓ ↓). |
 | **PCR · Max pain** | Near-expiry put/call OI ratio; max-pain strike and its distance from price. |
-| **Flags (HYPOTHESIS)** | `F&O ban: no new positions` · `rich premium: credit spread / condor candidate` (IVP ≥ 70, no results within 7 days) · `cheap options: buying candidate` (IVP ≤ 25) · `results in N d: IV crush risk` (≤ 10 days) · `unusual activity: N× volume` (≥ 2×). |
+| **Flags (HYPOTHESIS)** | `F&O ban: no new positions` · `big move (±N%)`: a day of 5% or more, whose IV is the event's · `rich premium (IV vs RV20)`: IVP ≥ 70 **and** IV at least 1.1× the futures' 20-day realized vol, no results within 7 days, no big move; for indices "credit spread / condor candidate (5.1)", for stocks "stock options are not traded at ₹2L" · `cheap options` (IVP ≤ 25): index buying candidate (5.2), stock swing option candidate (5.8) · `results in N d: IV crush risk` (≤ 10 days) · `unusual activity: N× volume` (≥ 2×). Before 13 Nov "rich premium" used IVP alone and flagged about half the list, including stocks before results and after crashes. |
 
 Flags are prompts for your attention, not signals. Stock F&O is out of scope at ₹2 lakh, so stock rows are context.
 

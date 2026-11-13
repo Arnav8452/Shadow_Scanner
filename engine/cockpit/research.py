@@ -10,7 +10,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -197,7 +197,11 @@ def screener(root: Path, journal_dir: Path, events_file: Path) -> dict[str, Any]
         events = load_calendar(events_file)
     except Exception:
         events = []
-    return screen(cache, now=now, events=events, ban=ban)
+    from engine.strategies.swing_night import results_dates
+
+    # NSE's full board-meeting list: every F&O stock, not only the index heavyweights.
+    res = results_dates(raw, now.date() - timedelta(days=1))
+    return screen(cache, now=now, events=events, ban=ban, results_dates=res)
 
 
 CONTEXT_FEATURES: tuple[tuple[str, str, Any], ...] = (
