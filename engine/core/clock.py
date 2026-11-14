@@ -2,12 +2,14 @@
 
 Session times are exchange rules, so they live in ``config/rules/market_sessions.csv``
 (effective-dated, sourced) — never as constants in code. Example: NSE F&O moved its normal
-close from 15:30 to 15:40 on 3 Aug 2026 (NSE/FAOP/74467).
+close from 15:30 to 15:40 on 3 Aug 2026 (NSE/FAOP/74467) and to 15:45 on 7 Dec 2026
+(NSE/FAOP/77356), when expiring index contracts also began to stop at 15:30 on their expiry day.
 """
 
 from __future__ import annotations
 
 import time as _time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Protocol
@@ -77,6 +79,15 @@ class MarketSession:
     pre_open_start: time | None
     pre_open_end: time | None
     verified: bool  # every row used was primary/secondary
+    # Expiring index derivatives stop trading at this time on their expiry day (15:30 from
+    # 7 Dec 2026); None where no rule row exists, meaning the normal close.
+    index_expiry_close: time | None = None
+    # Expiry-day final settlement averages the underlying over this window (15:00-15:30 from
+    # 7 Dec 2026); None where settlement is not a VWAP (3 Aug-6 Dec 2026: CAS closing price).
+    settle_vwap_start: time | None = None
+    settle_vwap_end: time | None = None
+    # Start of the daily close-price VWAP window, which ends at the normal close.
+    close_vwap_start: time | None = None
 
     def at(self, t: time) -> datetime:
         return datetime.combine(self.day, t, IST)
@@ -92,6 +103,15 @@ class MarketSession:
     @property
     def first_dt(self) -> datetime:
         return self.at(self.pre_open_start or self.normal_open)
+
+    def expiry_close(self, *, index: bool) -> time:
+        """When a contract expiring on ``day`` stops trading (index or stock derivative)."""
+        if index and self.index_expiry_close is not None:
+            return self.index_expiry_close
+        return self.normal_close
+
+    def expiry_close_dt(self, *, index: bool) -> datetime:
+        return self.at(self.expiry_close(index=index))
 
     def in_normal(self, ns: int) -> bool:
         return to_ns(self.open_dt) <= ns < to_ns(self.close_dt)
@@ -138,7 +158,32 @@ def market_session(
         pre_open_start=get("pre_open_start", False),
         pre_open_end=get("pre_open_end", False),
         verified=verified,
+        index_expiry_close=get("index_expiry_close", False),
+        settle_vwap_start=get("settle_vwap_start", False),
+        settle_vwap_end=get("settle_vwap_end", False),
+        close_vwap_start=get("close_vwap_start", False),
     )
+
+
+def expiry_close_fn(
+    book: RuleBook, segment: str = "fo", *, allow_unverified: bool = True
+) -> Callable[[str, date, bool], time]:
+    """``(exchange, expiry, index) -> time`` a contract expiring that day stops trading.
+
+    For instrument masters: each contract takes the rule in force on its own expiry date
+    (an index contract on its expiry day stops at 15:30 from 7 Dec 2026, a stock one at 15:45).
+    UNVERIFIED rows are allowed by default (BSE's session rows are broker-master only).
+    """
+    cache: dict[tuple[str, date, bool], time] = {}
+
+    def close_for(exchange: str, expiry: date, index: bool) -> time:
+        key = (exchange, expiry, index)
+        if key not in cache:
+            s = market_session(book, exchange, segment, expiry, allow_unverified=allow_unverified)
+            cache[key] = s.expiry_close(index=index)
+        return cache[key]
+
+    return close_for
 
 
 def recording_window(

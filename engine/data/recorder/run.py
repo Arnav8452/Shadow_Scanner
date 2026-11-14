@@ -26,6 +26,7 @@ from engine.core.clock import (
     Clock,
     MarketSession,
     SystemClock,
+    expiry_close_fn,
     from_ns,
     market_session,
     recording_window,
@@ -39,6 +40,7 @@ from engine.data.quality.checks import FlagThresholds, qc_day, write_qc
 from engine.data.recorder.core import Recorder, RecorderConfig
 from engine.data.recorder.universe import Selection, UnderlyingSpec, UniverseConfig, select_universe
 from engine.data.reference.instrument_master import (
+    ExpiryCloseFn,
     InstrumentMaster,
     classify_expiries,
     fetch_fyers_master,
@@ -452,7 +454,7 @@ def load_master(
     now: datetime,
     *,
     fetch: bool,
-    close_time: time | None = None,
+    close_time: time | ExpiryCloseFn | None = None,
     refresh_tag: str | None = None,
 ) -> InstrumentMaster:
     """Today's master (downloaded once a day). ``refresh_tag`` forces a fresh intraday
@@ -614,7 +616,7 @@ def record_day(
     if clock.now_ns() >= to_ns(end):
         return RecordResult(day, "skipped", f"window already closed at {end:%H:%M}")
     master = load_master(
-        rs, day, from_ns(clock.now_ns()), fetch=fetch_master, close_time=primary.normal_close
+        rs, day, from_ns(clock.now_ns()), fetch=fetch_master, close_time=expiry_close_fn(book)
     )
     adapter = adapter_factory(rs, master, clock)
     out_dir = rs.sim_dir if sim else rs.parquet_dir
@@ -654,7 +656,7 @@ def record_day(
                     day,
                     from_ns(clock.now_ns()),
                     fetch=True,
-                    close_time=primary.normal_close,
+                    close_time=expiry_close_fn(book),
                     refresh_tag=from_ns(clock.now_ns()).strftime("%H%M"),
                 )
             )

@@ -703,8 +703,10 @@ class SpreadPlay(Status):
     last_result: str = ""  # the latest entry attempt's outcome (refusals stay visible)
     retry_s: float = 60.0  # after a refused or dropped plan, wait this long before the next
     retry_at: datetime | None = None
-    # A structure whose short leg expires today is closed by this time, before the 15:10-15:40
-    # closing-VWAP window that sets its settlement (cockpit.spread_expiry_exit).
+    # A structure whose short leg expires today is closed by this time, before the window that
+    # sets its settlement (cockpit.spread_expiry_exit). From 7 Dec 2026 that is the underlying's
+    # cash VWAP 15:00-15:30 (settle_vwap_* in market_sessions.csv); 3 Aug-6 Dec 2026 it was
+    # the cash closing-auction price (~15:30-15:35).
     expiry_exit: str = "15:00"
 
     def step(self, now: datetime, m: Market) -> list[str]:
@@ -859,7 +861,7 @@ class SpreadPlay(Status):
                 and pos.expiry == now.astimezone(IST).date()
             )
             why = (
-                f"expiry-day exit {self.expiry_exit} (before the 15:10 settlement window)"
+                f"expiry-day exit {self.expiry_exit} (before the expiry settlement window)"
                 if shorts_expiring and hhmm(now) >= self.expiry_exit
                 else None
             )

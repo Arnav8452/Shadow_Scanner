@@ -13,7 +13,7 @@ Every number below is a **HYPOTHESIS** in the strategy's code or in `config/sett
 - **Defined risk only.** A short option leg is placed only after its protective long leg has filled, and bought back first on exit (CLAUDE.md rule 1; `engine/execution/leg_sequencer.py`). A short future needs a filled long call as cover; a long future needs a long put.
 - **Lots:** one lot, except where a strategy says otherwise; paper accounts may use up to `cockpit.paper_max_lots: 2` within the loss limits. Live trading would stay at one lot (CLAUDE.md rule 5).
 - **Times:**
-  - multi-leg positions whose short leg expires today: closed at 15:00, before the 15:10 settlement window;
+  - multi-leg positions whose short leg expires today: closed at 15:00, before the expiry settlement window (15:00–15:30 cash VWAP from 7 Dec 2026);
   - no entries in the first 15 minutes or inside an event window;
   - no new entries after 15:00;
   - intraday positions are squared off at 15:20;
@@ -265,7 +265,7 @@ Code: `engine/cockpit/plays_spread.py`. Wings are always bought first and shorts
   - call OI there unwinding **≥ 20%**;
   - that put spiking **≥ 50%** above its 13:45 price.
 - **Structure:** **sell** that put with a cheap wing below (ask under ₹3): a credit spread.
-- **Exits:** 90% of the credit; 2× the credit; otherwise closed at **15:00**, before the 15:10 settlement window.
+- **Exits:** 90% of the credit; 2× the credit; otherwise closed at **15:00**, before the expiry settlement window.
 
 ### Hedged synthetic future — `synthetic` (futures 1)
 - **Window:** 09:45–14:00.

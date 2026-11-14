@@ -157,7 +157,8 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   credit_charges_mult: 3          # credit spreads: take-profit >= this x round-trip charges
   paper_margin_cap_pct: 100       # owner 13 Nov: each strategy's own broker margin <= 100% of
                                   # capital (Rs 2L), never blocked by another strategy (live: 50%)
-  spread_expiry_exit: "15:00"     # short legs expiring today closed before the 15:10 settlement window
+  spread_expiry_exit: "15:00"     # short legs expiring today closed before the settlement window
+                                  # (15:00-15:30 cash VWAP from 7 Dec 2026; market_sessions.csv)
   gate2_mode: volatility          # 13 Nov (owner's gate2 notes): ATR-aware stop/half-risk/lock/trail;
                                   # "charges" = the 12 Nov 2x/3x-breakeven ratchet (a variant)
   vol_sizing: true                # SPEC 5.7: factor = median RV20 (1y) / RV20, clamped 0.5-1.5; never sizes up:

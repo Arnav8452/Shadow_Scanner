@@ -57,8 +57,10 @@ class CockpitConfig:
     zones: ZoneConfig = ZoneConfig()  # noqa: RUF009 (frozen, immutable default)
     user_pins_max: int = 3
     # Readings (12 Nov 2026 review, HYPOTHESIS): when they stop counting, and which options
-    # can carry one. Expiry-day index settlement averages the last 30 minutes (15:00-15:30;
-    # UNVERIFIED against the NSE/BSE methodology text), so 0DTE moves after ~14:45 barely move it.
+    # can carry one. From 7 Dec 2026 expiry-day index settlement is the index computed from its
+    # constituents' cash VWAP over 15:00-15:30 (NSE/FAOP/77356 §5; settle_vwap_* in
+    # market_sessions.csv), so 0DTE moves after ~14:45 barely move it. 3 Aug-6 Dec 2026 it was
+    # the cash closing-auction price instead.
     readings_until: str = "15:15"
     readings_until_expiry_day: str = "14:45"
     reading_min_abs_delta: float = 0.15
@@ -97,8 +99,9 @@ class CockpitConfig:
     gap_scenarios: tuple[tuple[float, float], ...] = ((-8, 8), (-5, 5), (5, -2), (8, -3))
     gap_carry: bool = True
     gap_carry_time: str = "15:10"
-    # Short option legs expiring today are closed by this time, before the 15:10-15:40 closing
-    # VWAP window that sets their settlement (owner delegated, 13 Nov 2026).
+    # Short option legs expiring today are closed by this time, before the window that sets
+    # their settlement: the 15:00-15:30 cash VWAP from 7 Dec 2026, the closing-auction price
+    # before (owner delegated, 13 Nov 2026).
     spread_expiry_exit: str = "15:00"
     # execution.disconnect_kill_after_s (APPROVED): no fresh quote for this long in market hours
     # freezes new paper entries and pauses exits (never flatten on stale prices).

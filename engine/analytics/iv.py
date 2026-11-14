@@ -4,7 +4,8 @@ Implements SPEC §4.2:
 1. **Dual Clock**:
    - ``t_cal``: calendar time to expiry in years (ACT/365) for discounting ``exp(-r * t_cal)``.
    - ``t_var``: trading-minute variance clock in years (counting actual IST trading minutes from
-     ``now`` to ``15:30``/``15:40`` on expiry day, divided by ``252 * session_minutes``) so weekend
+     ``now`` to the expiry-day close from ``config/rules/market_sessions.csv``, divided by
+     ``252 * session_minutes``; see ``engine.analytics.expiry_clock``) so weekend
      and holiday theta decay does not artificially crush Friday/Monday IVs.
    - Near-expiry floor: ``min_trading_minutes = 15.0`` prevents ``T -> 0`` numerical explosion on
      expiry afternoon.
@@ -44,15 +45,15 @@ def compute_dual_clock(
     expiry_ts: datetime,
     *,
     trading_days_between: int | None = None,
-    session_minutes_per_day: float = 385.0,  # NSE F&O 09:15-15:40 = 385 mins (375 for 09:15-15:30)
+    session_minutes_per_day: float = 385.0,  # approximate; 09:15-15:40 (390 from 7 Dec 2026)
     min_trading_minutes: float = 15.0,
 ) -> DualExpiryClock:
     """Compute calendar discounting time ``t_cal`` and trading variance time ``t_var``.
 
     APPROXIMATE (calendar-day ratio, fixed session length, no holidays). For real chains use
     :func:`engine.analytics.expiry_clock.expiry_clock`, which reads session times and holidays
-    from config/rules (15:30 -> 15:40 close on 3 Aug 2026).
-    """
+    from config/rules (15:30 -> 15:40 close on 3 Aug 2026, 15:45 on 7 Dec 2026, and 15:30 for an
+    index contract on its own expiry day from 7 Dec 2026)."""
     if now.tzinfo is None or expiry_ts.tzinfo is None:
         raise ValueError("now and expiry_ts must be timezone-aware")
     delta_s = max(0.0, (expiry_ts - now).total_seconds())

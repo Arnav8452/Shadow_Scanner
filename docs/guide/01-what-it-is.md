@@ -95,7 +95,7 @@ Nothing trades on a single reading. Readings flicker in and out every second.
 - Pre-earnings straddles and stock F&O (deferred at ₹2 lakh), volatility-managed sizing, pairs, index-rebalance and post-earnings drift ideas.
 
 **Unverified**
-- The expiry-day rules (no long entries after 14:30, exit at 14:45) rest on the index's settlement value being an average over the last half hour. NSE's F&O closing-price window (15:10–15:40 since 3 Aug 2026) is verified in `config/rules/market_sessions.csv`; how the index's own settlement value is averaged, and BSE's equivalent, are not yet checked against primary text.
+- The expiry-day rules (no long entries after 14:30, exit at 14:45) rest on the index's settlement value being an average over the last half hour. From 7 Dec 2026 that is verified: the index computed from its constituents' cash VWAP over 15:00–15:30 (`NSE/FAOP/77356`, SEBI circular of 15 Oct 2026, which binds BSE too). From 3 Aug to 4 Dec 2026 settlement was the cash closing-auction price instead. BSE's own implementing circular has not been read.
 - Several fee rows and the proposed risk limits need real contract notes or owner sign-off; `uv run python tasks.py rules` lists every `UNVERIFIED` row.
 
 ## Repository layout

@@ -373,20 +373,26 @@ def load_fyers_master(paths: Sequence[Path], *, as_of: date) -> InstrumentMaster
 
 # --------------------------------------------------------------------------- Upstox format
 
+# (exchange, expiry date, is index derivative) -> the IST time the contract stops trading.
+ExpiryCloseFn = Callable[[str, date, bool], time]
+
+
 UPSTOX_MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
 # Instrument keys: options/futures "NSE_FO|<exchange token>", indices "NSE_INDEX|Nifty 50",
 # equities "NSE_EQ|<ISIN>". Tick sizes in the file are in paise; expiry is epoch ms at 23:59:59.
 
 
 def parse_upstox_master(
-    rows: Iterable[Mapping[str, Any]], *, close_time: time | None = None
+    rows: Iterable[Mapping[str, Any]], *, close_time: time | ExpiryCloseFn | None = None
 ) -> list[Instrument]:
     """Parse rows of an Upstox ``<EXCHANGE>.json.gz`` instrument file.
 
     Index futures/options carry ``underlying_key`` (e.g. ``NSE_INDEX|Nifty 50``) and
     ``underlying_symbol`` (``NIFTY``). Index rows get that same underlying name so spot and chain
     line up. An index that derivatives refer to but the file does not list is added.
-    ``close_time`` sets each expiry to that IST time on the expiry date (the file says 23:59:59).
+    ``close_time`` sets each expiry to that IST time on the expiry date (the file says 23:59:59);
+    a function gets ``(exchange, expiry date, is index derivative)`` so each contract takes the
+    close in force on its own expiry day (index contracts stop at 15:30 from 7 Dec 2026).
     """
     items = list(rows)
     und_name: dict[str, str] = {}
@@ -416,7 +422,15 @@ def parse_upstox_master(
         expiry_ts: datetime | None = None
         if r.get("expiry"):
             raw_ts = datetime.fromtimestamp(int(r["expiry"]) / 1000, IST)
-            expiry_ts = datetime.combine(raw_ts.date(), close_time, IST) if close_time else raw_ts
+            if callable(close_time):
+                is_index = "_INDEX|" in str(r.get("underlying_key") or "")
+                ex = str(r.get("exchange") or seg.split("_")[0])
+                t_close = close_time(ex, raw_ts.date(), is_index)
+                expiry_ts = datetime.combine(raw_ts.date(), t_close, IST)
+            elif close_time is not None:
+                expiry_ts = datetime.combine(raw_ts.date(), close_time, IST)
+            else:
+                expiry_ts = raw_ts
         strike = float(r.get("strike_price") or 0) if kind.is_option else None
         if kind.is_option and not strike:
             raise MasterError(f"{key}: option without strike")
@@ -508,7 +522,7 @@ def fetch_upstox_master(
 
 
 def load_upstox_master(
-    paths: Sequence[Path], *, as_of: date, close_time: time | None = None
+    paths: Sequence[Path], *, as_of: date, close_time: time | ExpiryCloseFn | None = None
 ) -> InstrumentMaster:
     instruments: list[Instrument] = []
     for p in paths:
