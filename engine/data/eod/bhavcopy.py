@@ -50,6 +50,7 @@ class CashBhavcopyRow:
     delivery_qty: int
     delivery_pct: float
     known_at: datetime
+    isin: str = ""
 
     @property
     def close_return_pct(self) -> float:
@@ -175,6 +176,7 @@ def parse_cash_bhavcopy_csv(text: str) -> list[CashBhavcopyRow]:
                 delivery_qty=deliv_qty,
                 delivery_pct=deliv_pct,
                 known_at=_eod_known_at(t_date),
+                isin=norm.get("ISIN", ""),
             )
         )
     return rows

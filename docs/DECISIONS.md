@@ -4,6 +4,26 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Equity data foundation: daily panel of every NSE stock (14 Nov 2026)
+
+The owner widened research to the whole market, cash equity first. Equity tests need clean multi-year daily data, so this builds it.
+- **Built:**
+  - `engine/data/equity/` with `tasks.py corporate-actions` and `tasks.py equity-panel`.
+  - The panel is one row per stock per day since 2015, stored in `data/parquet/equity/daily/<YYYY-MM>.parquet`. Each row has: prices; returns adjusted for corporate actions, plus total return with dividends; delivery; F&O membership that day; F&O ban; the corporate action applied; and two flags: `ca_unknown` for demergers and `gap_flag` for any |return| > 40%.
+  - Renamed stocks keep one identity through NSE's symbol-change list, matched by date so a reused symbol stays a separate stock.
+- **Corrected assumption:** NSE's bhavcopy previous close is **not** adjusted on ex-dates. Infosys's 1:1 bonus on 15 Jun 2015 shows previous close 1975.05 and close 990.45. So the adjustment comes from NSE's corporate-actions list (the `www.nseindia.com/api` endpoint behind its own page; undocumented). Bonus, split and consolidation ratios are parsed from the subject line. Rights issues are priced at the theoretical ex-rights price using the previous close. Demergers carry no ratio and are flagged, not adjusted. Checked on 2015: Infosys's ex-date return is +0.3%. The remaining |ret| > 40% rows are mostly ₹0.05-tick penny stocks and a few demergers.
+- **New EOD datasets:**
+  - `mto`: NSE's delivery position for every year (the `delivery` file only starts in late 2019).
+  - `secban`: the dated ban-list archive.
+  - Both are checked by download back to 2015 and 2018, and they are now also fetched nightly.
+- **Open:**
+  - **Index membership by date** (Nifty 50/500, etc.) is not built. NSE publishes changes as press releases, not as a history file.
+  - **Surveillance lists (ASM/GSM)** have no history found yet. Series BE (trade-for-trade) in the panel is a partial proxy.
+  - **Weekend special sessions** (Budget Saturdays, Muhurat) aren't fetched. The next row's return then spans two sessions.
+  - The panel is rebuilt on demand, not nightly.
+
+---
+
 ## EOD history before 2024: NSE old-layout bhavcopies (14 Nov 2026)
 
 - **Built:** `eod-backfill` now reaches back past 2024. NSE's UDiFF F&O and cash bhavcopies start on 1 Jan 2024. Earlier days exist only in the old layout (INSTRUMENT, SYMBOL, EXPIRY_DT … / SYMBOL, SERIES …) under `content/historical/`. The downloader picks that URL for `fo` and `cm` before 2024 and checks its header. Files go to the same paths, and every reader already handled both layouts' column names and instrument codes. Checked by download: the old layout exists from at least 2010-10-04 to 2024-07-05.
