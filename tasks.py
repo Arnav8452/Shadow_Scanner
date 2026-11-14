@@ -5,7 +5,8 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | record [SIM=1] [MINUTES=n] | qc [DATE=...] [SIM=1] [LAST=5]
                       | shadow-live [SIM=1] [MINUTES=n] [SEND=1]
                       | cockpit [OPEN=0] | replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]
-                      | eod [DATE=] | eod-backfill FROM= TO= | iv-history [FROM= TO=]
+                      | eod [DATE=] | eod-backfill FROM= TO= [DATASETS=fo,cm,indices] [IV=0]
+                      | iv-history [FROM= TO=]
                       | screener-history [DAYS=400]
                       | evening [DATE=] [STEPS=...] | fundamentals [SYMBOLS=A,B]
                       | swing [DATE=] | delivery-study [FROM= TO=] | index-weights-verify
@@ -1149,22 +1150,36 @@ def task_delivery_study(params: dict[str, str]) -> int:
 
 
 def task_eod_backfill(params: dict[str, str]) -> int:
-    """Backfill NSE end-of-day files for FROM..TO (weekdays; holidays show as missing), then
-    rebuild the IV history. DATASETS default: fo,indices (what the IV history needs)."""
+    """Backfill NSE end-of-day files for FROM..TO (weekdays; holidays show as missing).
+    DATASETS default: fo,indices. Days before 2024-01-01 come in NSE's old bhavcopy layout
+    (fo and cm), stored at the same paths. Then rebuilds the IV history over its usual window
+    (the last 400 days, like the nightly job), so an old range never replaces it; IV=0 skips
+    that. Prints progress every 50 days; safe to stop and rerun (downloaded days are skipped)."""
     raw_dir, _, _ = _eod_common()
-    from engine.data.eod.download import backfill
+    from engine.data.eod.download import EodFetch, backfill
 
     if not (params.get("FROM") and params.get("TO")):
         print("usage: tasks.py eod-backfill FROM=YYYY-MM-DD TO=YYYY-MM-DD", file=sys.stderr)
         return 2
     start, end = date.fromisoformat(params["FROM"]), date.fromisoformat(params["TO"])
     sets = params.get("DATASETS", "fo,indices").split(",")
-    results = backfill(sets, start, end, raw_dir=raw_dir, now=lambda: datetime.now(IST))
     counts: dict[str, int] = {}
-    for r in results:
+    days: set[date] = set()
+
+    def progress(r: EodFetch) -> None:
         counts[r.status] = counts.get(r.status, 0) + 1
+        if r.status == "error":
+            print(f"  {r.day} {r.dataset}: error {r.detail}", flush=True)
+        if r.day not in days:
+            days.add(r.day)
+            if len(days) % 50 == 0:
+                print(f"  … {r.day}: {counts}", flush=True)
+
+    backfill(sets, start, end, raw_dir=raw_dir, now=lambda: datetime.now(IST), progress=progress)
     print(f"backfill {start}..{end} {sets}: {counts}")
-    return task_iv_history({"FROM": params["FROM"], "TO": params["TO"]})
+    if params.get("IV") == "0":
+        return 0
+    return task_iv_history({})
 
 
 def task_stock_iv_history(params: dict[str, str]) -> int:
