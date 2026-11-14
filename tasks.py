@@ -6,7 +6,8 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | shadow-live [SIM=1] [MINUTES=n] [SEND=1]
                       | cockpit [OPEN=0] | replay DATE=YYYY-MM-DD [SPEED=5] [SIM=1]
                       | eod [DATE=] | eod-backfill FROM= TO= [DATASETS=fo,cm,indices] [IV=0]
-                      | iv-history [FROM= TO=]
+                      | iv-history [FROM= TO=] | corporate-actions [FROM= TO=]
+                      | equity-panel [FROM= TO=] [REFRESH_SYMBOLS=1]
                       | screener-history [DAYS=400]
                       | evening [DATE=] [STEPS=...] | fundamentals [SYMBOLS=A,B]
                       | swing [DATE=] | delivery-study [FROM= TO=] | index-weights-verify
@@ -1180,6 +1181,65 @@ def task_eod_backfill(params: dict[str, str]) -> int:
     if params.get("IV") == "0":
         return 0
     return task_iv_history({})
+
+
+def task_corporate_actions(params: dict[str, str]) -> int:
+    """Download NSE's corporate-actions list (bonus, split, rights, dividend, demerger) by
+    month into data/raw/reference/corporate_actions/. FROM default 2015-01-01, TO default
+    90 days ahead (ex-dates are announced early). Past months are fetched once."""
+    raw_dir, _, _ = _eod_common()
+    from engine.data.equity.corporate_actions import fetch_corporate_actions
+
+    today = _today_ist()
+    start = date.fromisoformat(params.get("FROM", "2015-01-01"))
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else today + timedelta(days=90)
+    status = fetch_corporate_actions(raw_dir, start, end, today=today)
+    counts: dict[str, int] = {}
+    for month, s in status.items():
+        counts[s.split()[0]] = counts.get(s.split()[0], 0) + 1
+        if s.startswith("error"):
+            print(f"  {month}: {s}")
+    print(f"corporate actions {start}..{end}: {counts}")
+    return 1 if counts.get("error") else 0
+
+
+def task_equity_panel(params: dict[str, str]) -> int:
+    """Build the daily panel of every NSE stock into data/parquet/equity/daily/<YYYY-MM>.parquet
+    (prices, corporate-action-clean returns, dividends, delivery, F&O membership, ban list;
+    see engine/data/equity/panel.py). FROM default 2015-01-01 (rebuilding from a later month
+    seeds each stock's previous close from the months already written), TO default today.
+    Needs the cm (and ideally mto, fo, secban) files and `tasks.py corporate-actions`.
+    REFRESH_SYMBOLS=1 re-downloads NSE's symbol-change list."""
+    raw_dir, _, _ = _eod_common()
+    from engine.data.eod.download import weekdays
+    from engine.data.equity.corporate_actions import load_corporate_actions
+    from engine.data.equity.panel import last_closes_before, write_panel
+    from engine.data.equity.sources import (
+        fetch_symbol_changes,
+        parse_symbol_changes,
+        symbol_changes_path,
+    )
+
+    start = date.fromisoformat(params.get("FROM", "2015-01-01"))
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else _today_ist()
+    sc = symbol_changes_path(raw_dir)
+    if params.get("REFRESH_SYMBOLS") == "1" or not sc.exists():
+        fetch_symbol_changes(raw_dir)
+    changes = parse_symbol_changes(sc.read_text("utf-8", errors="replace"))
+    actions = load_corporate_actions(raw_dir)
+    if not actions:
+        print("no corporate actions downloaded: run `tasks.py corporate-actions` first")
+        return 2
+    out_dir = raw_dir.parent / "parquet" / "equity" / "daily"
+    seed = last_closes_before(out_dir, start.strftime("%Y-%m"))
+    counts = write_panel(raw_dir, out_dir, weekdays(start, end), changes, actions, last_close=seed)
+    rows = sum(counts.values())
+    print(
+        f"equity panel {start}..{end}: {rows} rows in {len(counts)} months -> {out_dir}"
+        f" ({len(changes)} symbol changes, {len(actions)} corporate actions,"
+        f" seeded {len(seed)} previous closes)"
+    )
+    return 0 if rows else 1
 
 
 def task_stock_iv_history(params: dict[str, str]) -> int:

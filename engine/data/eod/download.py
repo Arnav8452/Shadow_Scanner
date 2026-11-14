@@ -40,6 +40,12 @@ NSE_EOD_URLS: dict[str, str] = {
     # the underlying's close in ClsPric: readers skip contracts expiring that day.
     "bse_fo": "https://www.bseindia.com/download/BhavCopy/Derivative/"
     "BhavCopy_BSE_FO_0_0_0_{ymd}_F_0000.CSV",
+    # Delivery per security (all years; `delivery` above starts in late 2019) and the dated
+    # ban-list archive (`fo_ban` in flows.py keeps only the current file). Checked by download
+    # 14 Nov 2026: MTO 2018-01-03, 2024-07-01, 2026-11-13; secban 2015-01-01, 2026-11-13.
+    # A secban file is named for the trade date it applies to (published the evening before).
+    "mto": "https://nsearchives.nseindia.com/archives/equities/mto/MTO_{dmy}.DAT",
+    "secban": "https://nsearchives.nseindia.com/archives/fo/sec_ban/fo_secban_{dmy}.csv",
 }
 # A text marker each genuine file contains (NSE sometimes answers with an HTML error page).
 _MARKERS: dict[str, bytes] = {
@@ -50,6 +56,8 @@ _MARKERS: dict[str, bytes] = {
     "participant_vol": b"Client Type",
     "indices": b"Index Name",
     "bse_fo": b"TckrSymb",
+    "mto": b"Security Wise Delivery",
+    "secban": b"Securities in Ban",
 }
 DATASETS = tuple(NSE_EOD_URLS)
 
