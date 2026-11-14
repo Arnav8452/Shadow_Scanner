@@ -8,6 +8,8 @@ import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
+
 from engine.core.rules import IST
 from engine.data.eod.bhavcopy import parse_cash_bhavcopy_csv, parse_fno_bhavcopy_csv
 from engine.data.eod.download import (
@@ -141,3 +143,49 @@ def test_old_cm_layout_parses_equity_series_only() -> None:
     assert (r.open, r.high, r.low, r.close, r.prev_close) == (100.0, 104.0, 99.0, 103.5, 100.5)
     assert r.traded_qty == 20000 and r.turnover_inr == 2050000.5
     assert r.delivery_qty == 0  # delivery comes from its own file
+
+
+def test_cut_off_download_is_a_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import http.client
+    import urllib.request
+
+    from engine.core import net
+
+    class Resp:
+        def __enter__(self) -> Resp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            raise http.client.IncompleteRead(b"x" * 10, 90)
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout: Resp())
+    with pytest.raises(ConnectionError):
+        net.http_get_bytes("https://example.invalid/file.zip")
+
+
+def test_backfill_retries_a_failed_day(tmp_path: Path) -> None:
+    from engine.data.eod.download import backfill
+
+    calls: list[str] = []
+    waits: list[float] = []
+
+    def flaky(url: str) -> bytes:
+        calls.append(url)
+        if len(calls) == 1:
+            raise ConnectionError("cut off")
+        return _zip("fo03JAN2018bhav.csv", LEGACY_FO)
+
+    out = backfill(
+        ["fo"],
+        date(2018, 1, 3),
+        date(2018, 1, 3),
+        raw_dir=tmp_path,
+        now=lambda: datetime(2026, 11, 15, 10, 0, tzinfo=IST),
+        fetcher=flaky,
+        sleep=waits.append,
+    )
+    assert [r.status for r in out] == ["ok"] and len(calls) == 2
+    assert waits[0] >= 5.0  # backed off before the retry

@@ -183,13 +183,21 @@ def backfill(
     pace_s: float = 0.4,
     sleep: Callable[[float], None] = _time.sleep,
     progress: Callable[[EodFetch], None] | None = None,
+    retry_waits_s: tuple[float, ...] = (5.0, 30.0),
 ) -> list[EodFetch]:
     """Fetch every weekday in [start, end] (holidays come back as ``missing``). Paced politely;
-    already-downloaded files are skipped. ``progress`` sees every result as it happens."""
+    already-downloaded files are skipped. A network error is retried after each wait in
+    ``retry_waits_s``; a day still failing is reported as ``error`` and the run goes on (rerun
+    to fill it). ``progress`` sees every result as it happens."""
     out: list[EodFetch] = []
     for day in weekdays(start, end):
         for ds in datasets:
             res = fetch_eod(ds, day, raw_dir=raw_dir, now=now(), fetcher=fetcher)
+            for wait in retry_waits_s:
+                if res.status != "error":
+                    break
+                sleep(wait)
+                res = fetch_eod(ds, day, raw_dir=raw_dir, now=now(), fetcher=fetcher)
             out.append(res)
             if progress is not None:
                 progress(res)
