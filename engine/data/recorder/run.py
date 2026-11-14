@@ -105,6 +105,28 @@ def constituent_keys(spec: Any, broker: str, on: date | None = None) -> list[str
     return [broker_key(r, broker) for r in top]
 
 
+def equity_list(path: Any) -> tuple[str, ...]:
+    """Trading symbols from an NSE index list CSV (column ``Symbol``), e.g. NSE's
+    ``ind_nifty500list.csv`` saved under config/reference/."""
+    if not path:
+        return ()
+    import csv
+
+    from engine.core.config import REPO_ROOT
+
+    p = REPO_ROOT / str(path)
+    if not p.exists():
+        raise RecorderSetupError(f"recorder.equities.list_file {path} not found")
+    with p.open(encoding="utf-8-sig", newline="") as fh:
+        return tuple(
+            dict.fromkeys(
+                (r.get("Symbol") or "").strip()
+                for r in csv.DictReader(fh)
+                if (r.get("Symbol") or "").strip()
+            )
+        )
+
+
 def load_recorder_settings(settings: Settings) -> RecorderSettings:
     raw = settings.raw.get("recorder")
     if not isinstance(raw, Mapping):
@@ -137,6 +159,10 @@ def load_recorder_settings(settings: Settings) -> RecorderSettings:
     )
     extra = list(raw.get("extra_symbols") or ())
     extra += constituent_keys(raw.get("constituents"), broker)
+    eq_spec = raw.get("equities") or {}
+    if not isinstance(eq_spec, Mapping):
+        raise RecorderSetupError("recorder.equities must be a mapping")
+    eq_symbols = equity_list(eq_spec.get("list_file"))
     universe = UniverseConfig(
         underlyings=unds,
         budget=0,
@@ -149,6 +175,8 @@ def load_recorder_settings(settings: Settings) -> RecorderSettings:
         tick_strikes_each_side=int(band.get("tick_strikes_each_side", 10)),
         tick_expiry_roles=tuple(band.get("tick_expiry_roles", ("current_weekly",))),
         depth=bool(raw.get("depth", True)),
+        equities_fo_stocks=bool(eq_spec.get("fo_stocks", False)),
+        equity_symbols=eq_symbols,
     )
     core = RecorderConfig(
         snapshot_interval_s=int(raw.get("snapshot_interval_s", 60)),

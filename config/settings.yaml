@@ -256,6 +256,10 @@ recorder:                # M2 — what to record and how (SPEC §3 L1); not risk
   depth: true
   vix_symbol: {upstox: "NSE_INDEX|India VIX", fyers: "NSE:INDIAVIX-INDEX"}
   extra_symbols: []           # any further broker keys to record all day
+  equities:                   # cash stocks for equity research (owner, 15 Nov 2026): 1-minute
+    fo_stocks: true           # snapshots with 5-level depth, after the options in priority so
+    list_file: config/reference/nifty500_list.csv  # they never displace one. List: NSE's
+                              # ind_nifty500list.csv (downloaded 15 Nov 2026; refresh after reviews)
   constituents:               # SPEC L9: heavyweights' prices for index dispersion and breadth
     index: NIFTY
     top_n: 8                  # largest by weight (weights UNVERIFIED until checked)

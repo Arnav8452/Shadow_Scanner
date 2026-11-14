@@ -41,6 +41,30 @@ class UniverseConfig:
     tick_strikes_each_side: int = 10
     tick_expiry_roles: tuple[str, ...] = ("current_weekly",)
     depth: bool = True  # subscribe 5-level depth for futures and options
+    # Cash stocks (NSE): every stock with futures, plus these trading symbols. Lowest priority:
+    # added after the options, so they never displace a contract; snapshots only (plus the
+    # tick windows), never every tick all day.
+    equities_fo_stocks: bool = False
+    equity_symbols: tuple[str, ...] = ()
+
+
+def equity_keys(
+    master: InstrumentMaster, on: date, *, fo_stocks: bool, symbols: Sequence[str]
+) -> tuple[list[str], list[str]]:
+    """Broker keys of NSE cash stocks: those with live stock futures (if ``fo_stocks``), then
+    ``symbols``. Returns (keys, names not found in the master)."""
+    cash: dict[str, str] = {}
+    fut: set[str] = set()
+    for ins in master.all():
+        if ins.exchange != "NSE":
+            continue
+        if ins.kind is Kind.EQUITY:
+            cash.setdefault(ins.underlying, ins.symbol)
+        elif fo_stocks and ins.kind is Kind.FUTURE and ins.expiry and ins.expiry >= on:
+            fut.add(ins.underlying)
+    names = [u for u in sorted(fut) if u in cash] + list(symbols)
+    names = list(dict.fromkeys(names))
+    return [cash[n] for n in names if n in cash], [n for n in names if n not in cash]
 
 
 @dataclass
@@ -83,6 +107,23 @@ def band_indices(
     lo = max(0, min(atm - min_each_side, lo_w))
     hi = min(len(strikes) - 1, max(atm + min_each_side, hi_w))
     return lo, atm, hi
+
+
+_EQ_CACHE: dict[tuple[int, int, date, bool, tuple[str, ...]], tuple[list[str], list[str]]] = {}
+
+
+def _equity_keys_cached(
+    master: InstrumentMaster, on: date, fo_stocks: bool, symbols: tuple[str, ...]
+) -> tuple[list[str], list[str]]:
+    """``equity_keys`` once per master and day (the selection re-runs every minute; the master
+    has tens of thousands of rows). Keyed on the master's size too, so an intraday master
+    refresh that adds instruments is picked up."""
+    key = (id(master), len(master.all()), on, fo_stocks, symbols)
+    if key not in _EQ_CACHE:
+        if len(_EQ_CACHE) > 8:
+            _EQ_CACHE.clear()
+        _EQ_CACHE[key] = equity_keys(master, on, fo_stocks=fo_stocks, symbols=symbols)
+    return _EQ_CACHE[key]
 
 
 def select_universe(
@@ -186,6 +227,27 @@ def select_universe(
         used += c
         if cfg.depth:
             depth_symbols.add(sym)
+    if cfg.equities_fo_stocks or cfg.equity_symbols:
+        eq, missing = _equity_keys_cached(master, on, cfg.equities_fo_stocks, cfg.equity_symbols)
+        if missing:
+            shown = ", ".join(missing[:10]) + (" …" if len(missing) > 10 else "")
+            notes.append(f"{len(missing)} cash stocks not in the master: {shown}")
+        n_eq = 0
+        taken = set(chosen)
+        for sym in eq:
+            if sym in taken:
+                continue
+            c = cost(sym, cfg.depth)
+            if used + c > cfg.budget:
+                dropped.append(sym)
+                continue
+            chosen.append(sym)
+            taken.add(sym)
+            used += c
+            n_eq += 1
+            if cfg.depth:
+                depth_symbols.add(sym)
+        notes.append(f"{n_eq} cash stocks (1-minute snapshots)")
     if dropped:
         notes.append(f"{len(dropped)} contracts over the {cfg.budget}-slot budget not recorded")
     kinds = {master.get(s).kind for s in chosen}

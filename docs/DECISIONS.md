@@ -4,6 +4,14 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Recorder: cash stocks from 16 Nov 2026 (15 Nov 2026)
+
+- **Built:** the recorder now also records NSE cash stocks: every stock with futures plus the Nifty 500 (`config/reference/nifty500_list.csv`, NSE's `ind_nifty500list.csv` saved 15 Nov 2026). That's 498 keys resolved from the Upstox master; the 4 misses are REITs and a placeholder. They get 1-minute snapshots with 5-level depth, plus every message in the 09:00–09:35 tick window, but not every tick all day.
+- **Decision:** cash stocks are the lowest priority. They come after the options and are cut first, so they never displace a contract. Upstox's cap is 2,000 keys: about 875 contracts plus 498 stocks fits. The owner confirmed disk space isn't a constraint (C: has room, plus 5 TB of drive storage). Past depth can't be bought, so recording starts now.
+- **Open:** the Nifty 500 list changes at index reviews, so refresh the file then. Recordings are written to `data/` on D:, which has about 15 GB free, so move recordings or `data/` to the larger storage before D: fills (about 2–3 weeks at the new rate).
+
+---
+
 ## Equity data foundation: daily panel of every NSE stock (14 Nov 2026)
 
 The owner widened research to the whole market, cash equity first. Equity tests need clean multi-year daily data, so this builds it.
