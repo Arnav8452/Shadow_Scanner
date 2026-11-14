@@ -80,7 +80,7 @@ Never hard-code a fee, tax, lot size, expiry day, holiday or SEBI/NSE rule in st
 | `stt.csv` | Securities transaction tax (options sell 0.15% of premium; exercised intrinsic 0.15%; futures sell 0.05%) |
 | `exchange_charges.csv`, `sebi_fee.csv`, `stamp_duty.csv`, `gst.csv`, `brokerage.csv`, `dp_charges.csv` | Every other charge, per broker plan |
 | `lot_sizes.csv`, `freeze_qty.csv` | Contract sizes (Nifty lot 65) and per-order freeze limits |
-| `expiry_calendar.csv`, `holidays.csv`, `market_sessions.csv` | Expiry days, holidays, session times (F&O close 15:40 from 3 Aug 2026) |
+| `expiry_calendar.csv`, `holidays.csv`, `market_sessions.csv` | Expiry days, holidays, session times (F&O close 15:40 from 3 Aug 2026, 15:45 from 7 Dec 2026; expiring index contracts stop at 15:30 on expiry day from 7 Dec) |
 | `sebi_algo_rules.csv` | Retail-algo framework (static IP, 2FA, Algo ID, < 10 orders per second) |
 | `margin_rules.yaml`, `circuit_breakers.csv`, `corporate_action_rules.csv`, `tax_rules.csv`, `risk_free_rate.csv` | Margin, circuit limits, corporate actions, tax, the T-bill rate for IV |
 

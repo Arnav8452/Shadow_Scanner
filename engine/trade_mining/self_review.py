@@ -7,7 +7,7 @@ Quantifies:
 3. **Activity Terciles (Overtrading Proof)**: Splits trading days into Low, Medium, and High trade-
    count terciles and compares mean Daily Net P&L across terciles.
 4. **Time-of-Day Expectancy Buckets**: Morning Open (09:15–09:30), Morning Trend (09:30–11:00),
-   Midday Chop (11:00–13:30), Afternoon (13:30–15:00), and Closing CAS Window (15:00–15:40).
+   Midday Chop (11:00–13:30), Afternoon (13:30–15:00), and Close (15:00 to the session close).
 5. **Slippage Stress Test (+1, +2, +4 Ticks)**: Recomputes total net P&L assuming 1, 2, or 4 extra
    ticks of adverse slippage on each side (entry and exit) of every trade.
 """
@@ -57,7 +57,7 @@ def _time_bucket(t_str: str | None) -> str:
         return "11:00-13:30_MIDDAY"
     if t_str < "15:00:00":
         return "13:30-15:00_AFTERNOON"
-    return "15:00-15:40_CLOSE_CAS"
+    return "15:00-CLOSE"
 
 
 def _minutes_between(t_prev_out: str | None, t_curr_in: str | None) -> float | None:

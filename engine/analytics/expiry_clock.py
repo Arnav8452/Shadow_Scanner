@@ -9,8 +9,11 @@
   plain trading-minute clock.
 
 Session times come from ``config/rules/market_sessions.csv``, so the 15:30 → 15:40 close change
-on 3 Aug 2026 (NSE/FAOP/74467) is applied by date. Days in a year whose holidays are not loaded
-fall back to weekdays-only and the result is flagged ``approx``.
+on 3 Aug 2026 (NSE/FAOP/74467) and the 15:45 close from 7 Dec 2026 (NSE/FAOP/77356) are applied by
+date. From 7 Dec 2026 an expiring *index* contract stops trading at 15:30 on its expiry day
+(``index_expiry_close``) while stock derivatives trade to 15:45, so the clock ends there for
+``index=True``. Days in a year whose holidays are not loaded fall back to weekdays-only and the
+result is flagged ``approx``.
 """
 
 from __future__ import annotations
@@ -69,12 +72,14 @@ def expiry_clock(
     exchange: str = "NSE",
     segment: str = "fo",
     min_minutes: float = 15.0,
+    index: bool = True,
 ) -> ExpiryClock:
+    """``index``: the contract is an index derivative (False for stock options/futures)."""
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     allow = exchange != "NSE"  # BSE session rows are UNVERIFIED; they only shape the clock
     exp_sess = market_session(book, exchange, segment, expiry, allow_unverified=allow)
-    close = exp_sess.close_dt
+    close = exp_sess.expiry_close_dt(index=index)
     t_cal = max((close - now).total_seconds(), min_minutes * 60) / (365.0 * 86400.0)
     approx = False
     minutes = 0.0
@@ -87,13 +92,15 @@ def expiry_clock(
         if trading:
             s = market_session(book, exchange, segment, d, allow_unverified=allow)
             start = max(now, s.open_dt) if d == now.date() else s.open_dt
-            minutes += max(0.0, (s.close_dt - start).total_seconds() / 60.0)
+            end = close if d == expiry else s.close_dt
+            minutes += max(0.0, (end - start).total_seconds() / 60.0)
             if d < expiry:
                 nights += 1
         elif d < expiry:
             off_days += 1
         d += timedelta(days=1)
     minutes = max(minutes, min_minutes)
+    # A full session (normal close), not the shorter expiry-day one, sets the year's length.
     session_len = (exp_sess.close_dt - exp_sess.open_dt).total_seconds() / 60.0
     w_on, w_nt = _WEIGHTS
     eff = minutes + session_len * (w_on * nights + w_nt * off_days)

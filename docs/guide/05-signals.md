@@ -22,7 +22,7 @@ Options are priced off the forward, not spot or the future. For 3–5 strikes ne
 Black-76 on the **mid price** of each option, against that expiry's synthetic forward, solved with `scipy`. Delta, gamma, theta (₹/lot/day), vega (₹/lot/vol point), vanna and charm follow from the same model.
 
 **Time to expiry: the variance clock** (SPEC §4, since 13 Nov 2026). Time is counted in units of variance, not calendar days:
-- **Trading minutes** to the session close (15:40 since 3 Aug 2026) count in full.
+- **Trading minutes** to the session close (15:40 since 3 Aug 2026, 15:45 from 7 Dec 2026; on its own expiry day an index contract stops at 15:30 from 7 Dec) count in full.
 - **Each night** between sessions adds **0.49** of a session.
 - **Each weekend or holiday day** adds another **0.31** of a session.
 - **Where the weights come from:** Nifty daily candles since 2020 (Upstox). Overnight weight = the mean squared close-to-open move over one night ÷ the mean squared open-to-close move; the extra per non-trading day comes from nights spanning a weekend. The top 1% of moves are trimmed so a few event days don't set the clock. Code: `engine/analytics/variance_clock.py`; set in `analytics.variance_clock`.
@@ -136,7 +136,7 @@ The scanner names what it thinks is happening:
 | **Wall breakout squeeze** | A stop run or short squeeze, or a break above the opening-range or previous-day high. |
 | **Initiative exhaustion fade** | Aggressive buying or selling ran out without moving price (a failed auction). |
 | **VWAP delivery reclaim** | A delivery-spike stock reclaiming VWAP (stocks only). |
-| **CAS 3 PM VWAP reversal** | Cash stocks only, 15:00–15:40, when the closing-auction price diverges from the trade price. Index options and futures have no closing auction. |
+| **CAS 3 PM VWAP reversal** | Cash stocks only, from the auction's 15-minute reference-price window to the end of matching (15:00–15:35 until 4 Dec 2026, 15:15–15:45 from 7 Dec; `market_sessions.csv`), when the closing-auction price diverges from the trade price. Index options and futures have no closing auction. |
 | **Spoof rug pull** | A displayed wall was pulled without trades (see 5.4). |
 | **Eaten wall squeeze** | A wall was traded away; the side that ate it wins. |
 

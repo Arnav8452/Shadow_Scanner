@@ -35,7 +35,15 @@ from pathlib import Path
 from typing import Any
 
 from engine.core.calendar import CalendarCoverageError, TradingCalendar
-from engine.core.clock import NS_PER_S, Clock, MarketSession, SystemClock, from_ns, to_ns
+from engine.core.clock import (
+    NS_PER_S,
+    Clock,
+    MarketSession,
+    SystemClock,
+    expiry_close_fn,
+    from_ns,
+    to_ns,
+)
 from engine.core.config import REPO_ROOT, EngineVersion, Settings
 from engine.core.env import load_dotenv
 from engine.core.rules import IST, RuleBook
@@ -955,7 +963,7 @@ def run_shadow_day(
         if clock.now_ns() >= to_ns(end):
             return ShadowRunResult(day, "skipped", f"window already closed at {end:%H:%M}")
     master = load_master(
-        rs, day, from_ns(clock.now_ns()), fetch=fetch_master, close_time=primary.normal_close
+        rs, day, from_ns(clock.now_ns()), fetch=fetch_master, close_time=expiry_close_fn(book)
     )
     data_dir = rs.sim_dir if sim else rs.parquet_dir
     store = Store(data_dir)

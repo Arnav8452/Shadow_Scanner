@@ -4,6 +4,28 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Session times and expiry settlement from 7 Dec 2026 (15 Nov 2026)
+
+- **Verified (primary):** SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/23843/2026 of 15 Oct 2026 (annexed to NCL/CMPT/76951), NSE/FAOP/77356 and NSE/CMTR/77355 (6 Nov 2026), and the NCL/CMPT/77212 settlement SOP. From **7 Dec 2026**:
+  - F&O closes at **15:45** (was 15:40).
+  - On an index's expiry day its **expiring contracts stop at 15:30**. Stock derivatives trade to 15:45, expiry days included.
+  - F&O pre-open now ends at 09:10, with a random close in the last 2 minutes.
+  - The daily close-price VWAP window is 15:15–15:45.
+  - Expiry **final settlement** is the underlying's cash VWAP over **15:00–15:30**. For an index, that is the index computed from its constituents' VWAPs. From 3 Aug to 4 Dec 2026 it was the closing-auction price.
+  - The cash closing auction runs 15:30–15:40, with matching to 15:45 (was 15:15–15:35).
+  - SEBI's circular binds BSE too: its rows are 15:45 and 15:30, marked primary from SEBI. BSE's own circular was not read.
+- **Wrong in the task brief and in our docs:** NSE/FAOP/75472 and NSE/CMTR/75479 are the 30 Jul mock-session notices for the *August* go-live, not the December change. Our docs called 15:10–15:40 the "settlement window". It was the daily close-price window. Expiring contracts settled to the closing-auction price.
+- **Built:**
+  - `market_sessions.csv` has new rows for `index_expiry_close`, `settle_vwap_*` and the cash `cas_*`/`post_close_*` sessions.
+  - `MarketSession.expiry_close(index=)` and `expiry_clock(..., index=True)` end an index option's IV clock at 15:30 on its expiry day from 7 Dec.
+  - The Upstox master sets each contract's expiry time from the rule in force on its own expiry date (`expiry_close_fn`), not today's close.
+  - The scanner's closing-auction window comes from the rules: 15:00–15:35 until 4 Dec, 15:15–15:45 from 7 Dec.
+  - Tests cover 4 Dec vs 7 Dec.
+- **Unchanged (owner's call):** strategy times in `settings.yaml` (spread expiry exit 15:00, 0DTE long exit 14:45, square-off 15:20). They are still before the new settlement window and the 15:30 stop. CLAUDE.md and SPEC §4 still say "15:30 before / 15:40 from 3 Aug". **Proposed:** add "15:45 from 7 Dec 2026; 15:30 for an index contract on its expiry day".
+- **Not covered:** pending limit/iceberg orders carried into the auction (SEBI para 4.8, from 8 Feb 2027). Cash pre-open rows stay UNVERIFIED.
+
+---
+
 ## Recorder: cash stocks from 16 Nov 2026 (15 Nov 2026)
 
 - **Built:** the recorder now also records NSE cash stocks: every stock with futures plus the Nifty 500 (`config/reference/nifty500_list.csv`, NSE's `ind_nifty500list.csv` saved 15 Nov 2026). That's 498 keys resolved from the Upstox master; the 4 misses are REITs and a placeholder. They get 1-minute snapshots with 5-level depth, plus every message in the 09:00–09:35 tick window, but not every tick all day.

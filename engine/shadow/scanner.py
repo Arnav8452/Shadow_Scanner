@@ -8,8 +8,10 @@ Implements the complete Human-in-the-Loop Radar & Microstructure Pricing Engine 
    - ``WALL_BREAKOUT_SQUEEZE`` (Stop-Run & Short-Squeeze Cascade through overhead resistance)
    - ``INITIATIVE_EXHAUSTION_FADE`` (Failed Auction / Bull or Bear Trap)
    - ``VWAP_DELIVERY_RECLAIM`` (3-5d EOD Relative Delivery Spike stock reclaiming intraday VWAP)
-   - ``CAS_3PM_VWAP_REVERSAL`` (3:00 PM – 3:30 PM / 15:10–15:40 Closing VWAP window institutional
-     rebalance when intraday trend diverges from Closing Equilibrium ``iep`` / ``atp``).
+   - ``CAS_3PM_VWAP_REVERSAL`` (cash stocks, from the 15-minute CAS reference-price window to the
+     end of auction matching — 15:00–15:35 from 3 Aug 2026, 15:15–15:45 from 7 Dec 2026, read from
+     ``config/rules/market_sessions.csv`` — when the trade price diverges from the closing
+     equilibrium ``iep`` / ``atp``).
 3. Computes microstructure-anchored **Entry**, **Stop-Loss** (1–2 ticks *behind* the strongest
    L1–L15 defending Bid/Ask Wall or sweep extreme), **Target 1** (≥ 1.5R, 1–2 ticks *in front of*
    the next L10–L30 opposing wall or VWAP), and **Target 2** (≥ 2.5R–2.8R).
@@ -26,7 +28,7 @@ import re
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from engine.analytics.microstructure import BookMicrostructureSnapshot, analyze_book_microstructure
@@ -48,7 +50,7 @@ from engine.analytics.technicals import (
 )
 from engine.backtest.costs import equity_intraday_charges, fno_charges
 from engine.core.config import REPO_ROOT, ShadowScannerConfig
-from engine.core.rules import IST, RuleBook
+from engine.core.rules import IST, RuleBook, RuleNotFoundError
 from engine.data.adapters.base import Depth, Level, Quote
 from engine.data.eod.bhavcopy import DeliveryBias
 from engine.shadow.models import (
@@ -307,6 +309,7 @@ class ShadowOrderBookScanner:
         # (symbol, direction) -> when it first reached a tradeable grade without dropping below.
         self._tradeable_since: dict[tuple[str, str], datetime] = {}
         self._seq = 0
+        self._cas_windows: dict[date, tuple[time, time] | None] = {}
 
     def register_instrument(self, state: InstrumentMicrostructureState) -> None:
         if (
@@ -463,11 +466,11 @@ class ShadowOrderBookScanner:
             direction = "LONG"
             struct_eval = sweep_long
 
-        # Check 3:00 PM - 3:40 PM IST Closing Auction Session (CAS) Institutional VWAP Reversal.
-        # NSE's closing auction is a cash-market session: index options and futures have none.
-        in_cas_window = bool(st.is_equity) and (
-            time(15, 0) <= ts.timetz().replace(tzinfo=None) <= time(15, 40)
-        )
+        # Closing Auction Session (CAS) institutional VWAP reversal, from the CAS reference-price
+        # window to the end of auction matching (session rules by date). NSE's closing auction
+        # is a cash-market session: index options and futures have none.
+        cas = self._cas_window(ts.date()) if st.is_equity else None
+        in_cas_window = cas is not None and (cas[0] <= ts.timetz().replace(tzinfo=None) <= cas[1])
         cas_bonus_pts = 0.0
         wave = SignalWave.STOP_HUNT_RECLAIM
 
@@ -918,6 +921,28 @@ class ShadowOrderBookScanner:
             mid = avg
         slip = (avg - mid) * qty if buy else (mid - avg) * qty
         return avg, max(0.0, slip), thin
+
+    def _cas_window(self, day: date) -> tuple[time, time] | None:
+        """(reference-price window start, auction matching end) for NSE cash on ``day``.
+
+        The CAS reference price is the VWAP of the 15 minutes before the auction starts
+        (NSE/CMTR/73362; NSE/CMTR/77355 §3). None before CAS existed (3 Aug 2026).
+        """
+        if day not in self._cas_windows:
+            if self._book is None:
+                self._book = RuleBook.load(REPO_ROOT / "config" / "rules")
+            table = self._book["market_sessions"]
+            try:
+                start = table.lookup(day, exchange="NSE", segment="cm", session="cas_start")
+                end = table.lookup(day, exchange="NSE", segment="cm", session="cas_match_end")
+            except RuleNotFoundError:
+                self._cas_windows[day] = None
+            else:
+                hh, mm = (int(x) for x in start.value.split(":"))
+                ref = (datetime.combine(day, time(hh, mm)) - timedelta(minutes=15)).time()
+                eh, em = (int(x) for x in end.value.split(":"))
+                self._cas_windows[day] = (ref, time(eh, em))
+        return self._cas_windows[day]
 
     def _round_trip_charges(
         self, symbol: str, *, entry_turnover: float, exit_turnover: float, is_long: bool, on: Any

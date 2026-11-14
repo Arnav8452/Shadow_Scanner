@@ -17,7 +17,7 @@ class SignalWave(StrEnum):
         "VWAP_DELIVERY_RECLAIM"  # Multi-day Delivery Spike + Intraday VWAP Reclaim
     )
     CAS_3PM_VWAP_REVERSAL = (
-        "CAS_3PM_VWAP_REVERSAL"  # 15:00-15:40 Closing Auction Institutional Reversal
+        "CAS_3PM_VWAP_REVERSAL"  # CAS reference window to auction end (market_sessions.csv)
     )
     SPOOF_RUG_PULL = "SPOOF_RUG_PULL"  # a displayed wall pulled without trades near price
     EATEN_WALL_SQUEEZE = "EATEN_WALL_SQUEEZE"  # a wall traded away: the side that ate it wins

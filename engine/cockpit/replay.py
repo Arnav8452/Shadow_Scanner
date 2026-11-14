@@ -23,7 +23,7 @@ from typing import Any
 
 from engine.backtest.event_replay import recorded_events
 from engine.core.calendar import CalendarCoverageError, TradingCalendar
-from engine.core.clock import ManualClock, from_ns, to_ns
+from engine.core.clock import ManualClock, expiry_close_fn, from_ns, to_ns
 from engine.core.config import Settings
 from engine.core.rules import IST, RuleBook
 from engine.data.adapters.base import Depth, FeedStatus, Quote, Sink, StatusKind
@@ -240,7 +240,7 @@ def run_replay_day(
     end = primary.close_dt + timedelta(minutes=rs.post_buffer_min)
     master = load_master(
         rs, day, datetime.combine(day, primary.normal_close, IST), fetch=False,
-        close_time=primary.normal_close,
+        close_time=expiry_close_fn(book),
     )  # fmt: skip
     prev: dict[str, tuple[float, float, float]] = {}
     with contextlib.suppress(CalendarCoverageError, OSError):

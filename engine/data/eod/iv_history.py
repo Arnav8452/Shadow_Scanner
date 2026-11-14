@@ -105,7 +105,10 @@ def atm_iv_for_day(
     if len(both) < 3:
         return None
     close_dt = market_session(book, exchange, "fo", day, allow_unverified=exchange != "NSE").close_dt
-    clk = expiry_clock(close_dt, expiry, book=book, calendar=calendar, exchange=exchange)
+    is_index = any(i in ("IDO", "OPTIDX") for i in instruments)
+    clk = expiry_clock(
+        close_dt, expiry, book=book, calendar=calendar, exchange=exchange, index=is_index
+    )
     growth = math.exp(r * clk.t_cal)
     forward = statistics.median(k + growth * (calls[k].close - puts[k].close) for k in both)
     atm = min(both, key=lambda k: abs(k - forward))

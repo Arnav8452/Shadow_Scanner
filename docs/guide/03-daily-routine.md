@@ -14,7 +14,7 @@ Times are IST. With the scheduled tasks registered ([02-setup.md §2.7](02-setup
 - Open http://127.0.0.1:8765. In the header, the **page** and **live engine** dots should be green.
 - The header line shows the feed status, lag, contracts live and readings today. `DROPPED` or `cockpit errors` means: read `logs/engine_shadow-live.log`.
 
-## 09:15–15:40: market hours
+## 09:15–15:45: market hours (15:40 until 4 Dec 2026)
 
 What happens without you:
 - The scanner scores every live contract every book update. Readings start setups; setups confirm or fail.
@@ -39,10 +39,12 @@ Times that matter:
 | 14:45 | On expiry day: long options expiring today are closed; no more readings on that index. |
 | 15:00 | No new paper entries anywhere. Condor exits on the day before expiry. |
 | 15:15 | No new readings or setups (normal days). |
-| 15:00 | On expiry day: multi-leg positions whose short leg expires today are closed, before the 15:10 settlement window (`cockpit.spread_expiry_exit`). |
+| 15:00 | On expiry day: multi-leg positions whose short leg expires today are closed, before the settlement window (`cockpit.spread_expiry_exit`). |
 | 15:20 | Intraday positions squared off at the bid. Overnight strategies (condor, calendar, compression, synthetic and married futures) keep their positions. |
-| 15:10–15:40 | NSE F&O closing-price window (VWAP of the last 30 minutes, per `NSE/FAOP/74467`). Options expiring today settle to an averaged index value, so late in the day they stop behaving like options; their greeks and readings are switched off. |
-| 15:40 | F&O close (15:30 before 3 Aug 2026; `config/rules/market_sessions.csv`). |
+| 15:00–15:30 | From 7 Dec 2026: **expiry settlement window**. Contracts expiring today settle to the underlying's cash VWAP over these 30 minutes (for an index, the index computed from its constituents' VWAPs; `NSE/FAOP/77356` §5). Until 4 Dec 2026 they settled to the cash closing-auction price instead (~15:30–15:35). Late in the day they stop behaving like options; their greeks and readings are switched off. |
+| 15:30 | From 7 Dec 2026: on an index's expiry day, **its expiring contracts stop trading**. Other contracts, and stock derivatives even on their expiry day, trade on. Cash: the closing auction runs 15:30–15:40 (was 15:15–15:35). |
+| 15:15–15:45 | From 7 Dec 2026: each F&O contract's daily closing price is the VWAP of this window (15:10–15:40 until 4 Dec). Not the expiry settlement. |
+| 15:45 | F&O close from 7 Dec 2026 (15:40 from 3 Aug 2026, 15:30 before; `config/rules/market_sessions.csv`). |
 | ~15:45 | Recorder stops, writes the QC report, compacts the day's files. |
 
 ## After the close
