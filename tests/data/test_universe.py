@@ -134,3 +134,56 @@ def test_sigma_band_widens_beyond_min_strikes(master: InstrumentMaster) -> None:
     assert sel.half_width["NIFTY 2026-11-17"] > 3 * 50
     weekly = {master.get(s).strike for s in sel.symbols if master.get(s).expiry == WEEKLY}
     assert min(k for k in weekly if k) < 25000 - 3 * 50
+
+
+def _with_stocks() -> InstrumentMaster:
+    from tests.data.conftest import MONTHLY as M
+    from tests.data.conftest import build_master, ins
+
+    items = build_master().all() + [
+        ins("NSE:ACME-EQ", Kind.EQUITY, underlying="ACME"),
+        ins("NSE:BETA-EQ", Kind.EQUITY, underlying="BETA"),
+        ins("NSE:GAMMA-EQ", Kind.EQUITY, underlying="GAMMA"),
+        ins("BSE:ACME", Kind.EQUITY, underlying="ACME", exchange="BSE"),
+        ins("NSE:ACME26NOVFUT", Kind.FUTURE, underlying="ACME", expiry=M),
+    ]
+    return InstrumentMaster(items, as_of=NOW.date(), source="test")
+
+
+def test_cash_stocks_recorded_last_without_ticks() -> None:
+    m = _with_stocks()
+    sel = select_universe(
+        m,
+        cfg(10_000, equities_fo_stocks=True, equity_symbols=("GAMMA", "NOPE")),
+        now=NOW,
+        spots={"NIFTY": 25000.0},
+        iv=None,
+        sticky=set(),
+        depth_counts_separately=False,
+    )
+    # F&O stocks (ACME has futures) plus the listed names; NSE cash only; after the options.
+    assert sel.symbols[-2:] == ["NSE:ACME-EQ", "NSE:GAMMA-EQ"]
+    assert "NSE:BETA-EQ" not in sel.symbols and "BSE:ACME" not in sel.symbols
+    assert {"NSE:ACME-EQ", "NSE:GAMMA-EQ"} <= sel.depth_symbols
+    assert not ({"NSE:ACME-EQ", "NSE:GAMMA-EQ"} & sel.tick_symbols)  # 1-minute snapshots only
+    assert any("2 cash stocks" in n for n in sel.notes)
+    assert any("NOPE" in n for n in sel.notes)
+
+
+def test_cash_stocks_never_displace_options() -> None:
+    m = _with_stocks()
+    full = select_universe(
+        m, cfg(10_000), now=NOW, spots={"NIFTY": 25000.0}, iv=None, sticky=set(),
+        depth_counts_separately=False,
+    )  # fmt: skip
+    tight = select_universe(
+        m,
+        cfg(len(full.symbols) + 1, equities_fo_stocks=True, equity_symbols=("GAMMA",)),
+        now=NOW,
+        spots={"NIFTY": 25000.0},
+        iv=None,
+        sticky=set(),
+        depth_counts_separately=False,
+    )
+    assert tight.symbols[: len(full.symbols)] == full.symbols
+    assert tight.symbols[-1] == "NSE:ACME-EQ" and "NSE:GAMMA-EQ" in tight.dropped
