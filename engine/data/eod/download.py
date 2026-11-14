@@ -53,6 +53,27 @@ _MARKERS: dict[str, bytes] = {
 }
 DATASETS = tuple(NSE_EOD_URLS)
 
+# NSE's UDiFF bhavcopies start on 1 Jan 2024; earlier days exist only in the old layout
+# (INSTRUMENT, SYMBOL, EXPIRY_DT … for F&O; SYMBOL, SERIES … for cash), which NSE kept
+# publishing until 5 Jul 2024. Checked by download on 14 Nov 2026: UDiFF 2023-12-29 → 404,
+# 2024-01-01 → file; old layout 2010-10-04, 2015-01-02, 2024-07-05 → file, 2024-07-08 → 404.
+# The old layout has no underlying price (UndrlygPric) or lot size: readers needing them must
+# take spot from the indices file or the cash bhavcopy, and lots from config/rules.
+UDIFF_FIRST_DAY = date(2024, 1, 1)
+LEGACY_EOD_URLS: dict[str, str] = {
+    "fo": "https://nsearchives.nseindia.com/content/historical/DERIVATIVES/{yyyy}/{mon}/"
+    "fo{dd}{mon}{yyyy}bhav.csv.zip",
+    "cm": "https://nsearchives.nseindia.com/content/historical/EQUITIES/{yyyy}/{mon}/"
+    "cm{dd}{mon}{yyyy}bhav.csv.zip",
+}
+_LEGACY_MARKERS: dict[str, bytes] = {"fo": b"INSTRUMENT,SYMBOL", "cm": b"SYMBOL,SERIES"}
+_MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
+
+
+def is_legacy(dataset: str, day: date) -> bool:
+    """True when ``day``'s file for ``dataset`` exists only in NSE's old bhavcopy layout."""
+    return dataset in LEGACY_EOD_URLS and day < UDIFF_FIRST_DAY
+
 
 @dataclass(frozen=True)
 class EodFetch:
@@ -64,6 +85,9 @@ class EodFetch:
 
 
 def eod_url(dataset: str, day: date) -> str:
+    if is_legacy(dataset, day):
+        mon = _MONTHS[day.month - 1]  # not strftime("%b"): that follows the OS locale
+        return LEGACY_EOD_URLS[dataset].format(yyyy=day.year, mon=mon, dd=f"{day.day:02d}")
     return NSE_EOD_URLS[dataset].format(ymd=day.strftime("%Y%m%d"), dmy=day.strftime("%d%m%Y"))
 
 
@@ -81,15 +105,16 @@ def read_eod_text(path: Path) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _validate(dataset: str, body: bytes) -> bool:
+def _validate(dataset: str, body: bytes, day: date) -> bool:
+    marker = _LEGACY_MARKERS[dataset] if is_legacy(dataset, day) else _MARKERS[dataset]
     if NSE_EOD_URLS[dataset].endswith(".zip"):
         try:
             with zipfile.ZipFile(io.BytesIO(body)) as zf:
                 names = zf.namelist()
-                return bool(names) and _MARKERS[dataset] in zf.read(names[0])[:4096]
+                return bool(names) and marker in zf.read(names[0])[:4096]
         except zipfile.BadZipFile:
             return False
-    return _MARKERS[dataset] in body[:4096]
+    return marker in body[:4096]
 
 
 def fetch_eod(
@@ -115,7 +140,7 @@ def fetch_eod(
         return EodFetch(dataset, day, "error", detail=f"HTTP {exc.code}")
     except OSError as exc:
         return EodFetch(dataset, day, "error", detail=type(exc).__name__)
-    if not _validate(dataset, body):
+    if not _validate(dataset, body, day):
         return EodFetch(dataset, day, "missing", detail="not a valid file (HTML or empty)")
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -149,14 +174,17 @@ def backfill(
     fetcher: Callable[[str], bytes] = http_get_bytes,
     pace_s: float = 0.4,
     sleep: Callable[[float], None] = _time.sleep,
+    progress: Callable[[EodFetch], None] | None = None,
 ) -> list[EodFetch]:
     """Fetch every weekday in [start, end] (holidays come back as ``missing``). Paced politely;
-    already-downloaded files are skipped."""
+    already-downloaded files are skipped. ``progress`` sees every result as it happens."""
     out: list[EodFetch] = []
     for day in weekdays(start, end):
         for ds in datasets:
             res = fetch_eod(ds, day, raw_dir=raw_dir, now=now(), fetcher=fetcher)
             out.append(res)
+            if progress is not None:
+                progress(res)
             if res.status != "cached":
                 sleep(pace_s)
     return out
