@@ -180,7 +180,7 @@ What this means:
   - **IV:** synthetic forward at the strike where call and put are closest, Black-76 on the variance clock, mean of call and put, median over the minutes.
   - **Caveat:** last trades, not mids; the median over about 55 minutes keeps that noise small.
   - **First run:** 15 sessions (23 Oct–12 Nov). Normal days −1 to +2 vol points; near-expiry days spike (9 Nov +8.9). The live strategy keeps adding one value at each close.
-- **Possible next:** a backtest runner on the expired-option 1-minute candles, giving about two years of OI and price history for the OI, straddle and breakout strategies. Candles have no bid/ask, so fills would use a spread model taken from our recorded spreads, doubled. That is a documented exception to "fills at recorded bid/ask", fit for screening ideas, not for the final verdict.
+- **Built (13 Nov):** the candle backtest runner on these candles, see [§9.13](#913-candle-backtest-a-candle-approximation).
 - **Only recording can supply:** anything that reads the order book (the score's book pillar, RER, OBI, spoofed and eaten walls, absorption zones, the opening-range breakout), and the final bid/ask-fill verdict on any strategy.
 
 **Stock IV history** (for the swing scanner's IV rank, which needs 60 sessions): `uv run python tasks.py stock-iv-history` backfills `data/parquet/eod/stock_iv.parquet` from the F&O bhavcopies already downloaded (since 3 Nov 2025). Until 13 Nov it held one day, so every candidate showed "IV rank unknown" and was traded in cash.
@@ -201,3 +201,53 @@ What this means:
 - **R9:** charges and net arithmetic.
 
 It reads the journals only. `DIR=data/replay/<date>` audits a replay. The first run, on 13 Nov, found exactly one breach: breakthrough's 09:37 put ran without its rules after an engine restart and lost ₹2,801 on its old 20% stop. Restored scalps are now re-adopted.
+
+## 9.13 Candle backtest (a candle approximation)
+
+`tasks.py candle-backtest` tests a rule on Upstox 1-minute candles: about two years of Nifty options (expired contracts with OI since Oct 2024) instead of the few weeks of recorded bid/ask. Code: `engine/backtest/candles/`.
+
+```bash
+uv run python tasks.py candle-backtest STRAT=condor FROM=2025-01-01 TO=2026-11-12
+uv run python tasks.py candle-backtest STRAT=log3 FROM=2025-01-01
+```
+
+- **Which strategies:** only those whose triggers use price, 1-minute volume, IV and OI. Built: `condor` (SPEC 5.1) and `log3` (the mined Log-3 momentum rule, SPEC 5.2). Allowed but not built yet: expiry gamma (5.10), 0DTE gamma, compression, iron fly.
+- **Refused:** `score`, `breakthrough`, `spoof_fade`, `zone_rider` read the order book, which no historical source has. `oi_ignition` (S2) and `oi_credit` (spec B) trigger on futures CVD z-scores, which need each trade's side from the bid/ask. The task exits with code 2.
+- **Fills:** never at the candle's close. A decision on a completed bar fills at the **next bar's open**, and every leg pays a half-spread on each side. Each rule runs four times (settings: `candle_backtest:` in `config/settings.yaml`):
+  - **base:** `max(₹0.10, 0.5% of price)`. That is about 2–3× the median half-spread our recorder measured on Nifty weeklies (12–13 Nov 2026), and at or above its 90th percentile. `SPREADS=p90` (or `median`) uses the measured spread of each price bucket instead.
+  - **stress:** 2× that haircut **and** every order's charges doubled.
+  - **plan:** the owner's plan haircut `max(₹1, 0.75%)`, for comparison only.
+  - **extreme:** the first brief's `max(₹1.50, 1.5%)`, 12–60× the measured spread, for comparison only.
+
+  Every report prints the measured spread table (median and 90th percentile by price bucket, from `data/parquet/quotes`).
+- **Exit rules:** take-profit, stops, adjustments and weekend booking compare the cost to close at last trades with the **credit at trade prices** (each leg's entry trade, before the haircut). The P&L uses the actual fills. Comparing against the haircut-shrunk credit put the stops at the wrong level: a put side worth 14.1 counted as 11.1, so its 2.2× stop fired at 24.4 instead of about 31. `trigger_on_haircut: true` restores the old model for comparison.
+- **Each report also shows** the gross P&L with the haircut added back, which separates spread cost from the rule's own result.
+- **Exits inside a bar:** a long option's stop and target are set from its entry trade price. They trigger on the bar's low or high and fill at the level less the haircut, or at the open less the haircut if the bar opens beyond it. If one bar touches both, the stop is assumed.
+- **Costs and margin:**
+  - **Costs:** `config/rules` through the cost model, Upstox Plus ₹30 an order. By default the rules in force on the run date apply, i.e. what the rule would pay now (STT 0.15%).
+  - **Margin:** the `margin_rules.yaml` broker-quote table.
+- **IV:** Black-76 on the variance clock, from a synthetic forward over 3–5 near-ATM strikes whose call and put both traded within 2 minutes. These are last trades, not mids. The condor's IV percentile uses this runner's own closing ATM IVs since Oct 2024, each used only from the next session.
+- **Point in time:** a decision uses only bars that started at or before it. Tests change every later bar and check that the entry does not move.
+- **Statistics:**
+  - **Daily P&L:** an open condor is marked to market at each session's close, so drawdowns include open losses.
+  - **Validation:** walk-forward (60/20 sessions), block-bootstrap Monte Carlo, and a deflated Sharpe.
+  - **Trials:** the deflated Sharpe counts every distinct parameter set ever run for that strategy, from `data/backtest/candle_trials.jsonl`.
+- **Condor variants:** `STRAT=condor` runs 10 variants, each counted as a trial (`VARIANTS=0` runs the live config only):
+  - **The 8-variant grid:**
+    - short delta 0.16 or 0.20;
+    - stop at 2.0× or 1.5× the credit (take-profit 50%);
+    - a 4-leg iron condor, or a 2-leg credit spread on the side the last 30 minutes of the index favour.
+  - **The live config without the 2.2× per-side stop.**
+  - **The live config with no entries on the last session before a market closure** (Friday or pre-holiday).
+  - **Trials:** when the simulator changes how a rule is priced or exited, `MODEL_VERSION` in `engine/backtest/candles/runner.py` goes up, so every rerun counts as a new trial.
+
+  `SET=key=value,...` changes any rule parameter for a run, e.g. `SET=side_stop_mult=0` (0 switches the per-side stop off). The run gets its own report file and counts as a new trial.
+
+  The live weekend rules apply to all of them. From 15:10 before a closure a structure is booked when 80% of the take-profit is in hand, or when what is left is under 10% of its worst ±5/8% gap loss (`engine/cockpit/stress.py`) once 25% is in hand. Each variant reports:
+  - the win rate against the break-even win rate, net stop / (net take-profit + net stop), from each trade's own credit and charges;
+  - the take-profit as a % of margin (four-leg ₹85,000, two-leg ₹49,500).
+- **Output:** `reports/candle_backtest/<strategy>_<from>_<to>.md` and trades CSVs. The report opens with "CANDLE APPROXIMATION" and the variant table, and lists how the run differs from the live rule.
+- **What it is for:** screening a rule over many market regimes. It is not the final verdict: that still needs recorded bid/ask fills and 20+ paper sessions. Assume live results are about half of what it shows.
+- **Data:** cached under `data/candles/` (gitignored). A first full run downloads a few thousand contracts at about one request a second, within Upstox's limits. Reruns read the cache.
+- **Range:** the rule tables (holidays, T-bill rate, lot sizes) start in 2025, so runs start on 1 Jan 2025. Late-2024 candles feed only the IV-percentile warm-up.
+- **First results (14 Nov 2026, Jan 2025 – Nov 2026):** neither the Log-3 rule nor any of the 8 condor variants shows an edge. The numbers are in `docs/DECISIONS.md`.

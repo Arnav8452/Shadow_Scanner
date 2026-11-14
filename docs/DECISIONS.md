@@ -13,6 +13,71 @@ The owner asked for strategies with a cause ("if this is the data, this must hap
 - **Result (same day, after the pre-registration commit `dd0eb65`):** H1 PASS (IV fell in 95.7% of 808 results events, median −6.0 vol pts; control −0.16). H2 PASS (realized < implied in 70.7%, mean ratio 0.84, t −16.9). Heavy right tail (median ratio 0.60): defined risk only. RBI days do not crush (IV rose in 7 of 12). Next is a new trial: a defined-risk results iron fly on bhavcopy closes with costs and margin within ₹1 lakh. Details in `docs/research/mechanisms.md`.
 - **H4, the trade test (pre-registered in `dd3c26a`):** a results iron fly on bhavcopy closes, 1 lot, ₹5,000 max loss, full charges. **FAIL.** Before costs it made +₹34 a trade (826 trades); charges are ₹451. It loses even with zero spread cost. The crush is real but not tradable this way at our size; it stays research. Data fix while checking: 47 stale exits above the wing are now capped (LAURUSLABS calls closed 31.6 apart on a 20-wide spread).
 
+## Candle backtest model 2: measured spreads, stops on the trade-price credit (14 Nov 2026)
+
+Main-session review of the first runs found two bugs; both fixed, and every rerun counts as a new trial (`MODEL_VERSION` 2 in the trial hash: condor 19 trials, Log-3 2).
+
+- **Haircut was 12–60× the real spread.**
+  - **Measured** from our recorder (12–13 Nov, nearest weekly, snapshots, 10:00–15:10), median / 90th percentile half-spread: ₹0.05 / 0.05 at ₹10–25, ₹0.05 / 0.075 at ₹25–50, ₹0.10 / 0.125 at ₹50–100, 0.11% / 0.13% at ₹100–200.
+  - **New default:** `max(₹0.10, 0.5%)` per side, about 2–3× the median and at or above the 90th percentile. Stress is 2× that plus doubled charges.
+  - **Also reported:** the owner's plan haircut `max(₹1, 0.75%)` and the old `max(₹1.50, 1.5%)` as an "extreme" column.
+  - **New options:** `SPREADS=p90|median` uses the measured buckets as the haircut; `QUOTES=` points at the recordings. Every report prints the table.
+- **Stops were measured against a haircut-shrunk credit.**
+  - The take-profit, 2× stop, 2.2× side stop, adjustments and weekend booking now compare the cost to close at last trades with the credit at trade prices. The P&L still uses the haircut fills.
+  - Log-3's −10% / +30% are set from the entry's trade price.
+- **New variant:** no condor entries on the last session before a closure (v1 had 44 Friday entries; 19 were booked the same afternoon).
+- **Net at the base haircut, before → after** (model 1 used the ₹1.50 haircut and the shrunk credit):
+
+| Variant | Before | After | After: wins vs break-even, t |
+|---|---:|---:|---|
+| Iron condor, live config (Δ0.16, stop 2×) | −₹1,54,073 | −₹46,217 | 42% vs 77%, −3.6 |
+| Iron condor, Δ0.16, stop 1.5× | −₹1,53,902 | −₹49,025 | 41% vs 65%, −3.8 |
+| Iron condor, Δ0.20, stop 2× | −₹1,65,012 | −₹63,787 | 45% vs 74%, −3.4 |
+| Iron condor, Δ0.20, stop 1.5× | −₹1,64,804 | −₹67,619 | 44% vs 61%, −3.6 |
+| Trend-side spread, Δ0.16, stop 2× | −₹46,724 | −₹23,345 | 70% vs 78%, −2.4 |
+| Trend-side spread, Δ0.16, stop 1.5× | −₹56,812 | −₹24,547 | 55% vs 67%, −3.7 |
+| Trend-side spread, Δ0.20, stop 2× | −₹85,314 | −₹28,678 | 69% vs 75%, −2.0 |
+| Trend-side spread, Δ0.20, stop 1.5× | −₹91,954 | −₹26,729 | 55% vs 62%, −2.9 |
+| Iron condor, no per-side stop | −₹1,20,467 | −₹26,166 | 61% vs 77%, −1.8 |
+| Iron condor, no entry before a closure | — | −₹32,112 | 42% vs 77%, −2.9 |
+| Log-3 momentum rule | −₹4,75,555 | −₹3,02,491 | 22% wins, −7.2; −₹1.26 lakh gross even with the haircut added back |
+
+- **Reading:**
+  - The fixes cut the condor losses by about two-thirds, but every variant still loses after charges. Each win rate is below its break-even win rate, and DSR ≤ 0.1%.
+  - The 2× stress run loses −₹60k to −₹1.23 lakh; the extreme haircut loses −₹48k to −₹1.63 lakh.
+  - The least-bad rules are the trend-side spreads and the condor without the per-side stop. Even there, t is −1.8 to −2.4: no evidence of an edge, only a smaller loss.
+  - Log-3 still loses heavily, so the rule's signal itself does not work.
+- **Open:**
+  - The measured spreads come from 2 sessions in Nov 2026 and are assumed for 2025.
+  - The ≥ ₹200 bucket is wide (median ₹1.80) because the snapshots include deep strikes.
+  - Reports: `reports/candle_backtest/*.md`; model 1 is kept as `*_model1.md`.
+
+## Candle backtest runner: condor and Log-3 over Jan 2025 – Nov 2026 (14 Nov 2026)
+
+- **Built:**
+  - `engine/backtest/candles/` and `tasks.py candle-backtest STRAT= FROM= TO=`. Upstox 1-minute candles: index (v3) and expired Nifty options with OI. About 4,900 contracts over 112 expiries are cached in `data/candles/`.
+  - **Fills:** at the next bar's open, paying a haircut on every fill: `max(₹1.50, 1.5%)` per side. Each run is repeated with 2× the haircut plus doubled charges, and with the plan haircut `max(₹1, 0.75%)`.
+  - **Statistics:** walk-forward, block-bootstrap Monte Carlo and deflated Sharpe. The trials are counted in `data/backtest/candle_trials.jsonl`.
+  - **Refused:** score, breakthrough, spoof_fade and zone_rider (they read the order book); oi_ignition and oi_credit (futures CVD needs trade side from the bid/ask).
+  - **Allowed but not built:** expiry gamma (5.10), 0DTE gamma, compression, iron fly.
+- **Results (candle approximation, 463 sessions):**
+  - **Log-3 rule:** 1,077 trades, 19% wins, **−₹4.76 lakh net** (t −11.3). It loses ₹96k even with the haircut added back. The mined push is true at 29% of minutes and fires about 2.3 times a session, so on its own it does not pick entries.
+  - **Live-config condor:** 143 trades, 19% wins vs a 79% break-even win rate, **−₹1.54 lakh net**. It makes +₹7k gross with the haircut added back.
+  - **Exits:** the 2.2× per-side stop closes 92 of the 143.
+  - **Variants:** all 8 lose at 1× (−₹47k to −₹1.65 lakh), with DSR 0%. The trend-side spreads lose least, but their stress runs keep only 6 trades because the credit filter rejects almost every entry. Take-profit on margin is 0.6–1.1%.
+- **Decisions:**
+  - Costs use today's rule tables (STT 0.15%, ₹30 Upstox Plus).
+  - Runs start 1 Jan 2025 because holidays, T-bill rates and lot sizes are not loaded for 2024. Late-2024 candles only warm up the IV percentile.
+  - Exit rules read last trades and every fill pays the haircut. The first run marked the triggers with the haircut too, and the ₹1.50 floor on ₹5–15 sides fired the side stop on the spread model itself. Those reports are kept as `*_haircut_triggers.md`; the results were similar.
+- **Without the 2.2× side stop** (owner, 14 Nov; trial 9; `SET=side_stop_mult=0`):
+  - 113 trades, 33% wins vs a 79% break-even win rate, **−₹1.20 lakh net** (t −6.4); −₹3.04 lakh in the stress run.
+  - Gross is still only +₹7k with the haircut added back.
+  - Exits: 46 overall stops, 34 take-profits, 19 weekend bookings and 13 time exits.
+  - The loss is smaller mainly because fewer trades and fills pay the haircut and charges, not because the rule gained an edge. The live side stop stays as it is.
+- **Open (owner):**
+  - Neither rule shows an edge on candles.
+  - Recorded bid/ask spreads should replace the ₹1.50 floor once there are enough sessions.
+  - The event filter and the order-flow veto are not modelled: there is no event history before Nov 2026, and no depth.
 ## BSE F&O bhavcopy; Sensex IV history; nightly job waits for the network (14 Nov 2026)
 
 - **BSE F&O bhavcopy** (`bse_fo` in `engine/data/eod/download.py`): BSE's derivatives file at `https://www.bseindia.com/download/BhavCopy/Derivative/BhavCopy_BSE_FO_0_0_0_{yyyymmdd}_F_0000.CSV`, verified by download. Same UDiFF layout as NSE's. Downloaded nightly by `tasks.py eod`; 275 sessions backfilled (Oct 2025 → 13 Nov 2026, 18 holidays missing).

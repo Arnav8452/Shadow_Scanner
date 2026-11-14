@@ -12,6 +12,8 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | event-arb | shadow-scan [VERSION=v1_shadow|v2_bot]
                       | mine-log [FILE=...] | self-review [FILE=...]
                       | paper [VERSION=v2_bot] | backtest [TRIALS=n] | report
+                      | candle-backtest STRAT=condor|log3 FROM= [TO=] [SET=k=v] [VARIANTS=0]
+                        [SPREADS=p90] [QUOTES=] [CACHE=] [DOTENV=] [TRIALS=]
 """
 
 from __future__ import annotations
@@ -1731,6 +1733,205 @@ def task_backtest(params: dict[str, str]) -> int:
         f"survives_50ms={ev.survives_50ms_retail_latency} DSR={dsr.deflated_sharpe_pct}% "
         f"MC_MDD99=₹{mc.p99_max_drawdown_inr}"
     )
+    return 0
+
+
+def task_candle_backtest(params: dict[str, str]) -> int:
+    """CANDLE APPROXIMATION backtest (engine/backtest/candles) on Upstox 1-minute candles:
+    STRAT=condor|log3 FROM=YYYY-MM-DD TO=YYYY-MM-DD (default yesterday). Fills at the next
+    bar's open with the punitive haircut, rerun at 2x; walk-forward, Monte Carlo and deflated
+    Sharpe over every parameter set tried. Order-book strategies are refused. The condor runs
+    its variant grid (each a trial; VARIANTS=0 for the live config only). SET=key=value,...
+    changes rule parameters (e.g. SET=side_stop_mult=0); each change is a new trial.
+    SPREADS=p90|median sets the base haircut from the recorder's measured spreads (QUOTES= another
+    recorded-quotes folder; the report always prints the measured table). Report
+    and trades in reports/candle_backtest/. CACHE= another download folder; DOTENV= another
+    .env file; TRIALS= another trial registry."""
+    _raw_dir, book, cal = _eod_common()
+    from engine.backtest.candles.data import UpstoxCandleSource
+    from engine.backtest.candles.fills import Costs, Haircut
+    from engine.backtest.candles.market import Market
+    from engine.backtest.candles.runner import (
+        render_report,
+        render_variants,
+        run_candle_backtest,
+        trades_csv,
+    )
+    from engine.backtest.candles.strategies import Ctx, StrategyRefused, resolve
+    from engine.cockpit.backfill import _http_json
+    from engine.cockpit.config import load_cockpit_config
+    from engine.core.config import load_settings
+    from engine.core.env import get_secret, load_dotenv
+
+    try:
+        spec = resolve(params.get("STRAT", ""))
+    except StrategyRefused as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    if "FROM" not in params:
+        print("FROM=YYYY-MM-DD is required", file=sys.stderr)
+        return 2
+    today = _today_ist()
+    start = date.fromisoformat(params["FROM"])
+    end = date.fromisoformat(params["TO"]) if params.get("TO") else today - timedelta(days=1)
+    load_dotenv(Path(params["DOTENV"]) if params.get("DOTENV") else ROOT / ".env")
+    settings = load_settings()
+    raw = settings.raw
+    cb = raw.get("candle_backtest") or {}
+    tok = ""
+    for name in ("UPSTOX_ACCESS_TOKEN", "UPSTOX_ANALYTICS_TOKEN"):
+        try:
+            tok = get_secret(name).reveal()
+        except Exception:
+            tok = ""
+        if tok:
+            break
+    if not tok:
+        print("no Upstox token in .env (UPSTOX_ACCESS_TOKEN / UPSTOX_ANALYTICS_TOKEN)")
+        return 2
+    live: dict[date, dict[tuple[float, str], tuple[str, int]]] = {}
+    try:
+        from engine.data.recorder.run import load_master, load_recorder_settings
+        from engine.data.reference.instrument_master import Kind
+
+        master = load_master(load_recorder_settings(settings), today, datetime.now(IST), fetch=True)
+        for e in master.option_expiries("NIFTY", today):
+            live[e] = {
+                (float(i.strike), "CE" if i.kind is Kind.CALL else "PE"): (i.symbol, i.lot_size)
+                for i in master.options("NIFTY", e)
+                if i.strike and i.kind in (Kind.CALL, Kind.PUT)
+            }
+    except Exception as exc:  # live contracts only matter for the last days of the range
+        print(f"instrument master unavailable ({type(exc).__name__}); live expiries skipped")
+    cache = Path(params.get("CACHE") or ROOT / str(cb.get("cache_dir", "data/candles")))
+    src = UpstoxCandleSource(
+        tok, _http_json, cache, today=today, live=live,
+        window_days=int(cb.get("window_days", 14)), log=print,
+    )  # fmt: skip
+    sessions = src.sessions(start, end)
+    print(f"{spec.key}: {len(sessions)} sessions with index candles, {start} to {end}")
+    ck = load_cockpit_config(settings, ROOT)
+    rk = raw.get("risk") or {}
+    market = Market(src, book, cal)
+    hfrom = cb.get("iv_history_from")
+    from engine.backtest.candles.spreads import haircut_table, measure_spreads, render_spreads
+
+    quotes_dir = Path(params.get("QUOTES") or settings.paths["parquet"] / "quotes")
+    buckets, rec_days = measure_spreads(quotes_dir)
+    appendix = render_spreads(buckets, rec_days)
+    hc = Haircut(float(cb.get("haircut_min_inr", 0.10)), float(cb.get("haircut_pct", 0.5)))
+    if params.get("SPREADS"):  # SPREADS=p90|median: the recorded half-spreads per price bucket
+        if not buckets:
+            print("SPREADS= needs recorded quotes in data/parquet/quotes", file=sys.stderr)
+            return 2
+        hc = Haircut(table=haircut_table(buckets, params["SPREADS"]))
+        appendix += "\n\nThe base haircut is each bucket's " + params["SPREADS"] + " half-spread."
+    scenarios = {
+        "base": (hc, 1.0),
+        "stress": (
+            hc.scaled(float(cb.get("stress_mult", 2.0))),
+            float(cb.get("stress_charges_mult", 2.0)),
+        ),
+        "plan": (
+            Haircut(
+                float(cb.get("plan_haircut_min_inr", 1.0)), float(cb.get("plan_haircut_pct", 0.75))
+            ),
+            1.0,
+        ),
+        "extreme": (
+            Haircut(
+                float(cb.get("extreme_haircut_min_inr", 1.5)),
+                float(cb.get("extreme_haircut_pct", 1.5)),
+            ),
+            1.0,
+        ),
+    }
+
+    def make_ctx(scenario: str) -> Any:
+        haircut, charges_mult = scenarios[scenario]
+        return Ctx(
+            market=market,
+            haircut=haircut,
+            costs=Costs(
+                book,
+                today,
+                broker=str(cb.get("broker", "upstox_plus")),
+                fallback_broker=str(cb.get("fallback_broker", "upstox")),
+                costs_on="trade_date" if cb.get("costs_on") == "trade_date" else "run_date",
+                charges_mult=charges_mult,
+            ),
+            calendar=cal,
+            capital_inr=float((raw.get("capital") or {}).get("inr", 200000)),
+            risk=dict(rk),
+            run_date=today,
+            fill_within_min=float(cb.get("fill_within_min", 3)),
+            stale_entry_min=float(cb.get("stale_entry_min", 5)),
+            stale_mark_min=float(cb.get("stale_mark_min", 15)),
+            eval_every_min=int(cb.get("eval_every_min", 5)),
+            trigger_on_haircut=bool(cb.get("trigger_on_haircut", False)),
+            iv_history_from=date.fromisoformat(str(hfrom)) if hfrom else None,
+            iv_min_history=int(cb.get("iv_min_history", 20)),
+            log=print,
+        )
+
+    wf = cb.get("walk_forward") or {}
+    mc = cb.get("monte_carlo") or {}
+    variants = [spec.params(ck)]
+    overrides = params.get("SET", "")
+    if spec.variants is not None and params.get("VARIANTS", "0" if overrides else "1") != "0":
+        variants = spec.variants(ck)
+    if overrides:  # e.g. SET=side_stop_mult=0: a new rule, counted as a trial
+        from engine.backtest.candles.strategies import apply_overrides
+
+        try:
+            variants = [apply_overrides(v, overrides) for v in variants]
+        except (ValueError, TypeError) as exc:
+            print(f"SET={overrides}: {exc}", file=sys.stderr)
+            return 2
+    set_tag = "_" + re.sub(r"[^A-Za-z0-9.]+", "-", overrides).strip("-") if overrides else ""
+    out = ROOT / "reports" / "candle_backtest"
+    out.mkdir(parents=True, exist_ok=True)
+    results = []
+    for n, var in enumerate(variants):
+        label = str(getattr(var, "label", "")) if len(variants) > 1 or overrides else ""
+        res = run_candle_backtest(
+            spec,
+            var,
+            make_ctx,
+            sessions,
+            trials_path=Path(
+                params.get("TRIALS")
+                or ROOT / str(cb.get("trials_file", "data/backtest/candle_trials.jsonl"))
+            ),
+            also_trials=variants,
+            label=label,
+            extra_scenarios=("plan", "extreme"),
+            appendix=appendix,
+            wf_train=int(wf.get("train", 60)),
+            wf_test=int(wf.get("test", 20)),
+            mc_paths=int(mc.get("paths", 1000)),
+            mc_block=int(mc.get("block", 5)),
+            ruin_pct=float(mc.get("ruin_pct", 20)),
+        )
+        results.append(res)
+        s1, s2 = res.s1, res.s2
+        others = "; ".join(f"{d}: net {x.net:,.0f}" for d, _, x in res.extra)
+        print(
+            f"CANDLE APPROXIMATION {spec.key} {label}: {s1.trades} trades, net {s1.net:,.0f}; "
+            f"{res.stress_desc}: net {s2.net:,.0f}; {others}; t={s1.t_stat:.2f}; "
+            f"DSR {res.dsr.deflated_sharpe_pct:.1f}% over {res.n_trials} trial(s)",
+            flush=True,
+        )
+        tag = f"_v{n + 1}" if len(variants) > 1 else ""
+        csv_name = f"{spec.key}_{res.start}_{res.end}{set_tag}{tag}_trades.csv"
+        (out / csv_name).write_text(trades_csv(res.base.trades), encoding="utf-8")
+        res.notes.append(f"trades of this variant: `{csv_name}`")
+    r0 = results[0]
+    md = out / f"{spec.key}_{r0.start}_{r0.end}{set_tag}.md"
+    parts = [render_variants(results)] if len(results) > 1 else []
+    parts += [render_report(r, "", max_trades=40 if n == 0 else 10) for n, r in enumerate(results)]
+    md.write_text("\n\n---\n\n".join(parts), encoding="utf-8")
+    print(f"{src.budget.count} API calls -> {md}")
     return 0
 
 
