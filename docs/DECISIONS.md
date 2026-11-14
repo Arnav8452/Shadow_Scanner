@@ -4,6 +4,15 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## EOD history before 2024: NSE old-layout bhavcopies (14 Nov 2026)
+
+- **Built:** `eod-backfill` now reaches back past 2024. NSE's UDiFF F&O and cash bhavcopies start on 1 Jan 2024. Earlier days exist only in the old layout (INSTRUMENT, SYMBOL, EXPIRY_DT … / SYMBOL, SERIES …) under `content/historical/`. The downloader picks that URL for `fo` and `cm` before 2024 and checks its header. Files go to the same paths, and every reader already handled both layouts' column names and instrument codes. Checked by download: the old layout exists from at least 2010-10-04 to 2024-07-05.
+- **Decision:** this uses free bulk files, not the Upstox API. Most of the research queue needs daily data, so rate limits no longer gate it.
+- **Fix:** `eod-backfill` used to rebuild the IV history over FROM..TO, which replaced the recent 400-day file with whatever range was backfilled. It now rebuilds over the usual 400-day window, and `IV=0` skips the rebuild. It prints progress every 50 days.
+- **Limits:** old-layout files carry no underlying price or lot size, so spot must come from the indices file or the cash bhavcopy, and lots from `config/rules`. Index names in old index files differ ("CNX Nifty" before the 2015 rename). Holidays before 2025 aren't in `holidays.csv`, so missing days show as 404s.
+
+---
+
 ## Mechanism-first research; event IV crush pre-registered (14 Nov 2026)
 
 The owner asked for strategies with a cause ("if this is the data, this must happen"), tested on paper, not mined patterns; any market, executable within ₹1-2L.
