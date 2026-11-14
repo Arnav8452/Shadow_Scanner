@@ -34,3 +34,7 @@ reports/
 Thumbs.db
 .vscode/
 .idea/
+
+# Private strategy research (kept local, out of the public repo; owner 14 Nov 2026)
+argon/
+docs/research/
