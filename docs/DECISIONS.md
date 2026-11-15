@@ -26,6 +26,17 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Upstox Plus charges checked against Upstox's brokerage API (15 Nov 2026)
+
+- **Checked:** 11 test orders across delivery, intraday, futures and options went through `GET /v2/charges/brokerage` with the owner's token. That's Upstox's own calculator for the account's plan; read-only, no order placed. Results:
+  - **Match:** STT, stamp duty and exchange transaction charges in every segment, including the April 2026 F&O rates (options STT 0.15%, futures 0.05%, transaction charges 0.03553% and 0.00183%, stamp duty 0.003% and 0.002%).
+  - **Delivery brokerage:** it is the lower of 2.5% and ₹30, not a flat ₹30. Fixed: two rule rows replace the flat one, and `equity_delivery_charges` now supports a percentage with a cap.
+  - **Intraday brokerage:** 0.06%, not 0.1%, capped at ₹30. Fixed the rule row.
+  - **SEBI fee on F&O:** Upstox's calculator shows ₹0, while we charge ₹10 per crore as Zerodha's contract notes do. Kept ours (statutory) until a real Upstox F&O contract note settles it.
+- **Not changed:** the per-order rounding (the API prints paise half up; the model's `round` can differ by a paisa) and the DP plan (`DP4A`, ₹20 minimum).
+
+---
+
 ## First golden contract-note test (15 Nov 2026)
 
 - **Checked:** the cost model against the owner's real Zerodha contract note, an NSE cash delivery sell on 29 Oct 2026. Exchange charges incl. IPF, SEBI fee, GST and STT all match the printed lines within ₹0.01 once rounded as the note rounds. The only difference is Zerodha's ₹0.01 token brokerage on zero-brokerage delivery. The total is within ₹1.

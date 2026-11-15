@@ -38,7 +38,7 @@ def test_intraday_buy_and_sell_upstox_plus(book: RuleBook) -> None:
 
 def test_intraday_small_order_pays_the_percentage(book: RuleBook) -> None:
     small = equity_intraday_charges(book, ON, side="buy", value_inr=10_000, broker="upstox_plus")
-    assert small.brokerage == pytest.approx(10.0)  # 0.1% of ₹10,000 < ₹30
+    assert small.brokerage == pytest.approx(6.0)  # 0.06% of ₹10,000 < ₹30 (Upstox API)
     std = equity_intraday_charges(book, ON, side="buy", value_inr=100_000, broker="upstox")
     assert std.brokerage == pytest.approx(20.0)
 
