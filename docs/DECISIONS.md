@@ -26,6 +26,19 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## First golden contract-note test (15 Nov 2026)
+
+- **Checked:** the cost model against the owner's real Zerodha contract note, an NSE cash delivery sell on 29 Oct 2026. Exchange charges incl. IPF, SEBI fee, GST and STT all match the printed lines within ₹0.01 once rounded as the note rounds. The only difference is Zerodha's ₹0.01 token brokerage on zero-brokerage delivery. The total is within ₹1.
+- **Built:** `as_contract_note()` in `engine/backtest/costs.py`. It rounds components to the paisa, STT to the nearest rupee (half up), and recomputes GST on the rounded taxable value. `tests/golden/test_contract_notes.py` reads each note's numbers from `data/private/golden/*.json` (git-ignored, no identity fields) and skips where that folder is absent, so the owner's trades never enter the repo.
+- **Verified rows** (`verified_on` 15 Nov 2026): STT on delivery sells, NSE cash exchange charges, the SEBI fee, and GST.
+- **Not yet covered:**
+  - F&O charges, which need an F&O note;
+  - Upstox brokerage, which needs an Upstox note;
+  - stamp duty and buy-side STT, which need a delivery buy;
+  - the DP debit, which is on the ledger, not the note.
+
+---
+
 ## Open-items checklist (15 Nov 2026)
 
 - **Built:** `tasks.py open-items`, also run by the evening job, writes `reports/open_items.md`. It covers every UNVERIFIED row in `config/rules/`, every PROPOSED line in `config/settings.yaml`, and every "Open" item in this file, grouped by who must act (owner or Claude), each with a stable id. An item is closed by adding its id to `config/open_items_resolved.csv`; its text stays here as history. First run: 102 items, of which 2 were already resolved (approved risk numbers, the loaded 2026 holidays).
