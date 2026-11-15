@@ -189,3 +189,9 @@ def test_backfill_retries_a_failed_day(tmp_path: Path) -> None:
     )
     assert [r.status for r in out] == ["ok"] and len(calls) == 2
     assert waits[0] >= 5.0  # backed off before the retry
+
+
+def test_two_digit_year_in_one_old_cash_file() -> None:
+    # NSE's cash bhavcopy for 13 Jul 2020 writes TIMESTAMP as 13-Jul-20.
+    text = LEGACY_CM.replace("03-JAN-2018", "13-Jul-20")
+    assert parse_cash_bhavcopy_csv(text)[0].trade_date == date(2020, 7, 13)
