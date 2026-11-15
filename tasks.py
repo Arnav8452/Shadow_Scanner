@@ -8,6 +8,7 @@ uv run python tasks.py test | lint | fmt | rules | instruments | fyers-login
                       | eod [DATE=] | eod-backfill FROM= TO= [DATASETS=fo,cm,indices] [IV=0]
                       | iv-history [FROM= TO=] | corporate-actions [FROM= TO=]
                       | equity-panel [FROM= TO=] [REFRESH_SYMBOLS=1]
+                      | open-items
                       | screener-history [DAYS=400]
                       | evening [DATE=] [STEPS=...] | fundamentals [SYMBOLS=A,B]
                       | swing [DATE=] | delivery-study [FROM= TO=] | index-weights-verify
@@ -410,7 +411,26 @@ def task_evening(params: dict[str, str]) -> int:
     backup_rc = task_backup({}) if "backup" not in params.get("SKIP", "") else 0
     task_audit({})  # nightly rule audit of the day's paper trades (report only)
     task_scorecard({})  # promotion scorecard over every journal (report only)
+    task_open_items({})  # checklist of unverified rules and open questions (report only)
     return 1 if rep.errors or backup_rc else 0
+
+
+def task_open_items(params: dict[str, str]) -> int:
+    """Checklist of everything unfinished: UNVERIFIED rule rows, PROPOSED settings and the
+    "Open" items in docs/DECISIONS.md, grouped by who must act (owner / Claude). Writes
+    reports/open_items.md; close an item by adding its id to config/open_items_resolved.csv."""
+    sys.path.insert(0, str(ROOT))
+    from engine.core.open_items import collect, render
+
+    items, resolved = collect(ROOT)
+    text = render(items, resolved, generated=datetime.now(IST).strftime("%d %b %Y %H:%M"))
+    out = ROOT / "reports" / "open_items.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    owner = sum(x.owner == "owner" for x in items)
+    print(f"open items: {len(items)} ({owner} need the owner, {len(items) - owner} need Claude);"
+          f" {resolved} resolved -> {out}")  # fmt: skip
+    return 0
 
 
 def task_backfill_history(params: dict[str, str]) -> int:
