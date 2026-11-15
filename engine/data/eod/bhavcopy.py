@@ -108,7 +108,13 @@ def _eod_known_at(d: date) -> datetime:
 
 def _parse_date(raw: str) -> date:
     s = raw.strip()
-    for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%m-%Y", "%Y%m%d"):
+    for fmt in (
+        "%Y-%m-%d",
+        "%d-%b-%Y",
+        "%d-%m-%Y",
+        "%Y%m%d",
+        "%d-%b-%y",
+    ):  # %y: one NSE file, 13-Jul-20
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
