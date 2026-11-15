@@ -23,6 +23,7 @@ Stored as one parquet file per month under ``data/parquet/equity/daily/``; query
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import date
 from pathlib import Path
@@ -41,6 +42,8 @@ from engine.data.equity.sources import (
     parse_mto,
     parse_secban,
 )
+
+log = logging.getLogger(__name__)
 
 GAP_FLAG = 0.40  # |adjusted return| above this is flagged for a look
 
@@ -129,16 +132,24 @@ def build_panel(
         if not cm.exists():
             continue
         rows = [r for r in parse_cash_bhavcopy_csv(read_eod_text(cm)) if r.trade_date == day]
+        # A side file that is missing or unreadable means "unknown" for that day (None), never a
+        # crash: one malformed NSE file must not stop a ten-year build.
+        deliv: dict[tuple[str, str], Any] | None = None
         mto_p = eod_path(raw_dir, "mto", day)
-        deliv = (
-            {(m.symbol, m.series): m for m in parse_mto(read_eod_text(mto_p))}
-            if mto_p.exists()
-            else None
-        )
+        if mto_p.exists():
+            try:
+                deliv = {(m.symbol, m.series): m for m in parse_mto(read_eod_text(mto_p))}
+            except ValueError as exc:
+                log.warning("equity panel: %s unreadable (%s); delivery unknown", mto_p, exc)
         fo_p = eod_path(raw_dir, "fo", day)
         fo = fo_stock_symbols(read_eod_text(fo_p)) if fo_p.exists() else None
+        ban: set[str] | None = None
         ban_p = eod_path(raw_dir, "secban", day)
-        ban = set(parse_secban(read_eod_text(ban_p))[1]) if ban_p.exists() else None
+        if ban_p.exists():
+            try:
+                ban = set(parse_secban(read_eod_text(ban_p))[1])
+            except ValueError as exc:
+                log.warning("equity panel: %s unreadable (%s); ban list unknown", ban_p, exc)
         for r in rows:
             canon = smap.canonical(r.symbol, day)
             base = last.get(canon) or r.prev_close

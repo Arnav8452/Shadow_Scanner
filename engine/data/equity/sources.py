@@ -41,18 +41,32 @@ class SymbolChange:
 
 
 def _dmy(raw: str) -> date:
-    return datetime.strptime(raw.strip(), "%d-%b-%Y").date()
+    """'03-JAN-2018', and the odd full month name ('01-JUNE-2017' in one NSE ban file)."""
+    s = raw.strip()
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised date {raw!r}")
 
 
-_TRADE_DATE = re.compile(r"Trade Date <(\d{2}-[A-Za-z]{3}-\d{4})>")
+_TRADE_DATE = re.compile(r"Date <(\d{2}-[A-Za-z]{3}-\d{4})>")
+_HEADER_10 = re.compile(r"^10,MTO,(\d{8}),", re.M)
 
 
 def parse_mto(text: str) -> list[MtoRow]:
-    """Record-type 20 lines: ``20,sr,symbol,series,traded,deliverable,pct``."""
-    m = _TRADE_DATE.search(text)
-    if not m:
-        raise ValueError("MTO file without a 'Trade Date <..>' header")
-    day = _dmy(m.group(1))
+    """Record-type 20 lines: ``20,sr,symbol,series,traded,deliverable,pct``. The trade date
+    comes from the ``10,MTO,DDMMYYYY`` record (some NSE files misspell the ``Trade Date <..>``
+    line, e.g. ``rade Date <30-MAR-2017>``), else from that line."""
+    h = _HEADER_10.search(text)
+    if h:
+        day = datetime.strptime(h.group(1), "%d%m%Y").date()
+    else:
+        m = _TRADE_DATE.search(text)
+        if not m:
+            raise ValueError("MTO file without a trade date")
+        day = _dmy(m.group(1))
     rows: list[MtoRow] = []
     for cells in csv.reader(io.StringIO(text)):
         if len(cells) < 7 or cells[0].strip() != "20":
@@ -73,7 +87,7 @@ def parse_mto(text: str) -> list[MtoRow]:
     return rows
 
 
-_BAN_DATE = re.compile(r"Trade Date (\d{2}-[A-Za-z]{3}-\d{4})")
+_BAN_DATE = re.compile(r"Trade Date (\d{2}-[A-Za-z]{3,9}-\d{4})")
 
 
 def parse_secban(text: str) -> tuple[date, list[str]]:
