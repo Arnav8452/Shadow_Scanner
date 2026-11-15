@@ -46,6 +46,8 @@ class CockpitConfig:
     replay_port: int = 8767
     publish_interval_ms: int = 200
     analytics_interval_s: float = 1.0
+    # Daily saved copy of the live analytics (engine/cockpit/daily_snapshot.py), HH:MM IST.
+    analytics_snapshot_at: str = "15:30"
     chain_interval_s: float = 60.0
     events_kept: int = 200
     bot: BotPaperConfig = BotPaperConfig()
@@ -236,6 +238,7 @@ def load_cockpit_config(settings: Settings, root: Path) -> CockpitConfig:
         replay_port=int(raw.get("replay_port", 8767)),
         publish_interval_ms=int(raw.get("publish_interval_ms", 200)),
         analytics_interval_s=float(raw.get("analytics_interval_s", 1.0)),
+        analytics_snapshot_at=str(raw.get("analytics_snapshot_at", "15:30")),
         chain_interval_s=float(raw.get("chain_interval_s", 60.0)),
         events_kept=int(raw.get("events_kept", 200)),
         bot=BotPaperConfig(

@@ -173,6 +173,12 @@ class CockpitCore:
         self._outcomes_seen = 0
         self._next_publish = 0.0  # wall clock (monotonic s): replays may sit on one event time
         self._next_analytics = 0
+        from datetime import time as _time
+
+        from engine.cockpit.daily_snapshot import DailySnapshot
+
+        hh, mm = (int(x) for x in cfg.analytics_snapshot_at.split(":"))
+        self.daily_snapshot = DailySnapshot(cfg.journal_dir, _time(hh, mm))
         self._urgent = False
         self.calendar_events: list[Any] = []  # CalendarEvent rows (set by build_cockpit)
         self.study: Any = None  # SignalStudy (set by build_cockpit)
@@ -920,6 +926,8 @@ class CockpitCore:
         if now_ns >= self._next_analytics and self.analytics is not None:
             self.analytics.update(now, self.runner.scanner.states)
             self._next_analytics = now_ns + int(self.cfg.analytics_interval_s * NS_PER_S)
+            if self.daily_snapshot.maybe_write(now, self.analytics.view()):
+                self.event("analytics", "daily analytics snapshot saved", now)
         wall = time.monotonic()
         if wall >= self._next_publish or self._urgent:
             books = self.books()

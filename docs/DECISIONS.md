@@ -26,6 +26,13 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Daily snapshot of live analytics; nightly FII/DII cash flows (15 Nov 2026)
+
+- **Built:** the cockpit now appends one record a day of its live analytics to `data/state/analytics_daily.jsonl`, at the first analytics update at or after 15:30 (`cockpit.analytics_snapshot_at`). The record covers each index's strip (spot, ATM IV, skew, basis, gamma regime, PCR, walls), the chain summary, and dispersion, realised correlation and weighted breadth. A same-day restart doesn't write a second copy, and replays write to their own folder. This turns live-only signals into history for research (Argon's spec §9c).
+- **Also:** the evening job saves NSE's provisional FII/DII cash flows each night (`data/raw/eod/fii_dii/`, from 13 Nov 2026). NSE serves only the latest day. Its historical bulk/block-deal API refuses automated requests (503), so deals exist only from the nightly saves.
+
+---
+
 ## Scorecard: capital and time vs Nifty (15 Nov 2026)
 
 - **Built:** `tasks.py scorecard` (also run each evening) now adds a "Capital and time" table, from `engine/cockpit/capital_time.py`. For each paper account, plus all accounts sharing the capital, it shows:
