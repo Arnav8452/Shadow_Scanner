@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from engine.data.eod.bhavcopy import parse_cash_bhavcopy_csv
 from engine.data.eod.download import eod_path, eod_url
 from engine.data.equity.corporate_actions import (
     CorpAction,
@@ -231,3 +232,12 @@ def test_ban_file_with_full_month_name() -> None:
         date(2017, 6, 1),
         ["ACME"],
     )
+
+
+def test_cm_bhavcopy_two_digit_year_date_parses() -> None:
+    rows = parse_cash_bhavcopy_csv(
+        OLD_CM_HEAD + "ACME,EQ,10,12,9,11,11,10,1000,11000,13-Jul-20,50,INE000A01011\n"
+    )
+    assert len(rows) == 1
+    assert rows[0].trade_date == date(2020, 7, 13)
+    assert rows[0].symbol == "ACME"
