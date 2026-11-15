@@ -50,6 +50,38 @@ class ChargeBreakdown:
 ZERO = ChargeBreakdown(0, 0, 0, 0, 0, 0, 0)
 
 
+def _half_up(x: float, places: int) -> float:
+    from decimal import ROUND_HALF_UP, Decimal
+
+    q = Decimal(1).scaleb(-places)
+    return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_UP))
+
+
+def as_contract_note(b: ChargeBreakdown) -> ChargeBreakdown:
+    """Charges as a contract note prints them, for one scrip's orders on one note:
+    brokerage, exchange, SEBI fee and stamp duty to the paisa; STT to the nearest rupee
+    (half up); GST recomputed at the same rate on the rounded taxable value (brokerage +
+    exchange + SEBI fee), to the paisa. The DP debit is a ledger charge, not on the note, and is
+    left as is. Checked against a real Zerodha delivery contract note (29 Oct 2026):
+    tests/golden/test_contract_notes.py, fixture kept private in data/private/golden/."""
+    brok = _half_up(b.brokerage, 2)
+    exch = _half_up(b.exchange, 2)
+    sebi = _half_up(b.sebi, 2)
+    base_raw = b.brokerage + b.exchange + b.sebi
+    rate = b.gst / base_raw if base_raw > 0 else 0.0
+    gst = _half_up(rate * (brok + exch + sebi), 2)
+    return ChargeBreakdown(
+        brokerage=brok,
+        stt=_half_up(b.stt, 0),
+        exchange=exch,
+        sebi=sebi,
+        stamp=_half_up(b.stamp, 2),
+        gst=gst,
+        dp=b.dp,
+        unverified=b.unverified,
+    )
+
+
 class _Lookups:
     def __init__(self, book: RuleBook, on: date, allow_unverified: bool) -> None:
         self.book, self.on, self.allow = book, on, allow_unverified
