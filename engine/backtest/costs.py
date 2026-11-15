@@ -123,9 +123,17 @@ def equity_delivery_charges(
         raise ValueError("value_inr must be >= 0")
     lk = _Lookups(book, on, allow_unverified)
     pct = value_inr / 100.0
-    brokerage = lk.one(
-        "brokerage", broker=broker, segment="equity_delivery", component="flat_per_order"
+    # A flat fee per order, or the lower of a percentage and a per-order cap (Upstox Plus:
+    # min(₹30, 2.5%), confirmed by Upstox's brokerage API on 15 Nov 2026).
+    b_rows = book["brokerage"].lookup_all(
+        on, allow_unverified=allow_unverified, broker=broker, segment="equity_delivery"
     )
+    lk._note("brokerage", b_rows)
+    comps = {r.keys["component"]: r.as_float() for r in b_rows}
+    if "flat_per_order" in comps:
+        brokerage = comps["flat_per_order"]
+    else:
+        brokerage = min(comps["cap_per_order"], comps["pct_of_turnover"] * pct)
     stt = lk.one("stt", segment="equity_delivery", leg=side) * pct
     exch = lk.total("exchange_charges", exchange=exchange, segment="equity_delivery") * pct
     sebi = lk.one("sebi_fee", segment="equity") * value_inr / CRORE

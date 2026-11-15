@@ -23,8 +23,9 @@ upstox_plus,futures,pct_of_turnover,0.05,pct,2026-11-11,,https://upstox.com/plus
 upstox_plus,futures,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-11,secondary,
 upstox,equity_intraday,pct_of_turnover,0.1,pct,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,"Upstox: ₹20 per executed order or 0.1%, whichever is lower. Start date not researched."
 upstox,equity_intraday,cap_per_order,20,inr_per_executed_order,2024-10-01,,https://upstox.com/brokerage-charges/,2026-11-12,secondary,
-upstox_plus,equity_intraday,pct_of_turnover,0.1,pct,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,"Plus Compare Plans: '₹30 or 0.10% per order'; the charges page says Plus brokerage is 'up to ₹30/order', read as whichever is lower. Starts on the plan verification date, like the other Plus rows."
+upstox_plus,equity_intraday,pct_of_turnover,0.06,pct,2026-11-11,,https://api.upstox.com/v2/charges/brokerage,2026-11-15,secondary,"Upstox brokerage API for the owner's account (Plus), 15 Nov 2026: Rs 11.10 on Rs 18,500 and Rs 24.00 on Rs 40,000 intraday orders = 0.06% (the Plus page said 0.1%; the API is the billing engine). Cap Rs 30 binds above Rs 50,000."
 upstox_plus,equity_intraday,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,
-upstox_plus,equity_delivery,flat_per_order,30,inr_per_executed_order,2026-11-11,,https://upstox.com/plus/,2026-11-12,secondary,"Plus Compare Plans: '₹30 or 2.5% per order' (2.5% is lower only below a ₹1,200 order; modelled as flat ₹30)."
+upstox_plus,equity_delivery,pct_of_turnover,2.5,pct,2026-11-11,,https://api.upstox.com/v2/charges/brokerage,2026-11-15,secondary,"Upstox brokerage API for the owner's account (Plus), 15 Nov 2026: Rs 20.00 on an Rs 800 delivery order = 2.5%; the lower of this and the cap applies."
+upstox_plus,equity_delivery,cap_per_order,30,inr_per_executed_order,2026-11-11,,https://api.upstox.com/v2/charges/brokerage,2026-11-15,secondary,"Upstox brokerage API, 15 Nov 2026: Rs 30.00 on Rs 1,500 and Rs 50,000 delivery orders (cap binds above Rs 1,200)."
 paper,equity_intraday,pct_of_turnover,0.03,pct,2000-01-01,,,,UNVERIFIED,"Paper default, same as the futures default."
 paper,equity_intraday,cap_per_order,20,inr_per_executed_order,2000-01-01,,,,UNVERIFIED,"Paper default."
