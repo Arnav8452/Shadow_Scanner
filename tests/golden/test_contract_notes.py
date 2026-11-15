@@ -45,3 +45,18 @@ def test_cost_model_matches_contract_note(path: Path) -> None:
     assert got.brokerage == pytest.approx(want["brokerage"], abs=0.011)
     printed = sum(want[k] for k in ("brokerage", "exchange", "sebi", "stamp", "gst", "stt"))
     assert abs(got.total - printed) <= 1.0
+
+    ledger = note.get("ledger")
+    if ledger:  # the cash that actually moved, from the broker's ledger
+        o = note["orders"][0]
+        with_dp = equity_delivery_charges(
+            book, on, side=o["side"], value_inr=o["value_inr"], broker=note["broker"],
+            exchange=o["exchange"], include_dp=True,
+        )  # fmt: skip
+        assert with_dp.dp == pytest.approx(ledger["dp"], abs=0.005)
+        # Settlement uses unrounded exchange, SEBI and GST, STT to the rupee, and the broker's
+        # token brokerage: our raw charges with only STT rounded land within a few paise.
+        cash = sum(o2["value_inr"] * (1 if o2["side"] == "sell" else -1) for o2 in note["orders"])
+        settled = cash - (total.exchange + total.sebi + total.gst + total.stamp
+                          + got.stt + want["brokerage"])  # fmt: skip
+        assert settled == pytest.approx(ledger["net_settlement"], abs=0.02)
