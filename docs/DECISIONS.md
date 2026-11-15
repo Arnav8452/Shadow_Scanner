@@ -26,6 +26,19 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Scorecard: capital and time vs Nifty (15 Nov 2026)
+
+- **Built:** `tasks.py scorecard` (also run each evening) now adds a "Capital and time" table, from `engine/cockpit/capital_time.py`. For each paper account, plus all accounts sharing the capital, it shows:
+  - average capital used (margin for spreads, premium for long options, net debit, or position cost);
+  - utilisation, meaning capital × sessions held over capital × sessions in the period;
+  - return on deployed capital per year;
+  - account return per year, with idle capital credited the 91-day T-bill rate from `config/rules`;
+  - max drawdown, and Nifty's return and drawdown over the same dates.
+- **Decision (owner):** the bar is Nifty's ~11% a year, measured per unit of capital and time, because Nifty ties up all the capital all year while a strategy may use it only part of the time, and profits are reinvested. Annualised figures appear after 20 sessions. Returns are before tax; trading gains are short-term, and Argon's research scoreboard models tax.
+- **Open:** sessions are counted as weekdays, ignoring holidays. The Nifty comparison reads `data/state/index_daily.json`, which the engine refreshes each morning.
+
+---
+
 ## Recorder: cash stocks from 16 Nov 2026 (15 Nov 2026)
 
 - **Built:** the recorder now also records NSE cash stocks: every stock with futures plus the Nifty 500 (`config/reference/nifty500_list.csv`, NSE's `ind_nifty500list.csv` saved 15 Nov 2026). That's 498 keys resolved from the Upstox master; the 4 misses are REITs and a placeholder. They get 1-minute snapshots with 5-level depth, plus every message in the 09:00–09:35 tick window, but not every tick all day.

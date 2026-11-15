@@ -821,6 +821,56 @@ def task_results_fly_test(params: dict[str, str]) -> int:
     return 0
 
 
+def _capital_time_section(journal_dir: Path, capital: float) -> str:
+    """The scorecard's capital-and-time table: each paper account, plus all of them sharing the
+    capital, against Nifty over the same dates (engine/cockpit/capital_time.py)."""
+    from datetime import datetime as _dt
+
+    from engine.cockpit.capital_time import capital_time, render_capital_time
+    from engine.cockpit.scorecard import account_closes
+    from engine.cockpit.vol_sizing import load_daily_closes
+
+    _, book, _ = _eod_common()
+    today = _today_ist()
+    rf = book.lookup("risk_free_rate", today, allow_unverified=True, tenor="91d_tbill")
+    rf_pa = rf.as_float() / 100.0
+    nifty = load_daily_closes(ROOT / "data" / "state" / "index_daily.json", today, None).get(
+        "NIFTY", []
+    )
+    accounts = account_closes(journal_dir)
+
+    def first_day(rows: list[dict[str, Any]]) -> date:
+        stamps = (r.get("opened_at") or r.get("closed_at") or r.get("t") or "" for r in rows)
+        return min(_dt.fromisoformat(str(s)[:10]).date() for s in stamps if s)
+
+    rows = [
+        capital_time(
+            a,
+            c,
+            capital=capital,
+            start=first_day(c),
+            end=today,
+            risk_free_pa=rf_pa,
+            index_closes=nifty,
+        )
+        for a, c in sorted(accounts.items())
+    ]
+    every = [r for c in accounts.values() for r in c]
+    if len(accounts) > 1:
+        rows.append(
+            capital_time(
+                "all accounts (shared capital)",
+                every,
+                capital=capital,
+                start=first_day(every),
+                end=today,
+                risk_free_pa=rf_pa,
+                index_closes=nifty,
+            )
+        )
+    return render_capital_time(rows, risk_free_pa=rf_pa, min_sessions_annualise=20)
+
+
 def task_scorecard(params: dict[str, str]) -> int:
     """Promotion scorecard over every paper journal: sessions, trades, net, net with charges
     doubled, t-statistic, deflated Sharpe over all strategies tried, kill rules, and a verdict
@@ -844,6 +894,7 @@ def task_scorecard(params: dict[str, str]) -> int:
     extra = int(params.get("TRIALS", "0"))
     scores = scorecard(jd, capital=capital, rules=rules, extra_trials=extra)
     text = render(scores, now=datetime.now(IST), trials=max(1, len(scores) + extra))
+    text += "\n" + _capital_time_section(jd, capital)
     out = ROOT / "reports" / "scorecard" / f"{_today_ist().isoformat()}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")
