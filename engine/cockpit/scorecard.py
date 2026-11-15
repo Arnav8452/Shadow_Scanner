@@ -94,6 +94,13 @@ def score_account(
     )  # fmt: skip
 
 
+def account_closes(journal_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    """Closed trades per paper account (accounts with none are left out)."""
+    accounts = {a: [r for r in _jsonl(journal_dir / f"paper_{a}.jsonl") if r.get("type") == "close"]
+                for a in _accounts(journal_dir)}  # fmt: skip
+    return {a: c for a, c in accounts.items() if c}
+
+
 def scorecard(
     journal_dir: Path,
     *,
@@ -104,9 +111,7 @@ def scorecard(
     min_trades: int = 20,
 ) -> list[Score]:
     rules = rules or KillRules()
-    accounts = {a: [r for r in _jsonl(journal_dir / f"paper_{a}.jsonl") if r.get("type") == "close"]
-                for a in _accounts(journal_dir)}  # fmt: skip
-    accounts = {a: c for a, c in accounts.items() if c}
+    accounts = account_closes(journal_dir)
     trials = max(1, len(accounts) + extra_trials)
     return sorted(
         (
@@ -147,4 +152,4 @@ def render(scores: list[Score], *, now: datetime, trials: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-__all__ = ["Score", "render", "score_account", "scorecard"]
+__all__ = ["Score", "account_closes", "render", "score_account", "scorecard"]
