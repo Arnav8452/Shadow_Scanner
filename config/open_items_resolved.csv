@@ -1,3 +1,10 @@
 id,resolved_on,how
 c8211120,2026-11-11,"Risk numbers approved by the owner on 11 Nov 2026 (settings.yaml marks them APPROVED)."
 f5be93a1,2026-11-11,"2026 NSE holidays loaded into config/rules/holidays.csv (M3)."
+1b0f4d86,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=fyers rates are never applied."
+742c5fbf,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=dhan rates are never applied."
+a29f8fad,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=fyers rates are never applied."
+bde0cad4,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=fyers rates are never applied."
+924b2ed2,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=dhan rates are never applied."
+1f1b548c,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=dhan rates are never applied."
+43115067,2026-11-15,"Not used: the owner trades on Upstox (data and paper costs use upstox_plus); broker=angel rates are never applied."
