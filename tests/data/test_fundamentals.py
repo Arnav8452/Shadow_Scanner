@@ -637,6 +637,11 @@ def test_evening_job_end_to_end_offline(tmp_path: Path, repo_root: Path) -> None
             return b"Securities in Ban For Trade Date 12-NOV-2026:\n1,BANNED\n"
         if url.endswith(("bulk.csv", "block.csv")):
             return b"Date,Symbol,Security Name,Client Name,Buy/Sell,Quantity Traded,Trade Price / Wght. Avg. Price,Remarks\n"  # noqa: E501
+        if "fiidiiTradeReact" in url:
+            return (
+                b'[{"buyValue":"1","category":"DII","date":"11-Nov-2026","netValue":"0",'
+                b'"sellValue":"1"}]'
+            )
         if "corporate-board-meetings" in url:
             return fx("board_meetings_2026-11-10_to_30.json")
         if "integrated-filing-results" in url or "share-holdings-master" in url:
