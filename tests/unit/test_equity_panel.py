@@ -213,3 +213,21 @@ def test_unexplained_gap_is_flagged(tmp_path: Path) -> None:
     _put(tmp_path, "cm", d2, OLD_CM_HEAD + "ACME,EQ,1,1,1,45,1,100,1,1,04-JAN-2018,1,X,\n")
     rows = list(build_panel(tmp_path, [d1, d2], [], []))
     assert rows[1]["ret"] == pytest.approx(-0.55) and rows[1]["gap_flag"] is True
+
+
+def test_mto_misspelled_header_and_unreadable_side_files(tmp_path: Path) -> None:
+    odd = MTO.replace("Trade Date <03-JAN-2018>", "rade Date <03-JAN-2018>")
+    assert parse_mto(odd)[0].trade_date == date(2018, 1, 3)  # date from the "10,MTO" record
+    d = date(2018, 1, 3)
+    _put(tmp_path, "cm", d, OLD_CM_HEAD + "ACME,EQ,1,1,1,100,1,98,10,1000,03-JAN-2018,1,X,\n")
+    _put(tmp_path, "mto", d, "garbage without any date\n")
+    _put(tmp_path, "secban", d, "garbage\n")
+    rows = list(build_panel(tmp_path, [d], [], []))
+    assert rows[0]["delivery_qty"] is None and rows[0]["fo_banned"] is None
+
+
+def test_ban_file_with_full_month_name() -> None:
+    assert parse_secban("Securities in Ban For Trade Date 01-JUNE-2017:\n1,ACME\n") == (
+        date(2017, 6, 1),
+        ["ACME"],
+    )
