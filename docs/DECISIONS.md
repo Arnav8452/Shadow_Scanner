@@ -26,6 +26,14 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Open-items checklist (15 Nov 2026)
+
+- **Built:** `tasks.py open-items`, also run by the evening job, writes `reports/open_items.md`. It covers every UNVERIFIED row in `config/rules/`, every PROPOSED line in `config/settings.yaml`, and every "Open" item in this file, grouped by who must act (owner or Claude), each with a stable id. An item is closed by adding its id to `config/open_items_resolved.csv`; its text stays here as history. First run: 102 items, of which 2 were already resolved (approved risk numbers, the loaded 2026 holidays).
+- **Why:** the docs had outrun the actions. Open questions were written down but never tracked to closure.
+- **Not included:** Argon's research items. They live in the private `argon/` inbox, and this report is public-safe.
+
+---
+
 ## Daily snapshot of live analytics; nightly FII/DII cash flows (15 Nov 2026)
 
 - **Built:** the cockpit now appends one record a day of its live analytics to `data/state/analytics_daily.jsonl`, at the first analytics update at or after 15:30 (`cockpit.analytics_snapshot_at`). The record covers each index's strip (spot, ATM IV, skew, basis, gamma regime, PCR, walls), the chain summary, and dispersion, realised correlation and weighted breadth. A same-day restart doesn't write a second copy, and replays write to their own folder. This turns live-only signals into history for research (Argon's spec §9c).
