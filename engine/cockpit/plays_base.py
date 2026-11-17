@@ -437,6 +437,21 @@ class LongPlay(Status):
         wait = self.retry_at.get(und)
         if wait is not None and now < wait:
             return ""  # backing off after a refusal: no new attempt, no new event line
+        holder = next(
+            (
+                a.name
+                for a in (getattr(m.core, "long_accounts", list)())
+                if a is not acct and a.name != "manual" and (sym in a.positions or sym in a.pending)
+            ),
+            None,
+        )
+        if holder is not None:
+            # One paper position per contract across the strategy accounts (owner, 17 Nov
+            # 2026): spoof-fade and breakthrough fired on the same wall event and bought the
+            # same 0.6-delta option in the same second, doubling the risk on one signal.
+            self.retry_at[und] = now + timedelta(seconds=60)
+            self.note(f"{m.core.label(sym)} already held by {holder}: no duplicate entry")
+            return f"{self.title}: {m.core.label(sym)} already held by {holder}; skipped"
         ivp = m.ivp(und)
         if self.hiv_route is not None and ivp is not None and ivp >= self.hiv_route.ivp_min:
             # Rule 4: IV in its top band -> no naked buying; the signal becomes a debit spread.
