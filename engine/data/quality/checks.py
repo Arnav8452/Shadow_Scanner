@@ -239,8 +239,11 @@ def qc_day(
     q.max_gap_s = max((g.seconds for g in q.gaps), default=0.0)
 
     # --- snapshot completeness
+    # A minute counts only if most of its snapshot rows are fresh: rows that merely repeat
+    # quotes from before an outage (all STALE) are not a snapshot of that minute.
     minutes = store.rows(
-        f"SELECT DISTINCT date_trunc('minute', ts) FROM {src} WHERE capture='snap'"
+        f"SELECT date_trunc('minute', ts) AS m FROM {src} WHERE capture='snap' GROUP BY m "
+        f"HAVING count(*) FILTER (WHERE (qc_flags & {int(Flag.STALE)}) = 0) * 2 > count(*)"
     )
     have = {m[0].replace(second=0, microsecond=0) for m in minutes}
     expected: list[datetime] = []

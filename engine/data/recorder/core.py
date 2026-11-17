@@ -179,6 +179,16 @@ class Recorder:
 
     def on_timer(self, now_ns: int) -> bool:
         """Snapshots, flushes, watchdog. Returns True if the feed should be restarted."""
+        behind = (now_ns - self._next_snap_ns) // self._snap_interval_ns
+        if behind >= 2:
+            # The process was suspended (laptop asleep or a long stall): catching up would write
+            # one snapshot per missed minute, all copies of the last pre-sleep quotes. Skip to
+            # the current minute and record the hole as a gap so QC reports it.
+            last_ns = self._next_snap_ns - self._snap_interval_ns
+            self._next_snap_ns += behind * self._snap_interval_ns
+            secs = (now_ns - last_ns) / NS_PER_S
+            self._event(now_ns, "gap", start_ns=last_ns, end_ns=now_ns, value=secs)
+            log.warning("snapshot timer %.0fs behind (suspended?); missed minutes skipped", secs)
         while now_ns >= self._next_snap_ns:
             self._snapshot(self._next_snap_ns)
             self._next_snap_ns += self._snap_interval_ns
