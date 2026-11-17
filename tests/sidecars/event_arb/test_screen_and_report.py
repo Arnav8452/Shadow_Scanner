@@ -201,7 +201,7 @@ def test_rule_inputs_and_costs_from_repo(repo_root: Path) -> None:
     book = RuleBook.load(repo_root / "config" / "rules")
     ri = rule_inputs(book, AS_OF)
     assert ri.reservation_pct == 15 and ri.small_value_limit_inr == 200_000
-    assert ri.settlement_days == 1 and ri.stcg_rate_pct == 20
+    assert ri.settlement_days == 1 and ri.stcg_rate_pct == 0  # owner's basic exemption
     assert any("tax_rules" in u for u in ri.unverified)
     fn = make_cost_fn(book, AS_OF, "zerodha")
     assert fn("buy", 100_000, False).total > 100  # STT alone is ₹100

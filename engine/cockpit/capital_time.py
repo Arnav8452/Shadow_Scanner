@@ -16,9 +16,9 @@ time (the owner's desk view, 15 Nov 2026):
 - **max drawdown** of the cumulative net, and **Nifty over the same dates** (return, drawdown).
 
 Annualised figures are shown only after ``min_sessions_annualise`` sessions: a few days scaled
-to a year mean nothing. Returns are simple annualised rates, before tax; trading gains are
-short-term for tax, which the research scoreboard (``argon/GEMINI.md``) models. Nothing here is
-a profit claim.
+to a year mean nothing. Returns are simple annualised rates. No tax is deducted: the owner's
+gains sit inside the basic exemption (``owner_effective_tax_on_trading_gains`` in
+``config/rules/tax_rules.csv``). Nothing here is a profit claim.
 """
 
 from __future__ import annotations
@@ -170,7 +170,7 @@ def render_capital_time(
         "",
         f"Return per unit of capital and time. Idle capital is credited the T-bill rate "
         f"({risk_free_pa * 100:.2f}% a year). Annualised figures appear after "
-        f"{min_sessions_annualise} sessions. Before tax: trading gains are short-term.",
+        f"{min_sessions_annualise} sessions. No tax: gains are within the owner's basic exemption.",
         "",
         "| Account | Sessions | Avg capital ₹ | Utilisation | Deployed return p.a. "
         "| Account return p.a. | Nifty p.a. | Max drawdown ₹ | Nifty drawdown |",
