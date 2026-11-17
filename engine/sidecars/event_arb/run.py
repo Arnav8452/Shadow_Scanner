@@ -37,7 +37,12 @@ def rule_inputs(book: RuleBook, as_of: date) -> RuleInputs:
         return row.value
 
     head = get("tax_rules", item="buyback_tax_head")
-    stcg = float(get("tax_rules", item="stcg_listed_equity")) if head == "capital_gains" else None
+    # The owner's own rate (basic exemption), not the statutory 20%: see tax_rules.csv.
+    stcg = (
+        float(get("tax_rules", item="owner_effective_tax_on_trading_gains"))
+        if head == "capital_gains"
+        else None
+    )
     return RuleInputs(
         reservation_pct=float(
             get("corporate_action_rules", rule="buyback_small_shareholder_reservation")

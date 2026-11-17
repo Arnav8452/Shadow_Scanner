@@ -4,6 +4,21 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## No tax on the owner's gains (18 Nov 2026)
+
+- **What changed:** the owner is a student with no other income. Under the new regime, the unused ₹4 lakh basic exemption absorbs capital gains (s.111A/112A), so the owner's effective tax on trading gains is **0** until one year's gains approach ₹4 lakh.
+  - Two rows were added to `config/rules/tax_rules.csv`, both `secondary` (the Finance Act text is not yet checked): `basic_exemption_new_regime` (400000) and `owner_effective_tax_on_trading_gains` (0).
+  - The statutory `stcg_listed_equity` row stays as a fact.
+- **Engine audit:** no paper account, signal, scorecard or backtest deducted tax.
+  - The only tax figure was the buyback sidecar's informational `tax_by_drop`, computed at the statutory 20% but never subtracted. It now uses the owner's rate (0).
+  - The capital-time scoreboard text says "no tax" instead of "before tax, short-term".
+- **Research:** the private research scoreboard dropped the 20% STCG at the same time. Studies whose verdicts used tax or the `upstox_plus` costs are being re-scored there.
+- **Open:**
+  - re-check the exemption when yearly gains grow;
+  - paper accounts still price `upstox_plus`; the cheapest broker for delivery would be Zerodha (₹0 brokerage). Switching is the owner's call, since it should match the account actually traded.
+
+---
+
 ## Price x vol risk grid for open option structures (18 Nov 2026)
 
 - **What was built:** `engine/cockpit/stress.py` gained `price_vol_grid`, `book_greeks`, `one_session_t_var` and `risk_view`. Each open condor/spread position in the cockpit now shows a collapsible risk grid with:
