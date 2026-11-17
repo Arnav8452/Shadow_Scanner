@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -93,3 +94,22 @@ def test_short_history_is_not_annualised() -> None:
     assert ct.utilisation == pytest.approx(17740.0 / 200_000.0)
     text = render_capital_time([ct], risk_free_pa=0.06, min_sessions_annualise=20)
     assert "Utilisation" in text and "x" in text and "—" in text
+
+
+def test_swing_journal_shape_is_normalised(tmp_path: Path) -> None:
+    import json
+
+    from engine.cockpit.scorecard import account_closes
+
+    rec = {"type": "close", "id": "SW-1", "strategy": "swing", "symbol": "ACME", "qty": 10,
+           "entry_day": "2026-11-13", "entry_price": 400.0, "exit_day": "2026-11-16",
+           "net": -120.5, "charges": 20.0}  # fmt: skip
+    (tmp_path / "paper_swing.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    rows = account_closes(tmp_path)["swing"]
+    assert rows[0]["net_inr"] == -120.5 and rows[0]["charges_inr"] == 20.0
+    assert rows[0]["opened_at"].startswith("2026-11-13") and rows[0]["closed_at"].startswith(
+        "2026-11-16"
+    )
+    ct = capital_time("swing", rows, capital=200_000.0, start=date(2026, 11, 13),
+                      end=date(2026, 11, 16), risk_free_pa=0.05, index_closes=[])  # fmt: skip
+    assert ct.capital_sessions == 4000.0 * 2 and ct.net == -120.5
