@@ -20,7 +20,17 @@ from engine.core.config import REPO_ROOT
 from engine.core.rules import RuleBook
 
 GOLDEN = REPO_ROOT / "data" / "private" / "golden"
-NOTES = sorted(GOLDEN.glob("*.json")) if GOLDEN.exists() else []
+# Only contract-note fixtures: a file must say what it is ("trade_date" and "orders"), so a raw
+# dump saved here by mistake is skipped instead of failing the suite.
+NOTES = (
+    sorted(
+        p
+        for p in GOLDEN.glob("*.json")
+        if {"trade_date", "orders"} <= set(json.loads(p.read_text(encoding="utf-8")))
+    )
+    if GOLDEN.exists()
+    else []
+)
 
 
 @pytest.mark.skipif(not NOTES, reason="no private contract notes on this machine")
