@@ -66,6 +66,9 @@ cockpit:                 # Local live page (engine/cockpit): uv run python tasks
   # Loopback only. The engine (shadow-live) publishes on engine_port; the gateway serves the
   # page on gateway_port and relays; replays publish on replay_port. Never places live orders.
   enabled: true
+  plays:                      # playbook on/off (engine/cockpit/build.py); omitted = on
+    log3_mom: false           # paused 17 Nov 2026 (owner): 0/5 on paper on 17 Nov; the mined
+                              # rule lost about Rs 2.15L over 1,077 trades in the candle backtest
   host: 127.0.0.1
   gateway_port: 8765
   engine_port: 8766

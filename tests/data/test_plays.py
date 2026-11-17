@@ -25,6 +25,7 @@ from engine.cockpit.plays_long import (
     BreakthroughPlay,
     OiIgnitionPlay,
     PutPanicPlay,
+    SpoofFadePlay,
     ZeroDtePlay,
     ZoneRiderPlay,
     divergence,
@@ -743,3 +744,18 @@ def test_option_tape_atr_from_one_minute_ranges() -> None:
             ot.on_sample(t0 + timedelta(seconds=5 + 10 * k), px, 0)
     a = ot.atr()
     assert a is not None and 3.5 < a < 4.5  # ~4-pt bars
+
+
+def test_no_duplicate_contract_across_strategy_accounts(
+    repo_root: Path, tmp_path: Path, mkt: FakeMarket
+) -> None:
+    from types import SimpleNamespace
+
+    acct = _account(repo_root, tmp_path, "sf")
+    p = SpoofFadePlay("spoof_fade", "Spoof", "notes", acct)
+    sym = opt_symbol(WEEKLY, 25000, Kind.CALL)
+    other = SimpleNamespace(name="breakthrough", positions={sym: object()}, pending={})
+    mkt.core.long_accounts = lambda: [acct, other]
+    out = p.enter(mkt, "NIFTY", sym, lots=1, reason="test", bullish=True, ratchet=True)
+    assert "already held by breakthrough" in out
+    assert sym not in acct.positions and sym not in acct.pending
