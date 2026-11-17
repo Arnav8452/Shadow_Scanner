@@ -271,3 +271,26 @@ def test_qc_day_report(tmp_path: Path, master: InstrumentMaster) -> None:
 def test_qc_day_without_data(tmp_path: Path) -> None:
     qc = qc_day(Store(tmp_path), DAY, SESSION)
     assert not qc.passed and qc.problems == ["no quotes recorded"]
+
+
+def test_suspended_laptop_does_not_write_catch_up_snapshots(
+    tmp_path: Path, master: InstrumentMaster
+) -> None:
+    clock = ManualClock(datetime(2026, 11, 11, 10, 59, 30, tzinfo=IST))
+    rec = make_recorder(tmp_path, clock)
+    subscribe_all(rec, master, [SPOT, ATM_CE], set())
+    rec.on_event(FeedStatus(StatusKind.CONNECTED, clock.now_ns(), "ok"))
+    rec.on_event(Quote(SPOT, clock.now_ns(), exch_ts=clock.now_ns() // NS_PER_S, ltp=25000.0))
+    rec.on_timer(clock.now_ns())
+    clock.set(datetime(2026, 11, 11, 11, 0, 5, tzinfo=IST))
+    rec.on_timer(clock.now_ns())  # the 11:00 snapshot
+    # laptop asleep 11:00:44 -> 11:36:48: one timer call when it wakes
+    clock.set(datetime(2026, 11, 11, 11, 36, 48, tzinfo=IST))
+    rec.on_timer(clock.now_ns())
+    rec.close(clock.now_ns())
+    st = Store(tmp_path)
+    snaps = st.quotes(DAY, as_of=datetime(2026, 11, 11, 23, 0, tzinfo=IST), capture="snap")
+    times = sorted({t.astimezone(IST).strftime("%H:%M") for t in snaps.column("ts").to_pylist()})
+    assert times == ["11:00", "11:36"]  # no fake 11:01..11:35 rows
+    gaps = [e for e in st.events(DAY).to_pylist() if e["event"] == "gap"]
+    assert gaps and max(e["value"] for e in gaps) > 30 * 60
