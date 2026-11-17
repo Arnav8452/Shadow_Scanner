@@ -859,7 +859,8 @@ def _capital_time_section(journal_dir: Path, capital: float) -> str:
 
     def first_day(rows: list[dict[str, Any]]) -> date:
         stamps = (r.get("opened_at") or r.get("closed_at") or r.get("t") or "" for r in rows)
-        return min(_dt.fromisoformat(str(s)[:10]).date() for s in stamps if s)
+        days = [_dt.fromisoformat(str(s)[:10]).date() for s in stamps if s]
+        return min(days) if days else today  # a record without dates must not stop the job
 
     rows = [
         capital_time(

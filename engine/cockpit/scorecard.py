@@ -94,9 +94,25 @@ def score_account(
     )  # fmt: skip
 
 
+def _normalise(r: dict[str, Any]) -> dict[str, Any]:
+    """The swing sleeve journals ``net``/``charges``/``entry_day``/``exit_day``; the intraday
+    accounts ``net_inr``/``charges_inr``/``opened_at``/``closed_at``. One shape for both."""
+    out = dict(r)
+    if "net_inr" not in out and "net" in out:
+        out["net_inr"] = out["net"]
+    if "charges_inr" not in out and "charges" in out:
+        out["charges_inr"] = out["charges"]
+    if not out.get("opened_at") and out.get("entry_day"):
+        out["opened_at"] = f"{out['entry_day']}T09:15:00+05:30"
+    if not out.get("closed_at") and out.get("exit_day"):
+        out["closed_at"] = f"{out['exit_day']}T15:30:00+05:30"
+    return out
+
+
 def account_closes(journal_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    """Closed trades per paper account (accounts with none are left out)."""
-    accounts = {a: [r for r in _jsonl(journal_dir / f"paper_{a}.jsonl") if r.get("type") == "close"]
+    """Closed trades per paper account (accounts with none are left out), in one shape."""
+    accounts = {a: [_normalise(r) for r in _jsonl(journal_dir / f"paper_{a}.jsonl")
+                    if r.get("type") == "close"]
                 for a in _accounts(journal_dir)}  # fmt: skip
     return {a: c for a, c in accounts.items() if c}
 
