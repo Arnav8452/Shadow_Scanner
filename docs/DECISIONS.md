@@ -4,6 +4,24 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Price x vol risk grid for open option structures (18 Nov 2026)
+
+- **What was built:** `engine/cockpit/stress.py` gained `price_vol_grid`, `book_greeks`, `one_session_t_var` and `risk_view`. Each open condor/spread position in the cockpit now shows a collapsible risk grid with:
+  - P&L in rupees over spot −8…+8% × a parallel IV shift of −5…+10 vol points;
+  - the same grid after one session and night of variance-clock time;
+  - book delta (₹ per 1%), gamma (₹ on a 1% move), vega (₹ per vol point), with vega split by days to expiry.
+- **Decisions:**
+  - legs are repriced at their own strike IV plus the shift (sticky strike), with IV floored at 3%;
+  - the next-session slice skips weekends and holidays;
+  - it is a **view only**: the overnight carry rule still uses the four coupled gap scenarios, and no risk limit changed.
+- **Why:** Natenberg's point that option risk is two-dimensional and changes with time. A research check, private, found our own vol forecasts no better than market IV at weekly horizons, so the engine prices from IV.
+- **Open:**
+  - spreads after a move are not modelled;
+  - there is no sticky-moneyness option;
+  - only the spread accounts (condor and friends) carry `risk`, not the stock-option swing sleeve.
+
+---
+
 ## Session times and expiry settlement from 7 Dec 2026 (15 Nov 2026)
 
 - **Verified (primary):** SEBI circular HO/47/11/11(3)2025-MRD-POD2/I/23843/2026 of 15 Oct 2026 (annexed to NCL/CMPT/76951), NSE/FAOP/77356 and NSE/CMTR/77355 (6 Nov 2026), and the NCL/CMPT/77212 settlement SOP. From **7 Dec 2026**:

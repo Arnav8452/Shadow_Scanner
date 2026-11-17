@@ -43,7 +43,7 @@ from typing import Any
 
 from engine.backtest.costs import fno_charges
 from engine.cockpit.paper import EXIT_PROTECTION_PCT, Book
-from engine.cockpit.stress import DEFAULT_SCENARIOS, gap_pnl, worst
+from engine.cockpit.stress import DEFAULT_SCENARIOS, gap_pnl, risk_view, worst
 from engine.core.config import RiskLimits
 from engine.core.rules import IST, RuleBook
 from engine.execution.leg_sequencer import SpreadLegIntent, sequence_entry_legs
@@ -928,6 +928,9 @@ class SpreadAccount:
                     "margin": p.margin,
                     "stress": self.gap_stress(p.legs, p.underlying),
                     "stress_cap": self.gap_cap(),
+                    "risk": risk_view(
+                        [lg for lg in p.legs if lg.open], self.analytics, p.underlying
+                    ),
                     "context": {
                         k: p.context[k]
                         for k in ("wing_cost_pct", "adjustments", "economics")
