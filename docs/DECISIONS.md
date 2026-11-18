@@ -4,6 +4,13 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Owner decisions: swing paper kept; paper accounts price at Upstox Plus (18 Nov 2026)
+
+- **Swing paper sleeve:** kept running, although its rules failed the 2016–2021 backtest. It is a data-collection account, not a candidate.
+- **Paper costs:** all paper accounts price at `upstox_plus`, the broker in use, for now. The buyback account moved from `zerodha` to `upstox_plus`. Its research gate still passes there with tax 0 (ex-Nifty t 2.02), at a thinner margin. Research tests keep using the cheapest verified broker, with `upstox_plus` as a sensitivity.
+
+---
+
 ## Equity panel: missed splits, demergers and ETF unit splits fixed (18 Nov 2026)
 
 - **What was wrong:**
