@@ -65,6 +65,8 @@ class Order:
     expiry: str = ""  # option expiry ISO date
     reason: str = ""
     placed_on: str = ""
+    # Avoid-filter tags at entry (engine/strategies/avoid_tags.py): recorded, never blocking.
+    tags: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -95,6 +97,7 @@ class Closed:
     charges: float
     net: float
     reason: str
+    tags: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -375,7 +378,7 @@ class SwingPaperAccount:
         self.state.positions.remove(p)
         c = Closed(o.id, o.strategy, o.symbol, o.instrument, o.key, o.qty, p.entry_day,
                    p.entry_price, day.isoformat(), round(price, 2), round(gross, 2),
-                   round(ch + entry_ch, 2), round(net, 2), reason)  # fmt: skip
+                   round(ch + entry_ch, 2), round(net, 2), reason, dict(o.tags))  # fmt: skip
         self.state.closed.append(c)
         self._log("close", **asdict(c), est="EOD-estimated")
         return f"sold {o.key} x{o.qty} @ {price:.2f}: net ₹{net:,.0f} ({reason})"

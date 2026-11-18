@@ -88,6 +88,7 @@ class Position:
     half_spread_bps: float
     mark: float = 0.0
     record_value: float | None = None
+    tags: dict[str, Any] = field(default_factory=dict)  # avoid-filter tags at entry
 
 
 @dataclass
@@ -139,8 +140,10 @@ def step(
     cfg: BuybackPaperConfig,
     cal: Calendar,
     charges: ChargeFn,
+    tags_fn: Callable[[str, date], dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    """Apply one session's closes: settle, check record-date value, mark, then enter."""
+    """Apply one session's closes: settle, check record-date value, mark, then enter.
+    ``tags_fn(symbol, entry_day)`` adds avoid-filter tags to each entry (recorded only)."""
     lines: list[str] = []
     journal: list[dict[str, Any]] = []
     by_id = {e.id: e for e in events}
@@ -185,6 +188,7 @@ def step(
             "buyback_price": p.buyback_price, "acceptance_pct": acc, "q_acc": q_acc,
             "q_ret": q_ret, "return_price": round(ret_px, 4),
             "charges": round(p.buy_charges + ch, 2), "net": round(net, 2), "est": "EOD-estimated",
+            "tags": dict(p.tags),
         }  # fmt: skip
         journal.append(rec)
         lines.append(
@@ -270,6 +274,7 @@ def step(
             skip(f"price ₹{px:,.2f} above the ₹{cfg.ticket_inr:,.0f} ticket")
             continue
         ch = charges("buy", qty * px, False)
+        tags = tags_fn(ev.symbol, day) if tags_fn is not None else {}
         state.positions.append(
             Position(
                 ev.id,
@@ -281,6 +286,7 @@ def step(
                 terms.record_date.isoformat(),
                 terms.price,
                 bps,
+                tags=tags,
             )
         )
         state.done.append(ev.id)
@@ -288,7 +294,7 @@ def step(
             "type": "fill", "t": _ts(day), "id": ev.id, "strategy": "buyback", "side": "buy",
             "symbol": ev.symbol, "qty": qty, "price": round(px, 4), "charges": round(ch, 2),
             "buyback_price": terms.price, "record_date": terms.record_date.isoformat(),
-            "est": "EOD-estimated",
+            "est": "EOD-estimated", "tags": tags,
         })  # fmt: skip
         lines.append(
             f"buyback {ev.symbol}: bought {qty} at ₹{px:,.2f} (buyback ₹{terms.price:,.2f}, "
@@ -322,9 +328,12 @@ def run_buyback_paper(
     book: Any,
     cal: Calendar,
     cfg: BuybackPaperConfig,
+    avoid: Any = None,
 ) -> list[str]:
     """The nightly paper step: reads the day's cash bhavcopy and the curated events file,
-    appends to ``paper_buyback.jsonl`` and saves ``buyback_paper_state.json``."""
+    appends to ``paper_buyback.jsonl`` and saves ``buyback_paper_state.json``. ``avoid`` (an
+    ``AvoidTagConfig``) adds avoid-filter tags to entries; ``cal`` then needs
+    ``next_trading_day`` too."""
     if not cfg.enabled:
         return []
     from engine.backtest.costs import equity_delivery_charges
@@ -347,7 +356,26 @@ def run_buyback_paper(
 
     state_path = state_dir / "buyback_paper_state.json"
     state = PaperState.load(state_path)
-    lines, journal = step(day, events, quotes, state, cfg, cal, charges)
+    tags_fn = None
+    if avoid is not None:
+        from engine.data.equity.corporate_actions import load_corporate_actions
+        from engine.strategies.avoid_tags import entry_tags, load_pcv, rights_ex_dates
+
+        cache: dict[str, Any] = {}
+
+        def tags_fn(symbol: str, entry_day: date) -> dict[str, Any]:
+            try:
+                if not cache:
+                    cache["pcv"] = load_pcv(raw_dir, day, cal, avoid)  # type: ignore[arg-type]
+                    cache["rights"] = rights_ex_dates(load_corporate_actions(raw_dir))
+                return entry_tags(
+                    symbol, entry_day=entry_day, pcv=cache["pcv"], rights=cache["rights"],
+                    cal=cal, cfg=avoid,  # type: ignore[arg-type]
+                )  # fmt: skip
+            except Exception as exc:  # a tag is information, never a gate
+                return {"error": f"{type(exc).__name__}: {exc}"}
+
+    lines, journal = step(day, events, quotes, state, cfg, cal, charges, tags_fn)
     if journal:
         state_dir.mkdir(parents=True, exist_ok=True)
         with (state_dir / "paper_buyback.jsonl").open("a", encoding="utf-8") as fh:

@@ -330,3 +330,21 @@ def test_two_nights_offline(repo_root: Path, tmp_path: Path) -> None:
     assert [p["key"] for p in view["account"]["positions"]] == ["AAA"]
     first = research.swing(tmp_path, day=t.isoformat())
     assert first["plans"][0]["queued"] is True and first["account"]["pending"]
+
+
+def test_entry_tags_ride_through_to_the_close_record(acct: SwingPaperAccount) -> None:
+    import json
+
+    o = _cash()
+    o.tags = {"call_heavy": True, "in_ex_rights_window": False}
+    ok, msg = acct.place_entry(o, day=T1, risk_budget_pct=2.5)
+    assert ok, msg
+    acct.process_day(T2, {"AAA": DayBar(505, 512, 500, 510)}, {"AAA": 510})
+    acct.process_day(T3, {"AAA": DayBar(480, 482, 470, 471)}, {"AAA": 471})
+    c = acct.state.closed[0]
+    assert c.tags == {"call_heavy": True, "in_ex_rights_window": False}
+    acct.save()
+    journal = acct.journal
+    closes = [json.loads(x) for x in journal.read_text(encoding="utf-8").splitlines()
+              if '"close"' in x]  # fmt: skip
+    assert closes and closes[-1]["tags"]["call_heavy"] is True

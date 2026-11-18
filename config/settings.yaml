@@ -348,6 +348,14 @@ swing:                     # SPEC §5.8 nightly swing scanner. HYPOTHESIS values
   results_buffer_days: 10    # no long option when results fall inside this window
   min_turnover_cr: 10        # average daily traded value, ₹ crore
 
+avoid_tags:                  # Owner, 18 Nov 2026: tags on every swing/buyback paper entry; RECORDED ONLY, never block
+  pcv_sessions: 5            # put share of stock-option contracts over the last 5 sessions (research: option-flow #3, t 3.1)
+  pcv_min_contracts: 500
+  call_heavy_rank: 0.20      # bottom fifth of the PCV ranking = call-heavy
+  ex_rights_before: 1        # window from 1 session before a rights ex-date...
+  ex_rights_after: 10        # ...to 10 after (research: stocks trailed Nifty ~4%, 8 of 8 years)
+  review_after_trades: 30    # judge the tags only after 30 tagged closes
+
 buyback_paper:               # Paper account: small-shareholder tender buybacks (research T_bb1 rules, 18 Nov 2026). PAPER ONLY
   enabled: true
   start_date: 2026-11-18     # events whose entry day (last session before the record date) is earlier are ignored

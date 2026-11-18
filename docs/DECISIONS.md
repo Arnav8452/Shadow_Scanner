@@ -4,6 +4,18 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Avoid-filter tags on paper entries (18 Nov 2026)
+
+- **What was built:** `engine/strategies/avoid_tags.py`. Every swing, trend and buyback paper entry now records two tags in its fill and close journal records:
+  - **call-heavy option volume:** the put share of stock-option contracts over the last 5 sessions and its percentile rank among F&O stocks with ≥ 500 contracts; `call_heavy` = bottom fifth;
+  - **ex-rights window:** the nearest rights ex-date and the entry's offset in sessions; `in_ex_rights_window` = from 1 session before to 10 after.
+- **Why:** both come from private research. Call-heavy F&O stocks under-performed over the next 5 sessions on unseen 2022–23 data (t 3.1). Stocks trailed Nifty by about 4% over the 10 sessions after going ex-rights, in 8 of 8 years 2016–23.
+- **Owner's rule:** the tags are **recorded only and never block an entry** until `tasks.py avoid-tags` shows 30 tagged closes and the owner judges them. A tag that fails to compute is recorded as an error, never stopping the nightly run.
+- **Config:** `avoid_tags` in `config/settings.yaml`.
+- **Cost:** about 6 s a night to rank 218 F&O stocks, only when an entry is queued.
+
+---
+
 ## Signal study counted by episode (18 Nov 2026)
 
 - **What changed:** one order-flow reading fires on 10–40 strikes within seconds, so the study's day totals were one bet counted many times. On 18 Nov, 385 signals were 25 episodes.
