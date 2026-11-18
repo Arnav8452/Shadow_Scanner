@@ -844,7 +844,12 @@ def _capital_time_section(journal_dir: Path, capital: float) -> str:
     capital, against Nifty over the same dates (engine/cockpit/capital_time.py)."""
     from datetime import datetime as _dt
 
-    from engine.cockpit.capital_time import capital_time, render_capital_time
+    from engine.cockpit.capital_time import (
+        blend_closes,
+        capital_time,
+        index_closes_from_eod,
+        render_capital_time,
+    )
     from engine.cockpit.scorecard import account_closes
     from engine.cockpit.vol_sizing import load_daily_closes
 
@@ -856,6 +861,7 @@ def _capital_time_section(journal_dir: Path, capital: float) -> str:
         "NIFTY", []
     )
     accounts = account_closes(journal_dir)
+    bench = _allocation_benchmarks(today, index_closes_from_eod, blend_closes)
 
     def first_day(rows: list[dict[str, Any]]) -> date:
         stamps = (r.get("opened_at") or r.get("closed_at") or r.get("t") or "" for r in rows)
@@ -871,6 +877,7 @@ def _capital_time_section(journal_dir: Path, capital: float) -> str:
             end=today,
             risk_free_pa=rf_pa,
             index_closes=nifty,
+            benchmarks=bench,
         )
         for a, c in sorted(accounts.items())
     ]
@@ -885,9 +892,27 @@ def _capital_time_section(journal_dir: Path, capital: float) -> str:
                 end=today,
                 risk_free_pa=rf_pa,
                 index_closes=nifty,
+                benchmarks=bench,
             )
         )
     return render_capital_time(rows, risk_free_pa=rf_pa, min_sessions_annualise=20)
+
+
+def _allocation_benchmarks(today: date, read: Any, blend: Any) -> dict[str, Any]:
+    """Nifty Midcap 150 and a 50/50 Nifty 50 / Midcap 150 mix (yearly rebalance) from NSE's
+    daily index files over the last ~15 months: the owner's idle-money candidates (18 Nov
+    2026), shown beside each paper account. Missing files just shorten the series."""
+    raw = ROOT / "data" / "raw" / "eod" / "indices"
+    texts = []
+    for year in {today.year - 1, today.year}:
+        for f in sorted((raw / str(year)).glob("????-??-??.csv")):
+            if (today - date.fromisoformat(f.stem)).days <= 460:
+                texts.append(f.read_text(encoding="utf-8", errors="replace"))
+    closes = read(texts, ["Nifty 50", "Nifty Midcap 150"])
+    nifty, mid = closes["Nifty 50"], closes["Nifty Midcap 150"]
+    if not mid:
+        return {}
+    return {"Midcap 150": mid, "50/50 Nifty/Midcap 150": blend(nifty, mid, weight_a=0.5)}
 
 
 def task_scorecard(params: dict[str, str]) -> int:
