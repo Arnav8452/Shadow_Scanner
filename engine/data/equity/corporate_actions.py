@@ -44,11 +44,20 @@ class CorpAction:
 
 _RS = r"R[se]\.?\s*([\d]+(?:\.\d+)?)"
 _DIVIDEND = re.compile(r"Dividend\s*-?\s*" + _RS, re.I)
-_BONUS = re.compile(r"Bonus\s*(\d+)\s*:\s*(\d+)", re.I)
+_BONUS = re.compile(r"Bonus\s*-?\s*(\d+)\s*:\s*(\d+)", re.I)  # also "Bonus- 1:2"
+# "From" is optional ("Face Value Split Rs 10 To Rs 1", Granules 2015) and NSE abbreviates
+# ("Fv Splt Frm Rs 10 To Re 1", JSW Steel 2017).
 _SPLIT = re.compile(
-    r"(?:Split|Sub-?\s*Division|Consolidation).*?From\s*" + _RS + r".*?To\s*" + _RS, re.I
+    r"(?:Split|Splt|Sub-?\s*Division|Consolidation).*?(?:Fro?m\s*)?" + _RS + r".*?To\s*" + _RS,
+    re.I,
 )
-_RIGHTS = re.compile(r"Rights\s*(\d+)\s*:\s*(\d+)\s*@\s*(?:Premium\s*" + _RS + r"|(Par))", re.I)
+# "Rights 1:2 @ Premium Rs 40", "@Prem Rs 40", "@ Prm Rs 102/-", "Rights Issue 4:17@ Premium",
+# "Rights : 24:10 At Par", "@ Premium Of Rs 2.50", "@ Premium 91".
+_RIGHTS = re.compile(
+    r"Rights(?:\s*Issue)?\s*[:\-]?\s*(\d+)\s*:\s*(\d+)\s*(?:@|At)\s*"
+    r"(?:(?:Premium|Prem|Prm)\s*(?:Of\s*)?(?:R[se]\.?\s*)?([\d]+(?:\.\d+)?)|(Par))",
+    re.I,
+)
 _DEMERGER = re.compile(r"Demerger|Scheme of Arrangement", re.I)
 
 
