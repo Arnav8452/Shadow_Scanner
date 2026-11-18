@@ -68,6 +68,8 @@ class BuybackTerms:
     tender_open: date | None = None
     tender_close: date | None = None
     unaccepted_return_date: date | None = None
+    # Post-buyback public announcement: small-shareholder category acceptance, in %.
+    actual_small_acceptance_pct: float | None = None
 
 
 @dataclass(frozen=True)

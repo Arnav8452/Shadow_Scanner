@@ -348,6 +348,21 @@ swing:                     # SPEC §5.8 nightly swing scanner. HYPOTHESIS values
   results_buffer_days: 10    # no long option when results fall inside this window
   min_turnover_cr: 10        # average daily traded value, ₹ crore
 
+buyback_paper:               # Paper account: small-shareholder tender buybacks (research T_bb1 rules, 18 Nov 2026). PAPER ONLY
+  enabled: true
+  start_date: 2026-11-18     # events whose entry day (last session before the record date) is earlier are ignored
+  capital_inr: 100000
+  slots: 2                   # two Rs 50k slots; a third overlapping event is skipped
+  ticket_inr: 50000
+  small_holder_cap_inr: 200000
+  liquid_turnover_inr: 500000000   # >= Rs 50 crore that day: 5 bp half-spread, else 15 bp
+  half_spread_liquid_bps: 5
+  half_spread_illiquid_bps: 15
+  broker: zerodha            # cheapest verified delivery schedule (owner, 18 Nov 2026)
+  kill_event_loss_inr: 7500  # one event losing more than 15% of a ticket pauses new entries
+  kill_cum_loss_inr: 5000    # cumulative net at or below -Rs 5,000 pauses new entries
+  review_after_events: 20    # promotion review (owner) after 20 closed paper events
+
 swing_paper:                 # EOD paper fills (no depth recorded for stocks): HYPOTHESIS spreads
   cash_half_spread_pct: 0.05
   option_half_spread_pct: 1.5

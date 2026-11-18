@@ -1043,7 +1043,25 @@ def _swing_night(settings: Any, cal: Any) -> Any:
             fills=fill_config(raw.get("swing_paper")),
             fetch_index=lambda d: fetch_index(d, raw_dir, now),
         )
-        return rep.lines
+        return rep.lines + _buyback_paper(day, now)
+
+    def _buyback_paper(day: date, now: datetime) -> list[str]:
+        # Paper account for small-shareholder tender buybacks (engine/sidecars/event_arb/paper.py).
+        from engine.sidecars.event_arb.paper import buyback_paper_config, run_buyback_paper
+
+        ev_cfg = raw.get("event_arb") or {}
+        try:
+            return run_buyback_paper(
+                day=day,
+                raw_dir=settings.paths["raw"],
+                state_dir=settings.paths["data"] / "state",
+                events_path=ROOT / str(ev_cfg.get("events_file", "config/event_arb/events.yaml")),
+                book=book,
+                cal=cal,
+                cfg=buyback_paper_config(raw.get("buyback_paper")),
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return [f"buyback paper: {exc}"]
 
     return run
 

@@ -4,6 +4,28 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Paper account: small-shareholder tender buybacks (18 Nov 2026)
+
+- **What was built:** `engine/sidecars/event_arb/paper.py`, a paper-only account (`paper_buyback.jsonl`, `buyback_paper_state.json`).
+  - It runs in the evening job's swing step; on its own, run `tasks.py swing`.
+  - It restates the research trade test `T_bb1`, which passed its pre-registered gate once tax was correctly 0 for the owner. No research code is imported.
+- **The rules:**
+  - buy at the close of the last session before the record date (+5/15 bp half-spread), only if that close is below the buyback price;
+  - two ₹50k slots, a whole-holding tender;
+  - settle on the first session on or after `unaccepted_return_date`, once `actual_small_acceptance_pct` is entered in `config/event_arb/events.yaml`. Accepted shares are paid at the buyback price; the rest are sold at the close;
+  - `zerodha` delivery costs from `config/rules`, no tax.
+- **Kill rules (config `buyback_paper`):**
+  - pause new entries after one event loses more than ₹7,500 or the cumulative net reaches −₹5,000;
+  - an owner review after 20 closed events.
+- **New field:** `actual_small_acceptance_pct` on `BuybackTerms`, from the post-buyback public announcement.
+- **Open:**
+  - the fills are EOD estimates;
+  - the record-date ₹2 lakh check flags rather than prevents;
+  - the events file is hand-curated, so a buyback missing from it is not traded;
+  - the first live candidate's (MEDIASSIST) record date is still from a secondary source.
+
+---
+
 ## No tax on the owner's gains (18 Nov 2026)
 
 - **What changed:** the owner is a student with no other income. Under the new regime, the unused ₹4 lakh basic exemption absorbs capital gains (s.111A/112A), so the owner's effective tax on trading gains is **0** until one year's gains approach ₹4 lakh.
