@@ -358,7 +358,7 @@ buyback_paper:               # Paper account: small-shareholder tender buybacks 
   liquid_turnover_inr: 500000000   # >= Rs 50 crore that day: 5 bp half-spread, else 15 bp
   half_spread_liquid_bps: 5
   half_spread_illiquid_bps: 15
-  broker: zerodha            # cheapest verified delivery schedule (owner, 18 Nov 2026)
+  broker: upstox_plus        # owner, 18 Nov 2026: paper accounts price at Upstox Plus for now (T_bb1 still passes there: t 2.02)
   kill_event_loss_inr: 7500  # one event losing more than 15% of a ticket pauses new entries
   kill_cum_loss_inr: 5000    # cumulative net at or below -Rs 5,000 pauses new entries
   review_after_events: 20    # promotion review (owner) after 20 closed paper events
