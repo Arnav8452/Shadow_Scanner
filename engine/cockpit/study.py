@@ -31,6 +31,9 @@ from engine.cockpit.paper import Book
 from engine.core.rules import IST, RuleBook
 
 HORIZONS_MIN: tuple[int, ...] = (15, 30, 60)
+# Signals of the same underlying and direction within this many minutes of an episode's
+# first signal are one episode: the same reading firing on many strikes is one bet.
+EPISODE_MIN = 15
 
 
 @dataclass
@@ -284,14 +287,39 @@ class SignalStudy:
 
     def view(self) -> dict[str, Any]:
         rows = [e.row() for e in self.entries if not e.done] + list(reversed(self.done_today))
+        keys = [f"{h}m" for h in self.horizons] + ["close"]
+        today = [*self.done_today, *[e.row() for e in self.entries if not e.done]]
+        firsts = episode_firsts(today)
         return {
-            "horizons": [f"{h}m" for h in self.horizons] + ["close"],
-            "summary": summarize(
-                [*self.done_today, *[e.row() for e in self.entries if not e.done]],
-                [f"{h}m" for h in self.horizons] + ["close"],
-            ),
+            "horizons": keys,
+            "summary": summarize(today, keys),
+            "signals": len(today),
+            "episodes": len(firsts),
+            "episode_summary": summarize(firsts, keys),
             "rows": rows[:60],
         }
+
+
+def episode_firsts(
+    rows: Sequence[Mapping[str, Any]], minutes: int = EPISODE_MIN
+) -> list[dict[str, Any]]:
+    """The first signal of each episode, in time order, with ``episode_signals`` = how many
+    signals the episode held. An episode = signals of one underlying and direction within
+    ``minutes`` of its first signal; it is measured on that first signal, the one lot a trader
+    would actually have taken."""
+    out: list[dict[str, Any]] = []
+    open_ep: dict[tuple[str, str], tuple[datetime, dict[str, Any]]] = {}
+    for r in sorted(rows, key=lambda x: datetime.fromisoformat(str(x["t0"]))):
+        t = datetime.fromisoformat(str(r["t0"]))
+        key = (str(r.get("underlying", "")), str(r.get("direction", "")))
+        cur = open_ep.get(key)
+        if cur is not None and t - cur[0] <= timedelta(minutes=minutes):
+            cur[1]["episode_signals"] += 1
+            continue
+        first = {**r, "episode_signals": 1}
+        open_ep[key] = (t, first)
+        out.append(first)
+    return out
 
 
 def summarize(rows: Sequence[Mapping[str, Any]], keys: Sequence[str]) -> list[dict[str, Any]]:
