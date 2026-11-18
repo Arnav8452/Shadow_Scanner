@@ -113,3 +113,45 @@ def test_swing_journal_shape_is_normalised(tmp_path: Path) -> None:
     ct = capital_time("swing", rows, capital=200_000.0, start=date(2026, 11, 13),
                       end=date(2026, 11, 16), risk_free_pa=0.05, index_closes=[])  # fmt: skip
     assert ct.capital_sessions == 4000.0 * 2 and ct.net == -120.5
+
+
+def test_index_closes_read_from_nse_eod_files() -> None:
+    from engine.cockpit.capital_time import index_closes_from_eod
+
+    head = (
+        "Index Name,Index Date,Open Index Value,High Index Value,Low Index Value,"
+        "Closing Index Value\n"
+    )
+    d1 = head + "Nifty 50,17-11-2026,1,1,1,25387.4\nNifty Midcap 150,17-11-2026,1,1,1,22648.7\n"
+    d2 = head + "Nifty 50,18-11-2026,1,1,1,25300\nNifty 50,18-11-2026,1,1,1,25300\n"
+    out = index_closes_from_eod([d1, d2], ["Nifty 50", "Nifty Midcap 150"])
+    assert out["Nifty 50"] == [(date(2026, 11, 17), 25387.4), (date(2026, 11, 18), 25300.0)]
+    assert out["Nifty Midcap 150"] == [(date(2026, 11, 17), 22648.7)]
+
+
+def test_yearly_rebalanced_blend() -> None:
+    from engine.cockpit.capital_time import blend_closes
+
+    a = [(date(2025, 12, 30), 100.0), (date(2025, 12, 31), 110.0), (date(2026, 1, 1), 110.0),
+         (date(2026, 1, 2), 121.0)]  # fmt: skip
+    b = [(date(2025, 12, 30), 100.0), (date(2025, 12, 31), 90.0), (date(2026, 1, 1), 90.0),
+         (date(2026, 1, 2), 90.0)]  # fmt: skip
+    mix = dict(blend_closes(a, b, weight_a=0.5))
+    assert mix[date(2025, 12, 30)] == pytest.approx(100.0)
+    assert mix[date(2025, 12, 31)] == pytest.approx(100.0)  # +10% and -10% halves
+    # rebalanced to 50/50 on the first session of 2026, so A's +10% moves half the value
+    assert mix[date(2026, 1, 2)] == pytest.approx(100.0 * (0.5 * 1.1 + 0.5 * 1.0))
+
+
+def test_capital_time_reports_extra_benchmarks() -> None:
+    closes = [(date(2026, 11, 11), 100.0), (date(2026, 11, 13), 103.0)]
+    ct = capital_time(
+        "x", [LONG], capital=200_000.0, start=date(2026, 11, 12), end=date(2026, 11, 13),
+        risk_free_pa=0.06, index_closes=[(date(2026, 11, 11), 100.0), (date(2026, 11, 13), 101.0)],
+        sessions_per_year=248, min_sessions_annualise=1,
+        benchmarks={"Midcap 150": closes},
+    )  # fmt: skip
+    name, ret_pa, dd = ct.benchmarks[0]
+    assert name == "Midcap 150" and ret_pa == pytest.approx(0.03 * 248 / 2) and dd == 0.0
+    text = render_capital_time([ct], risk_free_pa=0.06, min_sessions_annualise=1)
+    assert "Midcap 150 p.a." in text

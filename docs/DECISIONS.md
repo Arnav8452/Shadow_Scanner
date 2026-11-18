@@ -4,6 +4,18 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Allocation benchmarks on the capital-and-time scoreboard (18 Nov 2026)
+
+- **What changed:** the scorecard's capital-and-time table now shows, beside Nifty, the owner's two idle-money candidates (research T-006, private log) over each account's own dates:
+  - **Nifty Midcap 150**;
+  - **a 50/50 Nifty 50 / Midcap 150 mix**, rebalanced on the first session of each year.
+  - A note under the table gives each one's worst fall.
+- **Source:** NSE's daily index file (`data/raw/eod/indices`, already downloaded every evening), last ~15 months.
+  - The figures are index levels with no costs or dividends. Annualised figures follow the same 20-session rule as Nifty.
+- **Code:** `capital_time.index_closes_from_eod`, `capital_time.blend_closes`, and the `benchmarks=` parameter of `capital_time()`.
+
+---
+
 ## Avoid-filter tags on paper entries (18 Nov 2026)
 
 - **What was built:** `engine/strategies/avoid_tags.py`. Every swing, trend and buyback paper entry now records two tags in its fill and close journal records:

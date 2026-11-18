@@ -23,7 +23,7 @@ gains sit inside the basic exemption (``owner_effective_tax_on_trading_gains`` i
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -44,6 +44,9 @@ class CapitalTime:
     max_drawdown_inr: float
     nifty_return_pa: float | None
     nifty_drawdown: float | None
+    # Other holdings over the same dates: (name, return p.a., max drawdown), e.g. the owner's
+    # idle-money candidates Nifty Midcap 150 and a 50/50 Nifty / Midcap 150 mix.
+    benchmarks: tuple[tuple[str, float | None, float | None], ...] = ()
 
 
 def capital_used(r: Mapping[str, Any]) -> float | None:
@@ -116,6 +119,7 @@ def capital_time(
     index_closes: Sequence[tuple[date, float]],
     sessions_per_year: int = 248,
     min_sessions_annualise: int = 20,
+    benchmarks: Mapping[str, Sequence[tuple[date, float]]] | None = None,
 ) -> CapitalTime:
     rows = sorted(closes, key=lambda r: str(r.get("closed_at") or r.get("t") or ""))
     period = sessions_between(start, end)
@@ -141,6 +145,11 @@ def capital_time(
     if ann and capital > 0 and util is not None:
         account_pa = net / capital * sessions_per_year / period + risk_free_pa * max(0.0, 1 - util)
     n_ret, n_dd = index_window(index_closes, start, end)
+    bench = []
+    for name, series in (benchmarks or {}).items():
+        b_ret, b_dd = index_window(series, start, end)
+        b_pa = b_ret * sessions_per_year / period if ann and b_ret is not None else None
+        bench.append((name, b_pa, b_dd))
     return CapitalTime(
         account=account,
         period_sessions=period,
@@ -155,6 +164,7 @@ def capital_time(
         max_drawdown_inr=dd,
         nifty_return_pa=n_ret * sessions_per_year / period if ann and n_ret is not None else None,
         nifty_drawdown=n_dd,
+        benchmarks=tuple(bench),
     )
 
 
@@ -172,9 +182,13 @@ def render_capital_time(
         f"({risk_free_pa * 100:.2f}% a year). Annualised figures appear after "
         f"{min_sessions_annualise} sessions. No tax: gains are within the owner's basic exemption.",
         "",
+    ]
+    names = [b[0] for b in rows[0].benchmarks] if rows else []
+    extra_h = "".join(f" {n} p.a. |" for n in names)
+    lines += [
         "| Account | Sessions | Avg capital ₹ | Utilisation | Deployed return p.a. "
-        "| Account return p.a. | Nifty p.a. | Max drawdown ₹ | Nifty drawdown |",
-        "|---|---|---|---|---|---|---|---|---|",
+        f"| Account return p.a. | Nifty p.a. |{extra_h} Max drawdown ₹ | Nifty drawdown |",
+        "|---|---|---|---|---|---|---|" + "---|" * len(names) + "---|---|",
     ]
     for c in rows:
         avg = "—" if c.avg_capital is None else f"{c.avg_capital:,.0f}"
@@ -186,15 +200,69 @@ def render_capital_time(
         lines.append(
             f"| {c.account}{note} | {c.period_sessions} | {avg} | {_pct(c.utilisation)} | "
             f"{_pct(c.deployed_return_pa)} | {_pct(c.account_return_pa)} | "
-            f"{_pct(c.nifty_return_pa)} | {c.max_drawdown_inr:,.0f} | {_pct(c.nifty_drawdown)} |"
+            f"{_pct(c.nifty_return_pa)} |"
+            + "".join(f" {_pct(b[1])} |" for b in c.benchmarks)
+            + f" {c.max_drawdown_inr:,.0f} | {_pct(c.nifty_drawdown)} |"
         )
+    if rows and rows[-1].benchmarks:
+        last = rows[-1]
+        dds = "; ".join(f"{n} {_pct(dd)}" for n, _, dd in last.benchmarks)
+        lines += [
+            "",
+            f"Worst fall over the last row's dates: Nifty {_pct(last.nifty_drawdown)}; {dds}. "
+            "Benchmarks are index levels (no costs, no dividends); the 50/50 mix is rebalanced "
+            "on the first session of each year.",
+        ]
     return "\n".join(lines) + "\n"
+
+
+def index_closes_from_eod(
+    texts: Iterable[str], names: Sequence[str]
+) -> dict[str, list[tuple[date, float]]]:
+    """``name -> [(date, close)]`` from NSE's daily ``ind_close_all`` files (one text each;
+    the same index can appear twice in a file)."""
+    want = {n.lower(): n for n in names}
+    out: dict[str, dict[date, float]] = {n: {} for n in names}
+    for text in texts:
+        for line in text.splitlines():
+            cells = line.split(",")
+            if len(cells) < 6 or cells[0].strip().lower() not in want:
+                continue
+            try:
+                d = datetime.strptime(cells[1].strip(), "%d-%m-%Y").date()  # noqa: DTZ007
+                out[want[cells[0].strip().lower()]][d] = float(cells[5])
+            except ValueError:
+                continue
+    return {n: sorted(v.items()) for n, v in out.items()}
+
+
+def blend_closes(
+    a: Sequence[tuple[date, float]], b: Sequence[tuple[date, float]], *, weight_a: float = 0.5
+) -> list[tuple[date, float]]:
+    """A level series for ``weight_a`` of ``a`` and the rest in ``b``, starting at 100 on
+    their first common date and rebalanced on the first common date of each calendar year."""
+    da, db = dict(a), dict(b)
+    out: list[tuple[date, float]] = []
+    units_a = units_b = 0.0
+    year: int | None = None
+    value = 100.0
+    for d in sorted(set(da) & set(db)):
+        if out:
+            value = units_a * da[d] + units_b * db[d]
+        if year != d.year:  # the series' first session, or a new year's
+            year = d.year
+            units_a = weight_a * value / da[d]
+            units_b = (1 - weight_a) * value / db[d]
+        out.append((d, value))
+    return out
 
 
 __all__ = [
     "CapitalTime",
+    "blend_closes",
     "capital_time",
     "capital_used",
+    "index_closes_from_eod",
     "index_window",
     "render_capital_time",
     "sessions_between",
