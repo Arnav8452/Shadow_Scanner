@@ -13,8 +13,10 @@ research code is imported:
   small-shareholder acceptance (``actual_small_acceptance_pct``) is entered in the events file:
   - accepted shares, ``round(qty × acceptance)``, are paid at the buyback price;
   - the returned rest is sold at that day's close less the half-spread;
-- **costs:** three delivery orders (buy; tender sell with DP; market sell with DP) from
-  ``config/rules`` via the injected charge function; no tax (owner's basic exemption);
+- **costs:** three orders from ``config/rules`` via the injected charge function: the delivery
+  buy; the tender, a corporate-action order (the broker's flat fee per order, charged even
+  when nothing is accepted, plus STT and DP on the accepted shares); the market sale of the
+  returned shares with DP. No tax (owner's basic exemption);
 - **kill rules:** new entries pause after one event loses more than ``kill_event_loss_inr``,
   or after the cumulative net falls to ``-kill_cum_loss_inr``. A review line appears at
   ``review_after_events`` closed events.
@@ -35,7 +37,7 @@ from typing import Any, Protocol
 
 from engine.sidecars.event_arb.models import BuybackTerms, Event, EventType
 
-ChargeFn = Callable[[str, float, bool], float]  # (side, value ₹, include DP) -> ₹
+ChargeFn = Callable[[str, float, bool], float]  # (buy|sell|tender, value ₹, DP?) -> ₹
 
 
 class Calendar(Protocol):
@@ -167,7 +169,9 @@ def step(
         ret_px = q.close * (1 - _hs(p.half_spread_bps))
         tender_val = q_acc * p.buyback_price
         ret_val = q_ret * ret_px
-        ch = (charges("sell", tender_val, True) if q_acc else 0.0) + (
+        # The tender is a corporate-action order: the broker's flat fee is charged per order,
+        # accepted or not (non-refundable); STT and the DP debit apply to the accepted shares.
+        ch = charges("tender", tender_val, q_acc > 0) + (
             charges("sell", ret_val, True) if q_ret else 0.0
         )
         net = tender_val + ret_val - p.qty * p.entry_px - p.buy_charges - ch
@@ -338,6 +342,7 @@ def run_buyback_paper(
         return equity_delivery_charges(
             book, day, side="buy" if side == "buy" else "sell", value_inr=value,
             broker=cfg.broker, include_dp=dp, allow_unverified=True,
+            corporate_action=side == "tender",
         ).total  # fmt: skip
 
     state_path = state_dir / "buyback_paper_state.json"

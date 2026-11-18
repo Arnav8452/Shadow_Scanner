@@ -4,6 +4,21 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Buyback / open-offer / delisting tender fee (18 Nov 2026)
+
+- **Checked on the brokers' own pages:**
+  - Zerodha (support article and charges page): "₹20 plus GST … for OFS / buyback / takeover / delisting orders".
+  - Upstox (help centre 253820): "flat ₹20 + GST" for buyback orders.
+  - Both are **non-refundable whether accepted or rejected**.
+- **Before:** the cost model priced a tender as a plain delivery sale, so Zerodha came out at ₹0 brokerage and Upstox Plus at its ₹30 cap.
+- **Added:**
+  - `brokerage.csv` rows with segment `corporate_action` (₹20 a order; secondary; Upstox Plus assumed equal to Upstox);
+  - `equity_delivery_charges(..., corporate_action=True)`.
+- **Buyback paper account:** charges the fee on every tender, even when nothing is accepted. STT and DP still apply to the accepted shares.
+- **Open:** confirm against a real tender contract note.
+
+---
+
 ## Owner decisions: swing paper kept; paper accounts price at Upstox Plus (18 Nov 2026)
 
 - **Swing paper sleeve:** kept running, although its rules failed the 2016–2021 backtest. It is a data-collection account, not a candidate.

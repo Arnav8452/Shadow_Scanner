@@ -113,11 +113,15 @@ def equity_delivery_charges(
     depository: str = "CDSL",
     include_dp: bool = True,
     allow_unverified: bool = False,
+    corporate_action: bool = False,
 ) -> ChargeBreakdown:
     """Charges for one executed delivery order of ``value_inr`` on ``on``.
 
     A buyback tender is a ``sell`` (sell-side STT and a DP debit apply). ``include_dp`` should
     be False for a second sell of the same scrip on the same day (DP is per scrip per day).
+    ``corporate_action``: the order is a buyback / open-offer / delisting / OFS application, for
+    which the broker charges its flat corporate-action fee (``brokerage`` rows, segment
+    ``corporate_action``) instead of delivery brokerage.
     """
     if value_inr < 0:
         raise ValueError("value_inr must be >= 0")
@@ -126,7 +130,10 @@ def equity_delivery_charges(
     # A flat fee per order, or the lower of a percentage and a per-order cap (Upstox Plus:
     # min(₹30, 2.5%), confirmed by Upstox's brokerage API on 15 Nov 2026).
     b_rows = book["brokerage"].lookup_all(
-        on, allow_unverified=allow_unverified, broker=broker, segment="equity_delivery"
+        on,
+        allow_unverified=allow_unverified,
+        broker=broker,
+        segment="corporate_action" if corporate_action else "equity_delivery",
     )
     lk._note("brokerage", b_rows)
     comps = {r.keys["component"]: r.as_float() for r in b_rows}
