@@ -4,6 +4,34 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Equity panel: missed splits, demergers and ETF unit splits fixed (18 Nov 2026)
+
+- **What was wrong:**
+  - **Current symbol, current ISIN:** NSE's corporate-actions list names an action under the company's current symbol and ISIN. Cadila's 2015 split, for example, is listed as ZYDUSLIFE with the post-split ISIN, so it never matched the day's CADILAHC row.
+  - **Missed wordings:** the parser missed NSE's variants ("Face Value Split Rs 10 To Rs 1", "Fv Splt Frm Rs 10 To Re 1" for JSW Steel 2017, "Bonus- 1:2", rights "@Prem/@ Prm/At Par").
+  - **Demergers:** these have no ratio and were left as −55% to −90% one-day "returns" (ABREL/Century Textiles, Adani Enterprises, Infibeam, McDowell, Siemens, Tata Motors, Vedanta…).
+  - **ETF unit splits:** NIFTYBEES and GOLDBEES among others are not in the equities list at all.
+  - **Effect:** every backtest holding through one of these took a fake loss.
+- **Fix (`engine/data/equity/panel.py`, `corporate_actions.py`):**
+  - match actions by the day's symbol, then the ISIN, then the canonical symbol;
+  - widen the subject patterns;
+  - demerger factor = ex-date open ÷ previous close (NSE's special pre-open). Where the open did not price it, use the close, losing that one day's real move;
+  - a "Scheme of Arrangement" counts only on a ≥ 5% lower open;
+  - for fund units only (ISIN `INF…`), infer a unit split when the close is within 15% of base ÷ k (k ∈ 2, 4, 5, 10, 20, 25, 50, 100). A company share is never inferred;
+  - new column `ca_estimated`.
+- **Result of the full 2015–2026 rebuild:**
+  - corporate-action events 1,052 → 1,297;
+  - unknown ratios 143 → 13;
+  - gap flags 1,596 → 1,440 (unexplained >40% falls in shares priced ≥ ₹10: 178 → 92; in ETFs: 73 → 5);
+  - 245 daily returns changed.
+  - The old panel is kept at `data/parquet/equity/daily_before_ca_fix/`.
+- **Open:**
+  - the remaining flags are mostly real moves, first trading days (`BE`) and penny stocks;
+  - rights issues with no issue price stay unadjusted;
+  - research results computed on the old panel may shift slightly (in favour of long strategies that held through these events).
+
+---
+
 ## Paper account: small-shareholder tender buybacks (18 Nov 2026)
 
 - **What was built:** `engine/sidecars/event_arb/paper.py`, a paper-only account (`paper_buyback.jsonl`, `buyback_paper_state.json`).

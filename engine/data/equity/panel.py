@@ -8,9 +8,22 @@ is the stock's previous close in this panel (NSE's own previous close on its fir
 ``ca_factor`` the price factor of that day's bonus, split, consolidation or rights issue from
 NSE's corporate-actions list (0.5 for a 1:1 bonus; 1.0 on ordinary days). NSE's bhavcopy
 previous close is not adjusted (see ``corporate_actions``), so it can't be used for this.
-``ret_total`` adds that day's cash dividend. ``ca_unknown`` marks a demerger (no ratio in the
-list); ``gap_flag`` marks |ret| > 40% after adjustment: a real crash, or a corporate action the
-list missed. Studies should look at flagged rows before using them. A missed weekend special
+``ret_total`` adds that day's cash dividend. NSE's list names an action under the company's
+*current* symbol and ISIN, so it is matched by the day's symbol, its ISIN, or the canonical
+(latest) symbol. Two factors are estimated and marked ``ca_estimated``:
+
+- a **demerger** (no ratio in the list) uses the ex-date open, NSE's special pre-open price
+  discovery: factor = open / previous close. When the open did not price it (older demergers;
+  the day's adjusted move would still exceed the gap flag) the close is used instead, so that
+  day's own move is lost. A "Scheme of Arrangement" without the word demerger is treated the
+  same only when the open is at least 5% below the previous close;
+- an **ETF / fund-unit split** (ISIN ``INF…``; NSE's equities list does not carry them) is
+  inferred when the close is within 15% of the previous close divided by 2, 4, 5, 10, 20, 25, 50
+  or 100. Company shares (``INE…``) are never inferred: a 50% fall may be real.
+
+``ca_unknown`` marks a rights issue or arrangement whose factor could not be set;
+``gap_flag`` marks |ret| > 40% after adjustment: a real crash, or an action still missed.
+Studies should look at flagged rows before using them. A missed weekend special
 session (Budget Saturdays, Muhurat) just makes the next row's return span two sessions.
 
 Point in time: a row for day T is known at 19:30 IST on T (the files' publication), so it can
@@ -71,6 +84,7 @@ SCHEMA = pa.schema(
         ("ca_factor", pa.float64()),
         ("ca_event", pa.bool_()),
         ("ca_unknown", pa.bool_()),
+        ("ca_estimated", pa.bool_()),
         ("gap_flag", pa.bool_()),
         ("ca_subject", pa.string()),
     ]
@@ -91,9 +105,10 @@ def _index_actions(actions: Sequence[CorpAction]) -> dict[tuple[str, date], list
     return out
 
 
-def _adjustment(acts: Sequence[CorpAction], cum_price: float) -> tuple[float, float, bool]:
-    """(price factor, dividend ₹ per share, unknown ratio?) for one stock's actions on a day."""
-    factor, div, unknown = 1.0, 0.0, False
+def _adjustment(acts: Sequence[CorpAction], cum_price: float) -> tuple[float, float, bool, str]:
+    """(price factor, dividend ₹ per share, rights ratio unknown?, arrangement) for one stock's
+    actions on a day; arrangement is "demerger", "scheme" or ""."""
+    factor, div, unknown, arrangement = 1.0, 0.0, False, ""
     for a in acts:
         for kind, val in parse_subject(a.subject):
             if kind == "dividend":
@@ -110,8 +125,25 @@ def _adjustment(acts: Sequence[CorpAction], cum_price: float) -> tuple[float, fl
                 else:
                     factor *= f
             elif kind == "demerger":
-                unknown = True
-    return factor, div, unknown
+                is_dm = "demerger" in a.subject.lower()
+                arrangement = "demerger" if is_dm or arrangement == "demerger" else "scheme"
+    return factor, div, unknown, arrangement
+
+
+SCHEME_MIN_GAP = 0.95  # an arrangement without "demerger" counts only on a >= 5% lower open
+ETF_SPLITS = (2, 4, 5, 10, 20, 25, 50, 100)
+ETF_SPLIT_TOL = 0.15
+
+
+def _etf_split(isin: str, base: float, close: float) -> int | None:
+    """The inferred unit-split ratio k (1:k) for a fund unit whose close fell to ~base / k."""
+    if not isin.startswith("INF") or base <= 0 or close <= 0:
+        return None
+    rr = close / base
+    if rr >= 0.6:
+        return None
+    k = min(ETF_SPLITS, key=lambda k: abs(rr * k - 1))
+    return k if abs(rr * k - 1) <= ETF_SPLIT_TOL else None
 
 
 def build_panel(
@@ -153,8 +185,33 @@ def build_panel(
         for r in rows:
             canon = smap.canonical(r.symbol, day)
             base = last.get(canon) or r.prev_close
-            acts = by_key.get((r.symbol, day)) or by_key.get((r.isin, day)) or []
-            factor, div, unknown = _adjustment(acts, base)
+            acts = (
+                by_key.get((r.symbol, day))
+                or by_key.get((r.isin, day))
+                or by_key.get((canon, day))
+                or []
+            )
+            factor, div, unknown, arrangement = _adjustment(acts, base)
+            estimated = False
+            subject = "; ".join(a.subject for a in acts) or None
+            if arrangement:
+                gap = r.open / base if base > 0 and r.open > 0 else None
+                if gap is not None and (arrangement == "demerger" or gap <= SCHEME_MIN_GAP):
+                    if abs(r.close / (base * factor * gap) - 1) > GAP_FLAG:
+                        # No pre-open price discovery (before NSE's special session for
+                        # demergers): the open didn't price it, so the whole day's fall is
+                        # taken as the carve-out. Loses one day's real move, not ~80%.
+                        gap = r.close / (base * factor)
+                        subject = f"{subject} (factor from the close: open did not price it)"
+                    factor *= gap
+                    estimated = True
+                else:
+                    unknown = True
+            elif not acts:
+                k = _etf_split(r.isin, base, r.close)
+                if k is not None:
+                    factor, estimated = 1.0 / k, True
+                    subject = f"inferred unit split 1:{k} (not in NSE's equities list)"
             ok = base > 0 and r.close > 0
             ret = r.close / (base * factor) - 1 if ok else None
             m = deliv.get((r.symbol, r.series)) if deliv is not None else None
@@ -181,8 +238,9 @@ def build_panel(
                 "ca_factor": factor,
                 "ca_event": abs(factor - 1) > 1e-9,
                 "ca_unknown": unknown,
+                "ca_estimated": estimated,
                 "gap_flag": ret is not None and abs(ret) > GAP_FLAG,
-                "ca_subject": "; ".join(a.subject for a in acts) or None,
+                "ca_subject": subject,
             }
             if r.close > 0:
                 last[canon] = r.close

@@ -241,3 +241,120 @@ def test_cm_bhavcopy_two_digit_year_date_parses() -> None:
     assert len(rows) == 1
     assert rows[0].trade_date == date(2020, 7, 13)
     assert rows[0].symbol == "ACME"
+
+
+# ------------------------------------------------- missed actions (fix of 18 Nov 2026)
+
+
+def test_split_subject_without_from_parses() -> None:
+    assert parse_subject("Face Value Split Rs 10 To Rs 1") == [("split", pytest.approx(0.1))]
+    assert parse_subject("Face Value Split From Rs 10 To Rs 1") == [("split", pytest.approx(0.1))]
+
+
+def _two_days(raw: Path, row1: str, row2: str) -> tuple[date, date]:
+    d1, d2 = date(2018, 1, 3), date(2018, 1, 4)
+    _put(raw, "cm", d1, OLD_CM_HEAD + row1)
+    _put(raw, "cm", d2, OLD_CM_HEAD + row2)
+    return d1, d2
+
+
+def test_action_listed_under_the_current_symbol_and_new_isin_is_applied(tmp_path: Path) -> None:
+    # NSE's list names Cadila's 2015 split under ZYDUSLIFE with the post-split ISIN.
+    d1, d2 = _two_days(
+        tmp_path,
+        "OLDSYM,EQ,2080,2090,2070,2081.2,1,2070,1,1,03-JAN-2018,1,INE000A01019,\n",
+        "OLDSYM,EQ,418.5,430,415,425.65,1,2081.2,1,1,04-JAN-2018,1,INE000A01019,\n",
+    )
+    changes = [SymbolChange("OLDSYM", "NEWSYM", date(2022, 1, 1))]
+    acts = [
+        CorpAction("NEWSYM", "EQ", "INE000A01027", d2,
+                   "Face Value Split (Sub-Division) - From Rs 5/- Per Share To Re 1/- Per Share", 1.0),
+    ]  # fmt: skip
+    rows = list(build_panel(tmp_path, [d1, d2], changes, acts))
+    assert rows[1]["ca_factor"] == pytest.approx(0.2)
+    assert rows[1]["ret"] == pytest.approx(425.65 / (2081.2 * 0.2) - 1)
+    assert rows[1]["gap_flag"] is False
+
+
+def test_demerger_is_adjusted_from_the_ex_date_open(tmp_path: Path) -> None:
+    # Century Textiles' ABREL demerger, ex 11 Oct 2019: special pre-open discovered 390.
+    d1, d2 = _two_days(
+        tmp_path,
+        "CTX,EQ,880,885,875,882.2,1,880,1,1,03-JAN-2018,1,INE000B01011,\n",
+        "CTX,EQ,390,400,385,393.85,1,882.2,1,1,04-JAN-2018,1,INE000B01011,\n",
+    )
+    acts = [CorpAction("CTX", "EQ", "INE000B01011", d2, "Demerger", 10.0)]
+    b = list(build_panel(tmp_path, [d1, d2], [], acts))[1]
+    assert b["ca_factor"] == pytest.approx(390 / 882.2)
+    assert b["ret"] == pytest.approx(393.85 / 390 - 1)
+    assert b["ca_estimated"] is True and b["ca_unknown"] is False and b["gap_flag"] is False
+
+
+def test_scheme_of_arrangement_uses_the_open_only_on_a_real_gap(tmp_path: Path) -> None:
+    d1, d2 = _two_days(
+        tmp_path,
+        "SCH,EQ,100,101,99,100,1,100,1,1,03-JAN-2018,1,INE000C01011,\n",
+        "SCH,EQ,99,101,98,100.5,1,100,1,1,04-JAN-2018,1,INE000C01011,\n",
+    )
+    acts = [CorpAction("SCH", "EQ", "INE000C01011", d2, "Scheme Of Arrangement", 10.0)]
+    b = list(build_panel(tmp_path, [d1, d2], [], acts))[1]
+    assert b["ca_factor"] == 1.0 and b["ca_unknown"] is True and b["ca_estimated"] is False
+    raw2 = tmp_path / "two"
+    d1, d2 = _two_days(
+        raw2,
+        "SCH,EQ,100,101,99,100,1,100,1,1,03-JAN-2018,1,INE000C01011,\n",
+        "SCH,EQ,70,72,69,71,1,100,1,1,04-JAN-2018,1,INE000C01011,\n",
+    )
+    b = list(build_panel(raw2, [d1, d2], [], acts))[1]
+    assert b["ca_factor"] == pytest.approx(0.70) and b["ca_estimated"] is True
+
+
+def test_unlisted_etf_unit_split_is_inferred_only_for_fund_units(tmp_path: Path) -> None:
+    # NIFTYBEES 1:10 on 19 Dec 2019 is missing from NSE's equities list.
+    d1, d2 = _two_days(
+        tmp_path,
+        "ETF,EQ,1290,1295,1288,1292.54,1,1290,1,1,03-JAN-2018,1,INF732E01011,\n"
+        "STK,EQ,1290,1295,1288,1292.54,1,1290,1,1,03-JAN-2018,1,INE000D01011,\n"
+        "ODD,EQ,3800,3810,3790,3810,1,3800,1,1,03-JAN-2018,1,INF754K01EL1,\n",
+        "ETF,EQ,129.2,131,128,130.2,1,129.25,1,1,04-JAN-2018,1,INF732E01011,\n"
+        "STK,EQ,129.2,131,128,130.2,1,1292.54,1,1,04-JAN-2018,1,INE000D01011,\n"
+        "ODD,EQ,1832,2300,1800,2238.74,1,3810,1,1,04-JAN-2018,1,INF754K01EL1,\n",
+    )
+    rows = {
+        r["symbol"]: r for r in build_panel(tmp_path, [d1, d2], [], []) if r["trade_date"] == d2
+    }
+    etf, stk, odd = rows["ETF"], rows["STK"], rows["ODD"]
+    assert etf["ca_factor"] == pytest.approx(0.1) and etf["ca_estimated"] is True
+    assert etf["ret"] == pytest.approx(130.2 / 129.254 - 1) and etf["gap_flag"] is False
+    assert "inferred" in etf["ca_subject"]
+    assert stk["ca_factor"] == 1.0 and stk["gap_flag"] is True  # a company: never inferred
+    assert odd["ca_factor"] == 1.0 and odd["gap_flag"] is True  # not a clean ratio
+
+
+def test_abbreviated_and_variant_subjects_parse() -> None:
+    assert parse_subject("Fv Splt Frm Rs 10 To Re 1") == [("split", pytest.approx(0.1))]
+    assert parse_subject("Fv Splt Frm Rs 10 To Rs 2") == [("split", pytest.approx(0.2))]
+    assert parse_subject("Bonus- 1:2") == [("bonus", pytest.approx(2 / 3))]
+    assert parse_subject("Bonus Ncrps 1:116") == []  # preference shares, not equity
+    assert parse_subject("Rights 1:2@Prem Rs 40") == [("rights", (1, 2, 40.0))]
+    assert parse_subject("Rights 7:10 @ Prm Rs 102/-") == [("rights", (7, 10, 102.0))]
+    assert parse_subject("Rights Issue 4:17@ Premium Rs 390/-") == [("rights", (4, 17, 390.0))]
+    assert parse_subject("Rights : 24:10 At Par") == [("rights", (24, 10, 0.0))]
+    assert parse_subject("Rights 87:38 @ Premium Of Rs 2.50 Per Share") == [
+        ("rights", (87, 38, 2.5))
+    ]
+    assert parse_subject("Rights 2:7") == []  # no issue price: no factor
+
+
+def test_demerger_without_pre_open_discovery_falls_back_to_the_close(tmp_path: Path) -> None:
+    # Adani Enterprises, 3 Jun 2015: opened 573.3 on a 637 base, closed 109.75.
+    d1, d2 = _two_days(
+        tmp_path,
+        "ADE,EQ,638,640,630,637,1,633,1,1,03-JAN-2018,1,INE000E01011,\n",
+        "ADE,EQ,573.3,580,105,109.75,1,637,1,1,04-JAN-2018,1,INE000E01011,\n",
+    )
+    acts = [CorpAction("ADE", "EQ", "INE000E01011", d2, "Scheme Of Arrangement", 1.0)]
+    b = list(build_panel(tmp_path, [d1, d2], [], acts))[1]
+    assert b["ca_factor"] == pytest.approx(109.75 / 637)
+    assert b["ret"] == pytest.approx(0.0, abs=1e-12) and b["gap_flag"] is False
+    assert b["ca_estimated"] is True and "close" in b["ca_subject"]
