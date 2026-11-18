@@ -137,6 +137,8 @@ def _study_cell(rows: list[dict[str, Any]], key: str) -> dict[str, Any]:
 
 def study_stats(path: Path) -> dict[str, Any]:
     """Signal study (``signal_study.jsonl``) by score band, setup and hour, at each horizon."""
+    from engine.cockpit.study import episode_firsts
+
     rows = study_rows(path)
     days = sorted({str(r.get("t0", ""))[:10] for r in rows if r.get("t0")})
 
@@ -161,6 +163,8 @@ def study_stats(path: Path) -> dict[str, Any]:
         "last_day": days[-1] if days else None,
         "horizons": list(STUDY_KEYS),
         "total": table({"all": rows}),
+        # One per burst: same index and direction within 15 min, measured on its first signal.
+        "total_episodes": table({"all": episode_firsts(rows)}),
         "bands": table(bands),
         "by_wave": table(dict(sorted(waves.items()))),
         "by_hour": table(dict(sorted(hours.items()))),

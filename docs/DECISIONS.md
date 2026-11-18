@@ -4,6 +4,21 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Signal study counted by episode (18 Nov 2026)
+
+- **What changed:** one order-flow reading fires on 10–40 strikes within seconds, so the study's day totals were one bet counted many times. On 18 Nov, 385 signals were 25 episodes.
+  - `study.episode_firsts()` defines an episode as the signals of one underlying and direction within 15 minutes of its first signal, measured on that first signal: the one lot a trader would actually take.
+  - The Signal study tab now shows an "Episodes today" table next to the per-signal one, and the Research tab adds "All, one per episode".
+- **Effect on 16–18 Nov at 30 minutes:**
+  - 16 Nov: 52 episodes, 52% hit, −₹7.6k;
+  - 17 Nov: 53 episodes, 53% hit, +₹0.3k;
+  - 18 Nov: 16 episodes, 44% hit, −₹3.3k.
+  - By signal, the same days showed swings of ±₹0.5–1.2 lakh.
+- **Unchanged:** the signal itself, the per-signal tables and the journal.
+- **Open:** the filter hypotheses for the 20-session evaluation are pre-registered in the private research log, using only sessions from 19 Nov onward.
+
+---
+
 ## Signal study: options it measures stay in the live feed (18 Nov 2026)
 
 - **What was wrong:** the live feed follows only the strikes near the current spot. When the index moved about 500 points (SENSEX, 18 Nov 09:17–09:52), the options that open study entries are priced on dropped out of the feed. Their horizon results were then written with the index move but no option price: 10 of 47 SENSEX 30-minute results that morning.

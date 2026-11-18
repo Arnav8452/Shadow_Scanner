@@ -247,3 +247,51 @@ def test_open_entries_name_their_vehicles_and_a_missing_quote_is_said(
     assert "opt_net_inr" not in r and r["opt_missing"] == "no quote for the vehicle"
     st.update(OPEN.replace(hour=15, minute=20), {"NIFTY": 25000.0}, {CE: _book(1.0, 1.1)})
     assert st.open_vehicles() == []
+
+
+def test_signals_group_into_episodes_one_trade_each() -> None:
+    """A burst of the same reading on many strikes is ONE bet: an episode = signals of the
+    same underlying and direction within 15 minutes of the episode's first signal; the
+    episode is measured on its first signal (what one trader would actually take)."""
+    from engine.cockpit.study import episode_firsts
+
+    def row(t: str, und: str = "NIFTY", d: str = "DOWN", net: float = 100.0) -> dict:
+        return {"signal_id": t + und + d, "t0": f"2026-11-18T{t}+05:30", "underlying": und,
+                "direction": d, "results": {"30m": {"move_pts": 5.0, "move_pct": 0.02,
+                "hit": True, "opt_net_inr": net}}}  # fmt: skip
+
+    rows = [
+        row("09:17:05", net=1000.0),
+        row("09:17:07"),
+        row("09:25:00"),  # one burst
+        row("09:33:00", net=-200.0),  # 16 min after the burst began: a new episode
+        row("09:17:30", d="UP", net=-50.0),  # other direction: its own episode
+        row("09:17:40", und="SENSEX", net=7.0),  # other index: its own episode
+    ]
+    firsts = episode_firsts(rows)
+    assert [(r["t0"][11:19], r["underlying"], r["direction"], r["episode_signals"])
+            for r in firsts] == [
+        ("09:17:05", "NIFTY", "DOWN", 3), ("09:17:30", "NIFTY", "UP", 1),
+        ("09:17:40", "SENSEX", "DOWN", 1), ("09:33:00", "NIFTY", "DOWN", 1),
+    ]  # fmt: skip
+    assert sum(r["results"]["30m"]["opt_net_inr"] for r in firsts) == 1000.0 - 50 + 7 - 200
+
+
+def test_study_view_and_stats_report_episodes(repo_root: Path, tmp_path: Path) -> None:
+    from engine.cockpit.research import study_stats
+
+    st = _study(repo_root, tmp_path)
+    t0 = OPEN.replace(hour=10)
+    for i in range(3):  # one burst of three
+        st.add(
+            signal_id=f"B{i}", now=t0 + timedelta(seconds=i), symbol=CE, label="ce",
+            underlying="NIFTY", bullish=True, score=85, wave="STOP_HUNT_RECLAIM",
+            spot=25000.0, vehicle=CE, vehicle_label="ce", lot=65,
+            vehicle_book=_book(99.9, 100.0),
+        )  # fmt: skip
+    st.update(OPEN.replace(hour=15, minute=20), {"NIFTY": 25050.0}, {CE: _book(110.0, 110.1)})
+    v = st.view()
+    assert v["signals"] == 3 and v["episodes"] == 1
+    assert [s["n"] for s in v["episode_summary"] if s["horizon"] == "close"] == [1]
+    d = study_stats(tmp_path / "signal_study.jsonl")
+    assert d["total_episodes"][0]["close"]["n"] == 1 and d["total"][0]["close"]["n"] == 3
