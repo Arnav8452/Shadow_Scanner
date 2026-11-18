@@ -177,3 +177,19 @@ def test_state_round_trips_through_json(tmp_path: Path) -> None:
     assert again.positions == st.positions and again.done == st.done
     assert json.loads(path.read_text(encoding="utf-8"))["positions"][0]["symbol"] == "ACME"
     assert PaperState.load(tmp_path / "missing.json") == PaperState()
+
+
+def test_tender_is_charged_as_a_corporate_action_order_even_when_nothing_is_accepted() -> None:
+    calls: list[tuple[str, float, bool]] = []
+
+    def rec(side: str, value: float, dp: bool) -> float:
+        calls.append((side, value, dp))
+        return 23.6 if side == "tender" else value * 0.001
+
+    st = PaperState()
+    step(CUM, [_event()], {"ACME": _q(300.0)}, st, CFG, CAL, rec)
+    calls.clear()
+    _, j = step(RET, [_event(acceptance=0.0)], {"ACME": _q(290.0)}, st, CFG, CAL, rec)
+    assert ("tender", 0.0, False) in calls  # the fee is per order, accepted or not
+    assert any(c[0] == "sell" and c[2] for c in calls)  # the returned shares are sold
+    assert j[0]["type"] == "close"
