@@ -39,6 +39,7 @@ from engine.execution.swing_paper import (
     SwingPaperAccount,
     option_key,
 )
+from engine.strategies.avoid_tags import AvoidTagConfig, entry_tags, load_pcv, rights_ex_dates
 from engine.strategies.swing_scanner import (
     Bar,
     SwingConfig,
@@ -100,8 +101,29 @@ def run_swing_night(
     trend: TrendConfig,
     fills: SwingFillConfig,
     fetch_index: Callable[[date], None] | None = None,
+    avoid: AvoidTagConfig | None = None,
 ) -> SwingNightReport:
     rep = SwingNightReport(day)
+    tag_cache: dict[str, Any] = {}
+
+    def tags_for(symbol: str) -> dict[str, Any]:
+        """Avoid-filter tags for an entry filled at the next open (recorded, never blocking).
+        A failure here must never stop the nightly run: it is recorded instead."""
+        if avoid is None:
+            return {}
+        try:
+            if not tag_cache:
+                from engine.data.equity.corporate_actions import load_corporate_actions
+
+                tag_cache["pcv"] = load_pcv(raw_dir, day, cal, avoid)
+                tag_cache["rights"] = rights_ex_dates(load_corporate_actions(raw_dir))
+            return entry_tags(
+                symbol, entry_day=cal.next_trading_day(day), pcv=tag_cache["pcv"],
+                rights=tag_cache["rights"], cal=cal, cfg=avoid,
+            )  # fmt: skip
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
     fo_path = eod_path(raw_dir, "fo", day)
     if not fo_path.exists() or not eod_path(raw_dir, "delivery", day).exists():
         raise FileNotFoundError(f"F&O bhavcopy or delivery file for {day} not downloaded")
@@ -170,7 +192,7 @@ def run_swing_night(
                 stop_pct=cfg.option_premium_stop_pct if p.option else cfg.cash_stop_pct,
                 line=c.level if c.direction == "LONG" else 0.0, setup_close=c.close,
                 expiry=p.option.expiry.isoformat() if p.option else "",
-                reason=f"{c.setup.value}: {c.rationale}",
+                reason=f"{c.setup.value}: {c.rationale}", tags=tags_for(c.symbol),
             )  # fmt: skip
             ok, msg = acct.place_entry(o, day=day, risk_budget_pct=budget)
             row["queued"], row["queue_note"] = ok, msg
@@ -192,7 +214,7 @@ def run_swing_night(
                 qty = math.floor(limits.inr(trend.allocation_pct) / px)
                 o = Order(id="", strategy="trend", symbol=ETF, instrument="CASH", key=ETF, qty=qty,
                           est_price=px, stop_pct=trend.disaster_stop_pct,
-                          reason=sig.text)  # fmt: skip
+                          reason=sig.text, tags=tags_for(ETF))  # fmt: skip
                 ok, msg = acct.place_entry(o, day=day, risk_budget_pct=budget)
                 trend_row["queued"], trend_row["queue_note"] = ok, msg
             elif not sig.long and held:

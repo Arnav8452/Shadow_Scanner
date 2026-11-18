@@ -193,3 +193,17 @@ def test_tender_is_charged_as_a_corporate_action_order_even_when_nothing_is_acce
     assert ("tender", 0.0, False) in calls  # the fee is per order, accepted or not
     assert any(c[0] == "sell" and c[2] for c in calls)  # the returned shares are sold
     assert j[0]["type"] == "close"
+
+
+def test_entries_and_closes_carry_avoid_filter_tags() -> None:
+    seen: list[tuple[str, date]] = []
+
+    def tags(symbol: str, entry_day: date) -> dict:
+        seen.append((symbol, entry_day))
+        return {"call_heavy": None, "in_ex_rights_window": True}
+
+    st = PaperState()
+    _, j = step(CUM, [_event()], {"ACME": _q(300.0)}, st, CFG, CAL, _charges, tags)
+    assert seen == [("ACME", CUM)] and j[0]["tags"]["in_ex_rights_window"] is True
+    _, j = step(RET, [_event(acceptance=40.0)], {"ACME": _q(290.0)}, st, CFG, CAL, _charges)
+    assert j[0]["type"] == "close" and j[0]["tags"]["in_ex_rights_window"] is True

@@ -1018,6 +1018,7 @@ def _swing_night(settings: Any, cal: Any) -> Any:
     """``day -> report lines`` for the nightly swing run (paper only)."""
     from engine.core.rules import RuleBook
     from engine.data.eod.download import fetch_eod
+    from engine.strategies.avoid_tags import avoid_tag_config
     from engine.strategies.swing_night import fill_config, run_swing_night, trend_config
     from engine.strategies.swing_scanner import swing_config
 
@@ -1044,6 +1045,7 @@ def _swing_night(settings: Any, cal: Any) -> Any:
             trend=trend_config(raw.get("trend")),
             fills=fill_config(raw.get("swing_paper")),
             fetch_index=lambda d: fetch_index(d, raw_dir, now),
+            avoid=avoid_tag_config(raw.get("avoid_tags")),
         )
         return rep.lines + _buyback_paper(day, now)
 
@@ -1061,11 +1063,35 @@ def _swing_night(settings: Any, cal: Any) -> Any:
                 book=book,
                 cal=cal,
                 cfg=buyback_paper_config(raw.get("buyback_paper")),
+                avoid=avoid_tag_config(raw.get("avoid_tags")),
             )
         except (FileNotFoundError, ValueError) as exc:
             return [f"buyback paper: {exc}"]
 
     return run
+
+
+def task_avoid_tags(params: dict[str, str]) -> int:
+    """Avoid-filter tags on closed paper trades (engine/strategies/avoid_tags.py): swing and
+    buyback closes split by call-heavy option volume and by the ex-rights window. Tags are
+    recorded only; the owner judges them after `review_after_trades` tagged closes."""
+    from engine.core.config import load_settings
+    from engine.strategies.avoid_tags import avoid_tag_config, tag_report
+
+    settings = load_settings()
+    cfg = avoid_tag_config(settings.raw.get("avoid_tags"))
+    rep = tag_report(settings.paths["data"] / "state", review_after=cfg.review_after_trades)
+    status = "ready to judge" if rep["ready"] else "still collecting"
+    n, judge = rep["tagged_total"], cfg.review_after_trades
+    print(f"avoid tags: {n} tagged closes ({status}; judge at {judge})")
+    for acct, a in rep["accounts"].items():
+        print(f"  {acct}: {a['tagged']} tagged")
+        for key in ("call_heavy", "in_ex_rights_window"):
+            y, n = a[key]["yes"], a[key]["no"]
+            print(
+                f"    {key}: yes n={y['n']} avg {y['avg_net']} | no n={n['n']} avg {n['avg_net']}"
+            )
+    return 0
 
 
 def task_swing(params: dict[str, str]) -> int:
