@@ -4,6 +4,18 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Signal study: options it measures stay in the live feed (18 Nov 2026)
+
+- **What was wrong:** the live feed follows only the strikes near the current spot. When the index moved about 500 points (SENSEX, 18 Nov 09:17–09:52), the options that open study entries are priced on dropped out of the feed. Their horizon results were then written with the index move but no option price: 10 of 47 SENSEX 30-minute results that morning.
+  - The recorder had valid bids for them throughout, so the gap is the cockpit feed's, not the market's.
+- **Fix:**
+  - `SignalStudy.open_vehicles()` lists the open entries' options, newest first. The cockpit pins them under the owner `study`.
+  - `ShadowLiveRunner.pin` treats `study` as **low priority**: it gets only the room strategy legs and page pins leave, and is trimmed when they pin more.
+  - A horizon still measured without a quote now says `opt_missing` instead of being silently blank.
+- **Not fixed retroactively:** past results without an option price stay that way. A horizon is never re-measured late, at the wrong price.
+
+---
+
 ## Buyback / open-offer / delisting tender fee (18 Nov 2026)
 
 - **Checked on the brokers' own pages:**

@@ -224,3 +224,26 @@ def test_study_stats_by_band_with_t_stat(tmp_path: Path) -> None:
     assert bands["75–80"]["15m"]["n"] == 1 and bands["75–80"]["15m"]["t"] is None
     assert bands["80–90"]["60m"]["n"] == 0
     assert d["days"] == 1 and d["total"][0]["close"]["n"] == 4
+
+
+def test_open_entries_name_their_vehicles_and_a_missing_quote_is_said(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """Open entries list the options they still need priced, newest first (the cockpit pins
+    them in the live feed); a horizon whose vehicle has no quote says so in its result."""
+    st = _study(repo_root, tmp_path)
+    t0 = OPEN.replace(hour=10)
+    other = "NSE_FO|OTHER"
+    for i, veh in enumerate((CE, other, CE)):
+        st.add(
+            signal_id=f"V{i}", now=t0 + timedelta(seconds=i), symbol=CE, label="ce",
+            underlying="NIFTY", bullish=True, score=85, wave="STOP_HUNT_RECLAIM",
+            spot=25000.0, vehicle=veh, vehicle_label="v", lot=65,
+            vehicle_book=_book(99.9, 100.0),
+        )  # fmt: skip
+    assert st.open_vehicles() == [CE, other]
+    st.update(t0 + timedelta(minutes=15, seconds=5), {"NIFTY": 25020.0}, {})
+    r = st.entries[0].results["15m"]
+    assert "opt_net_inr" not in r and r["opt_missing"] == "no quote for the vehicle"
+    st.update(OPEN.replace(hour=15, minute=20), {"NIFTY": 25000.0}, {CE: _book(1.0, 1.1)})
+    assert st.open_vehicles() == []
