@@ -192,6 +192,7 @@ class CockpitCore:
         self._oi_first: dict[str, tuple[int, str]] = {}
         self._search_index: list[tuple[str, str, str, int]] | None = None
         self.user_pins: list[str] = []
+        self._study_pins: list[str] = []  # the signal study's open vehicles, kept in the feed
         self.score_acct: PaperAccount | None = None  # original A+ score bot (own account)
         self.gamma_acct: PaperAccount | None = None  # SPEC 5.10
         self.debit_acct: Any = None  # SpreadAccount for debit spreads
@@ -278,6 +279,14 @@ class CockpitCore:
                 context=lambda und: self.market_context(und, from_ns(runner.clock.now_ns())),
             )
         self.event("system", f"{self.source} engine started ({runner.adapter.name})")
+
+    def _pin_study_vehicles(self) -> None:
+        """Keep the study's open vehicles in the live feed (low priority: strategy legs and
+        page pins come first), re-pinning only when the set changes."""
+        want = self.study.open_vehicles() if self.study is not None else []
+        if want != self._study_pins:
+            self._study_pins = want
+            self._pin("study", want)
 
     def _pin(self, owner: str, symbols: list[str]) -> list[str]:
         if self.runner is None or not hasattr(self.runner, "pin"):
@@ -967,6 +976,7 @@ class CockpitCore:
                 self._plays_step(now)
             if self.study is not None:
                 self.study.update(now, spots, books)
+                self._pin_study_vehicles()
             self.publish(now)
             self._next_publish = wall + self.cfg.publish_interval_ms / 1000.0
             self._urgent = False

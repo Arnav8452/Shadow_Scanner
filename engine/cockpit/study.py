@@ -193,6 +193,8 @@ class SignalStudy:
                 }
             )
         bid = book.bids[0][0] if book is not None and book.bids else 0.0
+        if e.opt_ask0 > 0 and bid <= 0:
+            res["opt_missing"] = "no quote for the vehicle"
         if e.opt_ask0 > 0 and bid > 0:
             qty = e.lot
             day = now.astimezone(IST).date()
@@ -223,6 +225,16 @@ class SignalStudy:
                 }
             )
         e.results[key] = res
+
+    def open_vehicles(self) -> list[str]:
+        """Options that open entries are still to be priced on, newest signal first: the
+        cockpit pins them in the live feed so a vehicle that drifts from the money keeps a
+        quote (the feed otherwise follows only the strikes near the current spot)."""
+        out: dict[str, None] = {}
+        for e in sorted(self.entries, key=lambda x: x.t0, reverse=True):
+            if not e.done and e.vehicle:
+                out.setdefault(e.vehicle, None)
+        return list(out)
 
     def update(self, now: datetime, spots: Mapping[str, float], books: Mapping[str, Book]) -> None:
         for e in self.entries:

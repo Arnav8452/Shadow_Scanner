@@ -79,6 +79,9 @@ from engine.shadow.scanner import InstrumentMicrostructureState, ShadowOrderBook
 
 log = logging.getLogger(__name__)
 
+# Pin owners whose contracts only use room the strategies and the page leave free.
+LOW_PRIORITY_PIN_OWNERS: frozenset[str] = frozenset({"study"})
+
 
 # --------------------------------------------------------------------------- settings
 
@@ -495,16 +498,42 @@ class ShadowLiveRunner:
 
     def pin(self, owner: str, symbols: list[str], *, limit: int = 10) -> list[str]:
         """Keep ``symbols`` in the feed for ``owner`` (replaces that owner's earlier pins).
-        Returns the symbols accepted (known to the master, within ``limit`` pins in total)."""
-        others = {s for o, syms in self.pins.items() if o != owner for s in syms}
+        Returns the symbols accepted (known to the master, within ``limit`` pins in total).
+
+        Owners in ``LOW_PRIORITY_PIN_OWNERS`` (the signal study's measurement options) only
+        get room left by the others, and are trimmed when a strategy or the page pins more."""
+        low = owner in LOW_PRIORITY_PIN_OWNERS
+        others = {
+            s
+            for o, syms in self.pins.items()
+            if o != owner and (low or o not in LOW_PRIORITY_PIN_OWNERS)
+            for s in syms
+        }
         room = max(0, limit - len(others))
-        ok = [s for s in dict.fromkeys(symbols) if s in self.master][:room]
+        # A low-priority owner needs no room for a contract another owner already keeps.
+        known = [
+            s for s in dict.fromkeys(symbols) if s in self.master and not (low and s in others)
+        ]
+        ok = known[:room]
         if ok:
             self.pins[owner] = ok
         else:
             self.pins.pop(owner, None)
+        if not low:
+            self._trim_low_priority_pins(limit)
         self.recenter(self.clock.now_ns(), f"pin {owner}")
         return ok
+
+    def _trim_low_priority_pins(self, limit: int) -> None:
+        """Drop low-priority pins (newest last) until all pins fit within ``limit``."""
+        for o in [o for o in self.pins if o in LOW_PRIORITY_PIN_OWNERS]:
+            high = {s for p, syms in self.pins.items() if p not in LOW_PRIORITY_PIN_OWNERS
+                    for s in syms}  # fmt: skip
+            keep = [s for s in self.pins[o] if s not in high][: max(0, limit - len(high))]
+            if keep:
+                self.pins[o] = keep
+            else:
+                self.pins.pop(o)
 
     def pinned(self) -> list[str]:
         return list(dict.fromkeys(s for syms in self.pins.values() for s in syms))

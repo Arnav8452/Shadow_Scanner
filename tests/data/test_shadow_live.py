@@ -341,6 +341,36 @@ def test_pinned_contracts_join_the_feed_within_the_cap(
     runner.finish()
 
 
+def test_signal_study_pins_yield_to_strategy_and_page_pins(
+    master: InstrumentMaster, rs: RecorderSettings, repo_root: Path, tmp_path: Path
+) -> None:
+    """The signal study pins the options its open entries are measured on, so a vehicle that
+    drifts away from the money keeps a quote; those pins never take room from a strategy's
+    legs or the page."""
+    clock = ManualClock(datetime(2026, 11, 11, 10, 0, 0, tzinfo=IST))
+    feed = SimFeed(master, clock, spots={"NIFTY": 25010.0}, max_symbols=50, depth_levels=30)
+    settings = load_settings(root=repo_root, environ={})
+    runner = ShadowLiveRunner(
+        CFG, rs, scanner=ShadowOrderBookScanner(settings.shadow_scanner, max_lots=1),
+        master=master, adapter=feed, clock=clock, session=SESSION,
+        depth_writer=DatasetWriter(tmp_path, "depth30", DEPTH30_SCHEMA), store=Store(tmp_path),
+        report_path=tmp_path / "d.html", ledger_file=tmp_path / "l.jsonl", feed_label="SIM",
+    )  # fmt: skip
+    runner.start()
+    feed.pump()
+    runner.step(0)
+    a, b, c = (opt_symbol(WEEKLY, k, Kind.PUT) for k in (25600, 24400, 24500))
+    leg1, leg2 = opt_symbol(WEEKLY, 25700, Kind.CALL), opt_symbol(WEEKLY, 25750, Kind.CALL)
+    assert runner.pin("study", [a, b], limit=3) == [a, b]
+    assert a in runner.subscribed and b in runner.subscribed
+    # A strategy's legs get their room; the study's pins are trimmed to fit.
+    assert runner.pin("condor", [leg1, leg2], limit=3) == [leg1, leg2]
+    assert len(runner.pinned()) <= 3 and leg1 in runner.pinned() and leg2 in runner.pinned()
+    # The study only gets what is left.
+    assert runner.pin("study", [a, b, c], limit=3) == [a]
+    runner.finish()
+
+
 def test_silent_feed_is_restarted_in_market_hours_only(
     master: InstrumentMaster, rs: RecorderSettings, repo_root: Path, tmp_path: Path
 ) -> None:
