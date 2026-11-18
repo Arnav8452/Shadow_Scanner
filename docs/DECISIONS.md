@@ -4,6 +4,15 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Buyback paper: the buyback size recorded as a tag (18 Nov 2026)
+
+- **What changed:** buyback paper entries and closes now record `bb_size_pct` (the buyback as % of equity, from the events file) and `bb_small_quota_pct` (15% of it).
+- **Why:** in private research (T-008 C), buyback size ranked small-holder acceptance (Spearman 0.57, t 4.2) but did not clearly rank event returns (top vs bottom tercile t 1.2; the bottom tercile even out-earned the middle one).
+- **Status:** recorded only, never used to skip an event, until forward paper results are judged.
+- **Rejected:** a filter on the Letter-of-Offer entitlement ratio. It is published after the record date, i.e. after the paper account has already bought.
+
+---
+
 ## Allocation benchmarks on the capital-and-time scoreboard (18 Nov 2026)
 
 - **What changed:** the scorecard's capital-and-time table now shows, beside Nifty, the owner's two idle-money candidates (research T-006, private log) over each account's own dates:

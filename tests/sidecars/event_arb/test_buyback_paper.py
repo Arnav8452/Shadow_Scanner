@@ -207,3 +207,14 @@ def test_entries_and_closes_carry_avoid_filter_tags() -> None:
     assert seen == [("ACME", CUM)] and j[0]["tags"]["in_ex_rights_window"] is True
     _, j = step(RET, [_event(acceptance=40.0)], {"ACME": _q(290.0)}, st, CFG, CAL, _charges)
     assert j[0]["type"] == "close" and j[0]["tags"]["in_ex_rights_window"] is True
+
+
+def test_entries_record_the_buyback_size_as_an_acceptance_tag() -> None:
+    ev = _event()
+    ev = replace(ev, terms=replace(ev.terms, published_size_pct=2.0))
+    st = PaperState()
+    _, j = step(CUM, [ev], {"ACME": _q(300.0)}, st, CFG, CAL, _charges)
+    assert j[0]["tags"]["bb_size_pct"] == 2.0 and j[0]["tags"]["bb_small_quota_pct"] == 0.3
+    _, j = step(RET, [replace(ev, terms=replace(ev.terms, actual_small_acceptance_pct=50.0))],
+                {"ACME": _q(290.0)}, st, CFG, CAL, _charges)  # fmt: skip
+    assert j[0]["tags"]["bb_size_pct"] == 2.0  # carried to the close record

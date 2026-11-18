@@ -275,6 +275,12 @@ def step(
             continue
         ch = charges("buy", qty * px, False)
         tags = tags_fn(ev.symbol, day) if tags_fn is not None else {}
+        # Research T-008 C: the buyback's size as % of equity (known at announcement) ranked
+        # small-holder acceptance (Spearman 0.57) but did not clearly rank returns, so it is
+        # recorded, never used to skip an event, until forward paper results are judged.
+        size = terms.published_size_pct
+        quota = round(0.15 * size, 4) if size is not None else None
+        tags = {**tags, "bb_size_pct": size, "bb_small_quota_pct": quota}
         state.positions.append(
             Position(
                 ev.id,
