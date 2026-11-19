@@ -665,6 +665,20 @@ class SpreadTrade:
     bullish: bool = True
     extra: dict[str, Any] = field(default_factory=dict)
 
+    _SAVED = ("target_pct", "stop_mult", "debit_stop_pct", "square_off", "spot_stop", "bullish")
+
+    def rules(self) -> dict[str, Any]:
+        """The exit rules as JSON, journaled with the position's open record."""
+        return {**{k: getattr(self, k) for k in self._SAVED}, "extra": dict(self.extra)}
+
+    @classmethod
+    def restored(cls, pos: Any, rules: Mapping[str, Any]) -> SpreadTrade:
+        """Rebuild a position's exit rules after a restart from its journaled ``rules``."""
+        kw = {k: rules[k] for k in cls._SAVED if k in rules}
+        return cls(
+            pos.id, pos.underlying, pos.opened_at, extra=dict(rules.get("extra") or {}), **kw
+        )
+
 
 def spread_exit(
     pos: Any, tr: SpreadTrade, books: Mapping[str, Book], now: datetime, spot: float
@@ -840,6 +854,7 @@ class SpreadPlay(Status):
             lots=p["lots"],
             max_loss_inr=p["max_loss"],
             take_profit_pct=(p["trade"].target_pct if p["trade"].target_pct else None),
+            exit_rules=p["trade"].rules(),
             on_done=lambda done, txt, pos: self._on_open(done, txt, pos, p, m),
         )
         if ok:
@@ -865,12 +880,20 @@ class SpreadPlay(Status):
         out: list[str] = []
         books = m.books()
         for pos in list(self.account.positions):
-            tr = self.trades.get(pos.id) or SpreadTrade(
-                pos.id,
-                pos.underlying,
-                pos.opened_at,
-                square_off=None if self.overnight else "15:20",
-            )
+            tr = self.trades.get(pos.id)
+            if tr is None:  # after a restart: the journaled rules, else the session defaults
+                saved = getattr(pos, "exit_rules", None)
+                tr = (
+                    SpreadTrade.restored(pos, saved)
+                    if saved
+                    else SpreadTrade(
+                        pos.id,
+                        pos.underlying,
+                        pos.opened_at,
+                        square_off=None if self.overnight else "15:20",
+                    )
+                )
+                self.trades[pos.id] = tr
             shorts_expiring = (
                 any(lg.open and lg.side == "SELL" and lg.kind != "FUT" for lg in pos.legs)
                 and pos.expiry == now.astimezone(IST).date()

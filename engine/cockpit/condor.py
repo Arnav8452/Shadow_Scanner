@@ -128,6 +128,10 @@ class SpreadPosition:
     context: dict[str, Any] = field(default_factory=dict)
     # Margin to put the same legs on in the market (engine/cockpit/margin.py), once quoted.
     margin: dict[str, Any] = field(default_factory=dict)
+    # The owning play's exit rules (index stop, targets, holding period), journaled with the
+    # open so a restart brings them back with the position (19 Nov 2026: they lived only in
+    # memory and an overnight synthetic lost its stop).
+    exit_rules: dict[str, Any] = field(default_factory=dict)
 
     @property
     def short_put(self) -> float | None:
@@ -440,6 +444,7 @@ class SpreadAccount:
         take_profit_pct: float | None = None,
         on_done: Any = None,
         stop_mult: float | None = None,
+        exit_rules: Mapping[str, Any] | None = None,
     ) -> tuple[bool, str]:
         """``max_loss_inr`` overrides the structure's worst case for the risk gate when a hard
         (spot-conditioned) stop defines the planned loss, e.g. a synthetic future.
@@ -526,7 +531,7 @@ class SpreadAccount:
             "qty": qty, "width": width_pts, "spot": spot, "reason": reason,
             "context": dict(context or {}), "max_loss_override": max_loss_inr,
             "max_loss": max_loss, "margin": margin, "on_done": on_done,
-            "decided": now, "est_credit": est_credit,
+            "decided": now, "est_credit": est_credit, "exit_rules": dict(exit_rules or {}),
         }  # fmt: skip
         if self.fill_latency_s > 0:
             ex["next_at"] = now.timestamp() + self.fill_latency_s
@@ -627,6 +632,7 @@ class SpreadAccount:
             spot0=spot,
             reason=reason,
             context=dict(context or {}),
+            exit_rules=dict(ex.get("exit_rules") or {}),
         )
         self.positions.append(pos)
         self.trades_today += 1
@@ -1012,6 +1018,7 @@ def _pos_from(r: Mapping[str, Any]) -> SpreadPosition:
         spot0=float(r.get("spot0", 0.0)),
         reason=str(r.get("reason", "")) + " (restored)",
         context=dict(r.get("context") or {}),
+        exit_rules=dict(r.get("exit_rules") or {}),
     )
 
 
