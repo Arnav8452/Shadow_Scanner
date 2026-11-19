@@ -423,9 +423,11 @@ candle_backtest:          # tasks.py candle-backtest (engine/backtest/candles): 
   monte_carlo: {paths: 1000, block: 5, ruin_pct: 20}
 
 backup:                   # nightly, end of `tasks.py evening` (owner delegated 13 Nov 2026)
-  enabled: true
-  target: "C:/QuantBackup"  # other partition of the same disk: guards deletion/corruption only.
-                            # Point at an external drive (e.g. "E:/QuantBackup") for disk failure.
+  enabled: false            # owner 20 Nov 2026: off for the move to Linux (whole folder backed up).
+                            # Re-enable with a target on another disk, e.g. "/mnt/usb/QuantBackup".
+  target: "C:/QuantBackup"  # Windows path: on Linux it would be relative to the repo, so set a
+                            # real mount point before enabling. Same-disk targets guard deletion
+                            # and corruption only, not disk failure.
   sources: [data/parquet, data/state]   # what cannot be re-downloaded; data/raw is skipped
   min_free_gb: 5            # warn when the source or target drive has less free space
 
