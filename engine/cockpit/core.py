@@ -193,6 +193,7 @@ class CockpitCore:
         self._search_index: list[tuple[str, str, str, int]] | None = None
         self.user_pins: list[str] = []
         self._study_pins: list[str] = []  # the signal study's open vehicles, kept in the feed
+        self._play_pins: list[str] = []  # open play positions' contracts, kept in the feed
         self.score_acct: PaperAccount | None = None  # original A+ score bot (own account)
         self.gamma_acct: PaperAccount | None = None  # SPEC 5.10
         self.debit_acct: Any = None  # SpreadAccount for debit spreads
@@ -284,9 +285,29 @@ class CockpitCore:
         """Keep the study's open vehicles in the live feed (low priority: strategy legs and
         page pins come first), re-pinning only when the set changes."""
         want = self.study.open_vehicles() if self.study is not None else []
-        if want != self._study_pins:
+        if set(want) != set(self._study_pins):  # a new order alone must not churn the feed
             self._study_pins = want
             self._pin("study", want)
+
+    def _pin_play_legs(self) -> None:
+        """Keep every open play position's contracts in the live feed (normal priority, like
+        the condor's legs): a structure held overnight, or one whose far legs drift away
+        from the money, must stay priced so its view and its stop keep working."""
+        syms: list[str] = []
+        for p in self.plays:
+            acct = getattr(p, "account", None)
+            pos = getattr(acct, "positions", None)
+            if isinstance(pos, dict):  # long-option plays: positions keyed by contract
+                syms += list(pos)
+            elif isinstance(pos, list):  # spread plays: positions carry legs
+                syms += [lg.symbol for x in pos for lg in getattr(x, "legs", []) if lg.open]
+            exe = getattr(acct, "executing_symbols", None)
+            if callable(exe):
+                syms += list(exe())
+        want = list(dict.fromkeys(syms))
+        if want != self._play_pins:
+            self._play_pins = want
+            self._pin("plays", want)
 
     def _pin(self, owner: str, symbols: list[str]) -> list[str]:
         if self.runner is None or not hasattr(self.runner, "pin"):
@@ -974,6 +995,7 @@ class CockpitCore:
                             self._on_setup_confirmed(st, now)
                 self._condor_step(now, books, spots, wall)
                 self._plays_step(now)
+                self._pin_play_legs()
             if self.study is not None:
                 self.study.update(now, spots, books)
                 self._pin_study_vehicles()
