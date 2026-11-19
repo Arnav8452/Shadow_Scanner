@@ -500,3 +500,39 @@ def test_stock_label_is_the_trading_symbol_not_the_isin_key() -> None:
     eq = Instrument("NSE_EQ|INE062A01020", "upstox", "NSE", "cm", "NSE_EQ|INE062A01020", "3045",
                     "SBIN", Kind.EQUITY, None, None, None, 1, 0.05, "INE062A01020", "SBIN")
     assert instrument_label(eq) == "SBIN EQ"
+
+
+def test_open_play_legs_are_pinned_in_the_live_feed(repo_root: Path) -> None:
+    """A play's open legs (and long-option positions) stay in the feed: a position held
+    overnight, or after the market moves, must still be priced and able to hit its stop."""
+    core = _core(repo_root)
+    pins: list[tuple[str, list[str]]] = []
+    core.runner.pin = lambda owner, syms, **_: pins.append((owner, list(syms))) or syms  # type: ignore[attr-defined]
+    leg = SimpleNamespace
+    spread = SimpleNamespace(account=SimpleNamespace(
+        positions=[leg(legs=[leg(symbol="A", open=True), leg(symbol="B", open=False)])],
+        executing_symbols=lambda: ["C"]))  # fmt: skip
+    longp = SimpleNamespace(account=SimpleNamespace(positions={"D": object()}))
+    core.plays = [spread, longp]
+    core._pin_play_legs()
+    assert pins == [("plays", ["A", "C", "D"])]
+    core._pin_play_legs()
+    assert len(pins) == 1  # unchanged: no re-pin
+    longp.account.positions = {}
+    core._pin_play_legs()
+    assert pins[-1] == ("plays", ["A", "C"])
+
+
+def test_study_pins_follow_the_set_not_the_order(repo_root: Path) -> None:
+    core = _core(repo_root)
+    pins: list[tuple[str, list[str]]] = []
+    core.runner.pin = lambda owner, syms, **_: pins.append((owner, list(syms))) or syms  # type: ignore[attr-defined]
+    order = [["X", "Y"], ["Y", "X"], ["Y", "X", "Z"]]
+    core.study = SimpleNamespace(open_vehicles=lambda: order[0])  # type: ignore[assignment]
+    core._pin_study_vehicles()
+    order.pop(0)
+    core._pin_study_vehicles()  # same contracts, new order: the feed is left alone
+    assert len(pins) == 1
+    order.pop(0)
+    core._pin_study_vehicles()
+    assert pins[-1] == ("study", ["Y", "X", "Z"])

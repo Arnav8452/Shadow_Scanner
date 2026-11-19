@@ -4,6 +4,17 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Play positions kept in the live feed; study pins stop churning (19 Nov 2026)
+
+- **Bug 1:** playbook strategy accounts (synthetic and married futures, calendar, compression, iron fly, OI credit, expiry pin, high-IV, and the long plays) never pinned their open contracts. Only the condor and debit-spread accounts did.
+  - Once the market moved, a far leg left the live feed, so the position could not be valued (the cockpit showed "Today net ₹0") and **its stop could not be checked**.
+  - Seen on 19 Nov: a SENSEX synthetic short carried from 18 Nov had its 83100 CE wing outside the feed.
+  - **Fix:** `CockpitCore._pin_play_legs()` pins every open play contract and any executing legs (owner `plays`, normal priority), re-pinning only when the set changes.
+- **Bug 2:** the signal study re-pinned whenever the newest-first **order** of its open vehicles changed, which happens on every new signal, recentring the feed every few seconds. It now re-pins only when the set of contracts changes.
+- **Separate (owner action):** the laptop clock was not syncing with internet time (Windows "not synchronized", source Local CMOS Clock, about 0.6 s behind on 19 Nov). That made the cockpit's feed lag read negative (−89 ms). Turning on automatic time sync fixes it.
+
+---
+
 ## Buyback paper: the buyback size recorded as a tag (18 Nov 2026)
 
 - **What changed:** buyback paper entries and closes now record `bb_size_pct` (the buyback as % of equity, from the events file) and `bb_small_quota_pct` (15% of it).
