@@ -1,0 +1,18 @@
+[Unit]
+Description=Quant Engine shadow-live: paper engine and scanner for today's session (watch-only)
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+StartLimitIntervalSec=30min
+StartLimitBurst=6
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecCondition=@REPO@/ops/scheduler/linux/in_session.sh 08:40 15:50
+ExecStart=@REPO@/ops/scheduler/linux/qe-run.sh shadow_live shadow-live SEND=1
+Restart=on-failure
+RestartSec=60
+KillSignal=SIGINT
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Quant Engine cockpit page at http://127.0.0.1:8765 (display and relay; never trades)
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+StartLimitIntervalSec=30min
+StartLimitBurst=6
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/ops/scheduler/linux/qe-run.sh cockpit cockpit OPEN=0
+Restart=on-failure
+RestartSec=30
+KillSignal=SIGINT
+TimeoutStopSec=30
+# below the recorder and engine for CPU (replays it starts inherit this)
+Nice=5
+
+[Install]
+WantedBy=default.target
