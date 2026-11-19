@@ -1,0 +1,12 @@
+[Unit]
+Description=Quant Engine event-arb sidecar: buyback/open-offer events and the buyback paper account
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStartPre=@REPO@/ops/scheduler/linux/after_session.sh 08:40 15:50
+ExecStart=@REPO@/ops/scheduler/linux/qe-run.sh event_arb event-arb SEND=1
+TimeoutStartSec=10h
+KillSignal=SIGINT
+Nice=10

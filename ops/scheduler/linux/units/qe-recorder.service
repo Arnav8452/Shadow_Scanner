@@ -1,0 +1,22 @@
+[Unit]
+Description=Quant Engine recorder: market data for today's session (exits after the session)
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+# give up for a while if it keeps failing (e.g. an expired broker token): 6 starts in 30 min
+StartLimitIntervalSec=30min
+StartLimitBurst=6
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+# skip outside weekday market hours (a boot at night, or a restart after the close)
+ExecCondition=@REPO@/ops/scheduler/linux/in_session.sh 08:40 15:50
+ExecStart=@REPO@/ops/scheduler/linux/qe-run.sh recorder record SEND=1
+Restart=on-failure
+RestartSec=60
+# SIGINT = Ctrl+C: the recorder stops, flushes its files and runs QC
+KillSignal=SIGINT
+TimeoutStopSec=120
+
+[Install]
+# also start on boot (with linger), so a crash-and-reboot mid-session resumes recording
+WantedBy=default.target

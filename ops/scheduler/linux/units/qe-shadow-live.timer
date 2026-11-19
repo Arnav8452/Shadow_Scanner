@@ -1,0 +1,9 @@
+[Unit]
+Description=Start shadow-live on weekday mornings (IST)
+
+[Timer]
+OnCalendar=Mon..Fri 08:46 Asia/Kolkata
+Persistent=true
+
+[Install]
+WantedBy=timers.target

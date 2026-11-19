@@ -1,0 +1,9 @@
+[Unit]
+Description=(Re)start the cockpit page on weekday mornings (IST)
+
+[Timer]
+OnCalendar=Mon..Fri 08:45 Asia/Kolkata
+Persistent=true
+
+[Install]
+WantedBy=timers.target

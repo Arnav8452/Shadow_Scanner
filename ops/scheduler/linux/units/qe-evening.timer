@@ -1,0 +1,9 @@
+[Unit]
+Description=Evening EOD chain on weekdays at 20:00 IST (caught up after a missed run)
+
+[Timer]
+OnCalendar=Mon..Fri 20:00 Asia/Kolkata
+Persistent=true
+
+[Install]
+WantedBy=timers.target

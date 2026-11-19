@@ -1,0 +1,13 @@
+[Unit]
+Description=Quant Engine evening chain: eod && iv-history, then evening (paper accounts, watchlist)
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+# a catch-up run during market hours waits for the close
+ExecStartPre=@REPO@/ops/scheduler/linux/after_session.sh 08:40 15:50
+ExecStart=@REPO@/ops/scheduler/linux/qe-evening.sh
+TimeoutStartSec=10h
+KillSignal=SIGINT
+Nice=10
