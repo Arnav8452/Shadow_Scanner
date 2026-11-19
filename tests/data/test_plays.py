@@ -430,6 +430,30 @@ def test_synthetic_future_uses_the_stop_for_planned_loss(repo_root: Path, tmp_pa
     assert p.pending["max_loss"] == pytest.approx(25000 * 0.005 * 65)
 
 
+def test_overnight_spread_keeps_its_index_stop_after_a_restart(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
+    # 19 Nov 2026: a synthetic short opened on 18 Nov lost its index stop when the cockpit
+    # restarted (exit rules lived only in memory) and ran to the expiry exit.
+    p = SyntheticFuturePlay("syn", "Synthetic", "F1", _spread(repo_root, tmp_path, "syn"), overnight=True)
+    p.on_setup("NIFTY", True, "S1")
+    p.look(mkt.now, mkt)
+    p.try_pending(mkt.now, mkt)
+    assert len(p.account.positions) == 1, p.last_result
+    stop = p.trades[p.account.positions[0].id].spot_stop
+    assert stop == pytest.approx(25000 * (1 - 0.005))
+    # the cockpit restarts the next morning: a fresh account from the journal, a fresh play
+    nxt = mkt.now + timedelta(days=1)
+    acct = _spread(repo_root, tmp_path, "syn")
+    acct.load_journal(nxt.date())
+    assert len(acct.positions) == 1
+    p2 = SyntheticFuturePlay("syn", "Synthetic", "F1", acct, overnight=True)
+    mkt.now = nxt.replace(hour=10)
+    mkt.spots["NIFTY"] = 25000.0  # above the stop: still held
+    assert p2.manage(mkt.now, mkt) == [] and acct.positions
+    mkt.spots["NIFTY"] = stop - 10  # through the stop: closed
+    out = p2.manage(mkt.now, mkt)
+    assert not acct.positions and any("structural stop" in x for x in out), out
+
+
 def test_married_future_and_mcx_dormant(repo_root: Path, tmp_path: Path, mkt: FakeMarket) -> None:
     mf = MarriedFuturePlay("mf", "Married", "F2", _spread(repo_root, tmp_path, "mf"))
     assert mf.look(mkt.now, mkt) is None  # no history yet: nothing
