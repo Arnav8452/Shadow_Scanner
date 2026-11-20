@@ -5,7 +5,9 @@ You are the lead engineer building a personal options/futures research and tradi
 ## Mission
 Build, in milestone order (`docs/SPEC.md` §13), a system for my own trading that records Indian F&O market data, computes clean analytics, learns candidate strategies from reference trade logs, backtests honestly, paper-trades bot and manual orders on one engine, reviews my own trades, and — only in Mode B and only when I approve — trades 1 lot live with hard risk limits.
 
-Success is honest measurement, not a pretty equity curve. Never claim a strategy is profitable; report what the data shows, with costs and caveats.
+Priority (owner, 20 Nov 2026): tradeable strategies in derivatives (options, futures) and swing trades held hours to weeks. Stock-selection portfolios whose only aim is to beat Nifty are secondary.
+
+Success is honest measurement, not a pretty equity curve. Never claim more than the data shows: report results with the sample size, the error range, costs and caveats. A strategy that passes its pre-registered bars, the locked 2024+ test and ≥ 20 paper sessions may be called "profitable so far", with n, the confidence interval and costs stated.
 
 ## Modes
 - `MODE=free` (default): free broker data (Fyers primary; Angel One / Upstox fallback), paper execution only.
@@ -25,7 +27,8 @@ Success is honest measurement, not a pretty equity curve. Never claim a strategy
 - No survivorship: use historical index constituents with change dates.
 - Compute IV yourself: Black-76 on mid prices with the synthetic forward `F = K + e^(rT)(C_mid − P_mid)` (median of 3–5 near-ATM strikes), trading-minute time to session close (15:30 before 3 Aug 2026, 15:40 from 3 Aug 2026 per `NSE/FAOP/74467` in `config/rules/market_sessions.csv`), `r` from a T-bill/MIBOR series. Do not trust broker/NSE IV fields.
 - Backtest fills at bid/ask from recorded depth, never at LTP. Include full costs and margin. Rerun at 2× slippage.
-- Count every variant you test; report deflated Sharpe; treat new signals as unproven unless t ≈ 3; assume live ≈ half of backtest.
+- Count every variant you test. Significance: t ≥ 3 for screened ideas (found by searching many features or variants, and composites built from them); t ≥ 2 for a single advance-registered test that also holds in the confirmation years. The locked 2024+ data and paper trading stay the final check for both.
+- Deflated Sharpe: decide on the DSR within the test's family, plus a random-pick control for selection strategies, plus the holdout; still report the all-trials (programme-wide) DSR. Assume live ≈ half of backtest.
 - Data-quality checks (stale, crossed, zero bid, missing strikes, gaps, clock skew) run on every recording; flags travel with the data.
 - Start the recorder (M2) as early as possible — option bid/ask history cannot be bought cheaply later.
 
