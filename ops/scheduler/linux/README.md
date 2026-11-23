@@ -11,7 +11,7 @@ once linger is on.
 | `qe-shadow-live` | weekdays 08:46 IST, and at boot during market hours | `tasks.py shadow-live SEND=1` | `logs/shadow_live_task.log` |
 | `qe-cockpit` | restarted weekdays 08:45 IST (`qe-cockpit-restart`), and at boot | `tasks.py cockpit OPEN=0` → http://127.0.0.1:8765 | `logs/cockpit_task.log` |
 | `qe-evening` | weekdays 20:00 IST | `eod && iv-history`, then `evening` | `logs/eod_task.log`, `logs/evening_task.log` |
-| `qe-event-arb` | daily 23:30 IST, only with `install.sh --with-event-arb` | `tasks.py event-arb SEND=1` (buyback paper account) | `logs/event_arb_task.log` |
+| `qe-event-arb` | daily 23:30 IST, only with `install.sh --with-event-arb` | `tasks.py event-arb SEND=1`: announcement scan and report (the buyback paper account runs in `evening`) | `logs/event_arb_task.log` |
 
 The Python tasks also write their own logs under `logs/`, as before.
 

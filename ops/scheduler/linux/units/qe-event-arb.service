@@ -1,5 +1,5 @@
 [Unit]
-Description=Quant Engine event-arb sidecar: buyback/open-offer events and the buyback paper account
+Description=Quant Engine event-arb scan: new buyback/open-offer announcements, screen and report (never trades)
 Documentation=file://@REPO@/ops/scheduler/linux/README.md
 
 [Service]
