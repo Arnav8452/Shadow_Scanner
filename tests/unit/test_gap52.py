@@ -29,6 +29,13 @@ W52_TEXT = (
 )
 
 
+def test_week52_older_header_with_spaces() -> None:
+    old = W52_TEXT.replace("Adjusted_52_Week_High", "Adjusted 52_Week_High").replace(
+        "Adjusted_52_Week_Low", "Adjusted 52_Week_Low"
+    )
+    assert parse_week52(old)["AAA"].high == 102.0
+
+
 def test_week52_file_parses_and_names_its_session() -> None:
     assert effective_date(W52_TEXT) == date(2026, 11, 20)
     w = parse_week52(W52_TEXT)

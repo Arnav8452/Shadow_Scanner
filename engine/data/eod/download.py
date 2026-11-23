@@ -63,7 +63,7 @@ _MARKERS: dict[str, bytes] = {
     "bse_fo": b"TckrSymb",
     "mto": b"Security Wise Delivery",
     "secban": b"Securities in Ban",
-    "w52": b"Adjusted_52_Week_High",
+    "w52": b"52_Week_High_Date",  # header "Adjusted_52_Week_High" now, "Adjusted 52_Week_High" in 2020-22
 }
 DATASETS = tuple(NSE_EOD_URLS)
 

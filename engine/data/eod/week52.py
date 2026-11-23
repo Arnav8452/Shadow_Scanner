@@ -55,7 +55,8 @@ def parse_week52(text: str, *, series: str = "EQ") -> dict[str, Week52]:
         return {}
     out: dict[str, Week52] = {}
     for row in csv.DictReader(io.StringIO("\n".join(lines[start:]))):
-        norm = {k.strip(): (v or "").strip() for k, v in row.items() if k}
+        # older files (2020-22) name the columns "Adjusted 52_Week_High" / "Adjusted 52_Week_Low"
+        norm = {k.strip().replace(" ", "_"): (v or "").strip() for k, v in row.items() if k}
         if norm.get("SERIES") != series:
             continue
         high = _num(norm.get("Adjusted_52_Week_High", ""))
