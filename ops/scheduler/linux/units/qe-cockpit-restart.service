@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart the cockpit page for the day (a fresh process each morning, as on Windows)
+Documentation=file://@REPO@/ops/scheduler/linux/README.md
+
+[Service]
+Type=oneshot
+# restart = start if stopped; a running cockpit from yesterday is replaced
+ExecStart=/usr/bin/systemctl --user restart qe-cockpit.service

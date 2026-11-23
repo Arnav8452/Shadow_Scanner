@@ -9,9 +9,9 @@ once linger is on.
 |---|---|---|---|
 | `qe-recorder` | weekdays 08:45 IST, and at boot during market hours | `tasks.py record SEND=1` | `logs/recorder_task.log` |
 | `qe-shadow-live` | weekdays 08:46 IST, and at boot during market hours | `tasks.py shadow-live SEND=1` | `logs/shadow_live_task.log` |
-| `qe-cockpit` | weekdays 08:45 IST, and at boot | `tasks.py cockpit OPEN=0` → http://127.0.0.1:8765 | `logs/cockpit_task.log` |
+| `qe-cockpit` | restarted weekdays 08:45 IST (`qe-cockpit-restart`), and at boot | `tasks.py cockpit OPEN=0` → http://127.0.0.1:8765 | `logs/cockpit_task.log` |
 | `qe-evening` | weekdays 20:00 IST | `eod && iv-history`, then `evening` | `logs/eod_task.log`, `logs/evening_task.log` |
-| `qe-event-arb` | daily 23:30 IST | `tasks.py event-arb SEND=1` (buyback paper account) | `logs/event_arb_task.log` |
+| `qe-event-arb` | daily 23:30 IST, only with `install.sh --with-event-arb` | `tasks.py event-arb SEND=1` (buyback paper account) | `logs/event_arb_task.log` |
 
 The Python tasks also write their own logs under `logs/`, as before.
 
@@ -30,18 +30,22 @@ These are the parts that differ from Windows.
   and runs QC, just as it does when you stop it by hand.
 - **Missed evening run.** `Persistent=true` runs a missed 20:00 or 23:30 job at the next boot.
   The chain picks its dates as follows:
-  - If the catch-up starts before 19:30, `eod` gets `DATE=` the previous weekday. Without a
-    date it would fetch today's files, which NSE hasn't published yet.
+  - `eod` always runs without `DATE=`. Before NSE publishes, today's files come back
+    "missing" (404, not an error); its catch-up step fetches the previous 7 days; and only an
+    undated run saves the current-only files (F&O ban list, bulk/block deals, FII/DII).
   - If the catch-up falls in market hours, it waits until 15:50 (`after_session.sh`). This
     keeps the downloads and rebuilds off the recorder's CPU.
 - **Timers use IST** (`Asia/Kolkata` in `OnCalendar=`), whatever the PC's timezone is.
+- **The cockpit runs until stopped.** On Windows a 16 h task limit ended it each night; here
+  the 08:45 timer restarts it, so each day starts with a fresh process.
 
 ## Install
 
 1. **Copy the repo and data from the backup.** Restore `Trading.tar`, for example to
    `~/Trading`. Check that `.env`, `cockpit.key`, `data/` and `argon/` came across. Then
    delete the Windows virtualenv: `rm -rf ~/Trading/.venv` (it holds `.exe` files).
-2. **Install the tools:** `sudo pacman -S uv git`. uv downloads Python 3.12 itself if needed.
+2. **Install the tools:** uv (mise or `sudo pacman -S uv`) and git. `.python-version` pins
+   3.12, which uv downloads itself; the system Python (3.14 on Omarchy) is not used.
 3. **Get a first manual run working before installing anything**, the same rule as on
    Windows:
    ```sh
