@@ -1014,8 +1014,9 @@ def task_log3_features(params: dict[str, str]) -> int:
 
 def task_backup(params: dict[str, str]) -> int:
     """Copy new/changed recordings and journals (data/parquet, data/state) to backup.target
-    (default C:/QuantBackup; TARGET= overrides). Never deletes from the target. Runs at the end
-    of `evening`. Point it at an external drive to survive a disk failure."""
+    (an absolute path, e.g. /mnt/usb/QuantBackup; TARGET= overrides). Never deletes from the
+    target. Runs at the end of `evening`. Point it at an external drive to survive a disk
+    failure."""
     sys.path.insert(0, str(ROOT))
     from engine.core.config import load_settings
     from engine.data.backup import run_backup
@@ -1024,7 +1025,13 @@ def task_backup(params: dict[str, str]) -> int:
     if not cfg.get("enabled", True) and not params.get("TARGET"):
         print("backup: disabled (backup.enabled: false)")
         return 0
-    target = Path(params.get("TARGET") or cfg.get("target") or "C:/QuantBackup")
+    target = Path(params.get("TARGET") or cfg.get("target") or "")
+    if not target.is_absolute():
+        # e.g. the old Windows default "C:/QuantBackup" on Linux: it would land inside the repo
+        print(
+            f"backup: target {str(target)!r} is not an absolute path on this OS; set backup.target"
+        )
+        return 1
     res = run_backup(
         ROOT,
         list(cfg.get("sources") or ["data/parquet", "data/state"]),

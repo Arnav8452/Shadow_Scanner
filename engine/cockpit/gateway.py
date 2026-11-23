@@ -267,13 +267,17 @@ class Gateway:
             cmd.append("SIM=1")
         self.cfg.replay_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.cfg.replay_dir / "replay.log"
-        flags = 0
-        if sys.platform == "win32":  # replays must not compete with the live engine for CPU
-            flags = subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW
+        # replays must not compete with the live recorder and engine for CPU
         with log_path.open("ab") as fh:
-            self.replay_proc = subprocess.Popen(
-                cmd, cwd=self.root, stdout=fh, stderr=subprocess.STDOUT, creationflags=flags
-            )
+            if sys.platform == "win32":
+                flags = subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW
+                self.replay_proc = subprocess.Popen(
+                    cmd, cwd=self.root, stdout=fh, stderr=subprocess.STDOUT, creationflags=flags
+                )
+            else:
+                self.replay_proc = subprocess.Popen(
+                    ["nice", "-n", "5", *cmd], cwd=self.root, stdout=fh, stderr=subprocess.STDOUT
+                )
         self.replay_meta = {"date": d, "speed": speed, "sim": bool(data.get("sim"))}
         return f"started replay of {d} at {'max' if speed == 0 else f'{speed:g}x'} speed"
 

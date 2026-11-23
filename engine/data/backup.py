@@ -6,9 +6,10 @@
 - **How:** copy files that are new or changed (size or modification time) into the target,
   keeping the folder layout. Nothing is ever deleted from the target, so an accidental delete
   or a corrupted day on the source cannot propagate.
-- **Where:** ``backup.target`` in settings (default ``C:/QuantBackup``). On a single-disk PC
-  that guards against deletion and corruption, not disk failure: point it at an external drive
-  for that. No cloud upload by default: private trade logs and personal data stay local.
+- **Where:** ``backup.target`` in settings, an absolute path (e.g. ``/mnt/usb/QuantBackup``).
+  On a single-disk PC that guards against deletion and corruption, not disk failure: point it
+  at an external drive for that. No cloud upload by default: private trade logs and personal
+  data stay local.
 - **Space:** reports free space on the source and target drives and warns under
   ``backup.min_free_gb``.
 """
