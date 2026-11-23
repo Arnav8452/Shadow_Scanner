@@ -46,6 +46,11 @@ NSE_EOD_URLS: dict[str, str] = {
     # A secban file is named for the trade date it applies to (published the evening before).
     "mto": "https://nsearchives.nseindia.com/archives/equities/mto/MTO_{dmy}.DAT",
     "secban": "https://nsearchives.nseindia.com/archives/fo/sec_ban/fo_secban_{dmy}.csv",
+    # NSE's 52-week high/low per security, adjusted for bonus, splits and rights. A file is
+    # named for the session it applies to and is published before that session opens: the
+    # 20 Nov 2026 file ("Effective for 20-Nov-2026") has highs dated up to 19 Nov and none on
+    # 20 Nov. Checked by download 23 Nov 2026 (19, 20, 23 Nov 2026 and 2 Jun 2025 files).
+    "w52": "https://nsearchives.nseindia.com/content/CM_52_wk_High_low_{dmy}.csv",
 }
 # A text marker each genuine file contains (NSE sometimes answers with an HTML error page).
 _MARKERS: dict[str, bytes] = {
@@ -58,6 +63,7 @@ _MARKERS: dict[str, bytes] = {
     "bse_fo": b"TckrSymb",
     "mto": b"Security Wise Delivery",
     "secban": b"Securities in Ban",
+    "w52": b"Adjusted_52_Week_High",
 }
 DATASETS = tuple(NSE_EOD_URLS)
 
