@@ -13,4 +13,7 @@ printf '\n=== %s  %s ===\n' "$(TZ=Asia/Kolkata date '+%F %T IST')" "$*" >>"logs/
 if [ -x .venv/bin/python ]; then
     exec .venv/bin/python tasks.py "$@" >>"logs/${log}_task.log" 2>&1
 fi
-exec uv run python tasks.py "$@" >>"logs/${log}_task.log" 2>&1
+# no .venv yet: systemd's PATH lacks mise's shims, so look for uv there too
+uv="$(command -v uv || true)"
+[ -n "$uv" ] || uv="$HOME/.local/share/mise/shims/uv"
+exec "$uv" run python tasks.py "$@" >>"logs/${log}_task.log" 2>&1

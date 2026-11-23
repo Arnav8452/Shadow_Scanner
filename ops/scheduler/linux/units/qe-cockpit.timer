@@ -4,6 +4,7 @@ Description=(Re)start the cockpit page on weekday mornings (IST)
 [Timer]
 OnCalendar=Mon..Fri 08:45 Asia/Kolkata
 Persistent=true
+Unit=qe-cockpit-restart.service
 
 [Install]
 WantedBy=timers.target
