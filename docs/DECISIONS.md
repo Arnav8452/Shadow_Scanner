@@ -4,6 +4,20 @@ Newest first. Each milestone ends with what was built, decisions taken and open 
 
 ---
 
+## Paper account `gap52`: a Reddit rule on paper exactly as written (23 Nov 2026)
+
+- **What:** the owner asked to paper-trade, as written, a rule from a Reddit comment. Buy an F&O stock that is about 2% up in the pre-open at a 52-week high, but was not on the previous day's 52-week-high list. Use a trailing stop-loss and hold up to a week, delivery, not intraday.
+  - `engine/strategies/gap52.py`, run in the evening job after the buyback account. State in `data/state/gap52_paper_state.json`, journal `paper_gap52.jsonl` (so the scorecard counts it as one more strategy tried).
+- **Data:** NSE's adjusted 52-week high/low file is a new EOD dataset `w52` (`engine/data/eod/week52.py`). The file for a session is published before it opens and holds highs through the previous session (checked: the 20 Nov file has highs dated up to 19 Nov, none on 20 Nov), so everything the rule uses is known at the pre-open. Old dates download too.
+- **Readings of what the comment leaves open** (config `gap52_paper`, HYPOTHESIS): gap 1.5–2.5% from the previous close at the open (the call-auction price); open at or above the 52-week high; trailing stop 2% below the highest high since entry, from entry (no fixed 2–3% target exit); sale at the next open after 5 sessions held; ₹25k a stock, at most 2 new and 4 open, most liquid first.
+- **Paper account changes** (`engine/execution/swing_paper.py`): `Order.trail_pct` and `Order.max_hold`, and a `journal_name`.
+  - On daily bars the stop from the previous close is checked first (the low may have come before the high).
+  - If the close is below the day's high less the trail, the price fell that far after the high, so the trailing order is taken as filled at that level. A low below the trail that recovers by the close cannot be seen and is not counted.
+- **Not backtested.** The closest earlier tests failed: R9 gap-and-go (−1.12% a trade, t −8.2) and R6 52-week high (negative at 2× costs). A wiring check over 11–20 Nov found one signal in 8 sessions (ADANIPORTS 11 Nov, stopped the same day, −₹528 net), so trades will be rare and a verdict will take months.
+- **Open:** a proper backtest (2016+, the `w52` archive and bhavcopies) as a pre-registered test, if the owner wants one before the paper sample grows.
+
+---
+
 ## Play positions kept in the live feed; study pins stop churning (19 Nov 2026)
 
 - **Bug 1:** playbook strategy accounts (synthetic and married futures, calendar, compression, iron fly, OI credit, expiry pin, high-IV, and the long plays) never pinned their open contracts. Only the condor and debit-spread accounts did.

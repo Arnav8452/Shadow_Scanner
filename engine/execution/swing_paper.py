@@ -67,6 +67,10 @@ class Order:
     placed_on: str = ""
     # Avoid-filter tags at entry (engine/strategies/avoid_tags.py): recorded, never blocking.
     tags: dict[str, Any] = field(default_factory=dict)
+    # Trailing stop: the stop follows the highest high since entry at this % below it (0 = off).
+    trail_pct: float = 0.0
+    # Sessions held after the entry day before a sale is queued (0 = the account's rule).
+    max_hold: int = 0
 
 
 @dataclass
@@ -125,9 +129,10 @@ class SwingPaperAccount:
         fills: SwingFillConfig | None = None,
         max_hold_sessions: int = 15,
         time_stop_sessions: int = 2,
+        journal_name: str = "paper_swing.jsonl",
     ) -> None:
         self.path = state_path
-        self.journal = state_path.with_name("paper_swing.jsonl")
+        self.journal = state_path.with_name(journal_name)
         self.limits = limits
         self.book = book
         self.cal = calendar
@@ -303,13 +308,26 @@ class SwingPaperAccount:
             self._log("fill", day=day, side="buy", key=o.key, qty=o.qty, price=round(px, 2),
                       charges=round(ch, 2), est="EOD-estimated")  # fmt: skip
             out.append(f"bought {o.key} x{o.qty} @ {px:.2f} ({o.strategy})")
-        # 3. stop orders during the day
+        # 3. stop orders during the day. A trailing stop is checked at the level it had after
+        # the previous close first (the low may have come before the high). Then, if the close
+        # is below the day's high less the trail, the price fell that far after printing the
+        # high, so a trailing order would have sold there.
         for p in list(self.state.positions):
             b = bars.get(p.order.key)
-            if b is None or p.stop <= 0 or b.low > p.stop:
+            if b is None:
                 continue
-            fill = min(b.open, p.stop) if b.open > 0 else p.stop
-            out.append(self._close(p, fill * (1 - self._hs(p.order)), day, "stop"))
+            if p.stop > 0 and b.low <= p.stop:
+                fill = min(b.open, p.stop) if b.open > 0 else p.stop
+                out.append(self._close(p, fill * (1 - self._hs(p.order)), day, "stop"))
+                continue
+            trail = p.order.trail_pct
+            if trail > 0 and b.high > 0:
+                level = b.high * (1 - trail / 100.0)
+                if level > p.stop and 0 < b.close <= level:
+                    out.append(self._close(p, level * (1 - self._hs(p.order)), day,
+                                           "trailing stop"))  # fmt: skip
+                    continue
+                p.stop = round(max(p.stop, level), 2)
         # 4. after the close
         for p in self.state.positions:
             b = bars.get(p.order.key)
@@ -327,8 +345,9 @@ class SwingPaperAccount:
                 left = self.cal.trading_days_between(day, date.fromisoformat(o.expiry))
                 if left <= self.limits.stock_fno_expiry_exit_days_before + 1:
                     reason = "expiry guard: stock options out by E-2 (physical settlement)"
-            if not reason and o.strategy == "swing" and p.sessions >= self.max_hold:
-                reason = f"maximum hold {self.max_hold} sessions"
+            hold = o.max_hold or (self.max_hold if o.strategy == "swing" else 0)
+            if not reason and hold and p.sessions >= hold:
+                reason = f"maximum hold {hold} sessions"
             if reason and not p.exit_reason:
                 p.exit_reason = reason
                 out.append(f"{o.key}: exit queued for the next open ({reason})")

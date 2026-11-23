@@ -1079,7 +1079,7 @@ def _swing_night(settings: Any, cal: Any) -> Any:
             fetch_index=lambda d: fetch_index(d, raw_dir, now),
             avoid=avoid_tag_config(raw.get("avoid_tags")),
         )
-        return rep.lines + _buyback_paper(day, now)
+        return rep.lines + _buyback_paper(day, now) + _gap52_paper(day)
 
     def _buyback_paper(day: date, now: datetime) -> list[str]:
         # Paper account for small-shareholder tender buybacks (engine/sidecars/event_arb/paper.py).
@@ -1099,6 +1099,28 @@ def _swing_night(settings: Any, cal: Any) -> Any:
             )
         except (FileNotFoundError, ValueError) as exc:
             return [f"buyback paper: {exc}"]
+
+    def _gap52_paper(day: date) -> list[str]:
+        # Gap to a 52-week high at the open, on paper as written (engine/strategies/gap52.py).
+        from engine.strategies.gap52 import gap52_config, run_gap52_night
+
+        try:
+            lines = run_gap52_night(
+                day=day,
+                raw_dir=settings.paths["raw"],
+                state_dir=settings.paths["data"] / "state",
+                book=book,
+                cal=cal,
+                limits=settings.risk,
+                broker=settings.shadow_scanner.cost_broker,
+                fills=fill_config(raw.get("swing_paper")),
+                cfg=gap52_config(raw.get("gap52_paper")),
+            )
+        except FileNotFoundError as exc:
+            return [f"gap52 paper: {exc}"]
+        except Exception as exc:  # never lose the swing and buyback lines to this account
+            return [f"gap52 paper: ERROR {type(exc).__name__}: {exc}"]
+        return [f"gap52 paper: {x}" for x in lines]
 
     return run
 
