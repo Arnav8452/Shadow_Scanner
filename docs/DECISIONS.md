@@ -1593,3 +1593,4 @@ Started after the owner approved the order M2 → M1 (REVIEW §0 item 3).
 - Exercise STT before Apr 2026 (0.125%), the Sensex lot size, the brokerage rates of Fyers, Dhan and Angel, the margin rules and the circuit-breaker rows are all UNVERIFIED.
 - The 2026 holiday list (NSE/CMTR/71775 + 72260) has not been loaded yet; that happens in M3. Note that 10 Nov 2026 (Diwali Balipratipada) is reported as a holiday.
 - SPEC §11.2 mentions only "exchange transaction charges". The IPFT levy should be listed there too if contract notes confirm it.
+- **`gap52` paper account turned off (23 Nov 2026, owner):** `gap52_paper.enabled: false` before its first run (no positions, no state). Research T-012 failed (2016–23 daily bars: −0.32% net excess a trade, t −1.23 discovery, −2.22 confirmation); 2022–23 minute bars showed −1% before +1% in 17 of 28 signals and the day's high set by 09:45 in 20 of 28. Code and tests stay for a future variant.

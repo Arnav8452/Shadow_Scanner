@@ -371,8 +371,8 @@ buyback_paper:               # Paper account: small-shareholder tender buybacks 
   kill_cum_loss_inr: 5000    # cumulative net at or below -Rs 5,000 pauses new entries
   review_after_events: 20    # promotion review (owner) after 20 closed paper events
 
-gap52_paper:                 # A Reddit rule on paper exactly as written (owner, 23 Nov 2026). HYPOTHESIS, PAPER ONLY, not backtested
-  enabled: true              # engine/strategies/gap52.py: F&O stock opens ~2% up at/above its 52-week high,
+gap52_paper:                 # A Reddit rule on paper exactly as written (owner, 23 Nov 2026). OFF 23 Nov 2026 (owner) after T-012 FAILED
+  enabled: false             # engine/strategies/gap52.py: F&O stock opens ~2% up at/above its 52-week high,
   start_date: 2026-11-23     #   not on the previous day's 52-week-high list; trailing stop; hold up to a week
   gap_min_pct: 1.5           # "around 2% up" in the pre-open (the open is the call-auction price)
   gap_max_pct: 2.5
